@@ -2,21 +2,26 @@ from fastapi import APIRouter, HTTPException
 
 from openpatch_worker.config import get_settings
 from openpatch_worker.schemas import (
+    AgentProposeFileRequest,
+    AgentProposeFileResponse,
     AgentRunRequest,
     AgentRunResponse,
     CommandRunRequest,
     CommandRunResponse,
     FileReadRequest,
     FileReadResponse,
+    FileWriteRequest,
+    FileWriteResponse,
     GitDiffRequest,
     GitDiffResponse,
     HealthResponse,
     RepoOpenRequest,
     RepoOpenResponse,
 )
+from openpatch_worker.services.edit_service import propose_file_edit
 from openpatch_worker.services.agent_service import run_agent_task
 from openpatch_worker.services.command_runner import run_command
-from openpatch_worker.services.file_service import read_text_file
+from openpatch_worker.services.file_service import read_text_file, write_text_file
 from openpatch_worker.services.git_service import get_diff
 from openpatch_worker.services.repo_service import open_repository
 
@@ -53,6 +58,14 @@ def fs_read(request: FileReadRequest) -> FileReadResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/fs/write", response_model=FileWriteResponse)
+def fs_write(request: FileWriteRequest) -> FileWriteResponse:
+    try:
+        return write_text_file(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/cmd/run", response_model=CommandRunResponse)
 def cmd_run(request: CommandRunRequest) -> CommandRunResponse:
     try:
@@ -77,6 +90,16 @@ def git_diff(request: GitDiffRequest) -> GitDiffResponse:
 def agent_run(request: AgentRunRequest) -> AgentRunResponse:
     try:
         return run_agent_task(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/agent/propose-file", response_model=AgentProposeFileResponse)
+def agent_propose_file(request: AgentProposeFileRequest) -> AgentProposeFileResponse:
+    try:
+        return propose_file_edit(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

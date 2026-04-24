@@ -35,6 +35,14 @@ def ensure_relative_to_repo(repo_path: Path, relative_path: str) -> Path:
     return target_path
 
 
+def ensure_safe_write_path(repo_path: Path, relative_path: str) -> Path:
+    target_path = ensure_relative_to_repo(repo_path, relative_path)
+    relative_parts = target_path.relative_to(repo_path).parts
+    if ".git" in relative_parts:
+        raise ValueError("Writes to .git paths are not allowed")
+    return target_path
+
+
 def ensure_git_repository(repo_path: Path) -> None:
     git_dir = repo_path / ".git"
     if not git_dir.exists():

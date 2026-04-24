@@ -11,6 +11,10 @@ def get_diff(request: GitDiffRequest) -> GitDiffResponse:
     if request.staged:
         command.append("--cached")
 
+    if request.relative_paths:
+        command.append("--")
+        command.extend(request.relative_paths)
+
     result = run_subprocess(command=command, cwd=repo_path, timeout_seconds=30)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git diff failed")

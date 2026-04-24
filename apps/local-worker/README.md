@@ -7,9 +7,11 @@ This worker provides the first Phase 1 endpoints:
 - `GET /health`
 - `POST /repo/open`
 - `POST /fs/read`
+- `POST /fs/write`
 - `POST /cmd/run`
 - `POST /git/diff`
 - `POST /agent/run`
+- `POST /agent/propose-file`
 
 The worker is intentionally small and modular:
 
@@ -92,6 +94,18 @@ curl -X POST http://127.0.0.1:8000/fs/read \
   }'
 ```
 
+Write a reviewed file change explicitly:
+
+```bash
+curl -X POST http://127.0.0.1:8000/fs/write \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "examples/demo-repo",
+    "relative_path": "README.md",
+    "content": "# Updated README\n"
+  }'
+```
+
 Run a task through the centralized model backend using minimal local context:
 
 ```bash
@@ -103,6 +117,18 @@ curl -X POST http://127.0.0.1:8000/agent/run \
   }'
 ```
 
+Ask the model for a full replacement file proposal:
+
+```bash
+curl -X POST http://127.0.0.1:8000/agent/propose-file \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_path": "examples/demo-repo",
+    "relative_path": "README.md",
+    "instruction": "Rewrite the README introduction to explain the local worker architecture more clearly."
+  }'
+```
+
 ## Notes
 
 - The worker is intended to bind to `localhost` during early development.
@@ -110,4 +136,5 @@ curl -X POST http://127.0.0.1:8000/agent/run \
 - GitLab clone and fetch support uses `GITLAB_BASE_URL` and `GITLAB_TOKEN` from the server environment.
 - Centralized model calls use `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL`.
 - `/agent/run` gathers a small, explicit repo summary locally before sending it upstream.
+- `/agent/propose-file` returns a visible full-file proposal; the worker does not write it until `/fs/write` is called explicitly.
 - Future provider integrations, approval workflows, and stronger execution policy controls are intentionally left for follow-up work.

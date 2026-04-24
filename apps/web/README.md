@@ -10,7 +10,7 @@ This scaffold includes:
 - a task input form
 - a placeholder response panel
 
-The current version is intentionally minimal, but it now supports a first read-only integration with the local worker.
+The current version is intentionally minimal, but it now supports a first worker-connected read-only flow plus an explicit first editing review flow.
 
 ## Local Development
 
@@ -41,6 +41,9 @@ Then open [http://localhost:3000](http://localhost:3000).
 - repository open flow through the local worker
 - read-only task submission to `/agent/run`
 - result display for the generated response
+- file edit proposal flow through `/agent/propose-file`
+- explicit file write through `/fs/write`
+- diff review for the written file through `/git/diff`
 - graceful unavailable-worker errors in the UI
 
 ## Notes
@@ -48,6 +51,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 - The UI currently uses local Next.js route handlers under `src/app/api/worker/*` as a simple proxy to the configured worker base URL.
 - This keeps the browser flow easy to run locally while avoiding direct browser-to-worker CORS setup in the first version.
 - A future truly hosted deployment will need a browser-to-local-worker connection strategy rather than this server-side proxy approach.
+- File edits remain explicit: the model proposes content, the user reviews it, and the UI only writes the file after an explicit apply step.
 
 ## Next Steps
 
@@ -56,6 +60,8 @@ The current UI still needs:
 - browser-to-local-worker pairing for a real hosted deployment
 - richer repository setup and provider-specific repo-open inputs
 - task streaming and progress updates
-- patch and diff presentation
+- better patch and diff presentation
 - file selection and explicit context controls
+- validation command execution after a write
+- commit and push workflows
 - authentication and session wiring for a future hosted deployment

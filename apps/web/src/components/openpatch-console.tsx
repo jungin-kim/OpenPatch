@@ -24,6 +24,27 @@ type AgentRunPayload = {
   response: string;
 };
 
+type AgentProposeFilePayload = {
+  repo_path: string;
+  relative_path: string;
+  model: string;
+  context_summary: string;
+  original_content: string;
+  proposed_content: string;
+};
+
+type FileWritePayload = {
+  project_path: string;
+  relative_path: string;
+  bytes_written: number;
+  message: string;
+};
+
+type GitDiffPayload = {
+  project_path: string;
+  diff: string;
+};
+
 type ConnectionState = "checking" | "connected" | "unavailable";
 
 const workerBaseUrl =
@@ -42,12 +63,27 @@ export function OpenPatchConsole() {
   const [task, setTask] = useState(
     "Summarize the repository and identify the most likely place to start reading.",
   );
+  const [editPath, setEditPath] = useState("README.md");
+  const [editInstruction, setEditInstruction] = useState(
+    "Rewrite the introduction to explain the local worker architecture more clearly.",
+  );
+
   const [repoPending, setRepoPending] = useState(false);
   const [taskPending, setTaskPending] = useState(false);
+  const [proposalPending, setProposalPending] = useState(false);
+  const [applyPending, setApplyPending] = useState(false);
+
   const [repoError, setRepoError] = useState<string | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+  const [applyError, setApplyError] = useState<string | null>(null);
+
   const [repoResult, setRepoResult] = useState<RepoOpenPayload | null>(null);
   const [agentResult, setAgentResult] = useState<AgentRunPayload | null>(null);
+  const [proposalResult, setProposalResult] =
+    useState<AgentProposeFilePayload | null>(null);
+  const [writeResult, setWriteResult] = useState<FileWritePayload | null>(null);
+  const [diffResult, setDiffResult] = useState<GitDiffPayload | null>(null);
 
   async function refreshHealthCheck() {
     setConnectionState("checking");
@@ -90,6 +126,9 @@ export function OpenPatchConsole() {
     setRepoResult(null);
     setAgentResult(null);
     setAgentError(null);
+    setProposalResult(null);
+    setDiffResult(null);
+    setWriteResult(null);
 
     try {
       const response = await fetch("/api/worker/repo-open", {
@@ -157,6 +196,111 @@ export function OpenPatchConsole() {
     }
   }
 
+  async function handleProposalSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setProposalPending(true);
+    setProposalError(null);
+    setApplyError(null);
+    setWriteResult(null);
+    setDiffResult(null);
+    setProposalResult(null);
+
+    try {
+      const response = await fetch("/api/worker/propose-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repo_path: projectPath,
+          relative_path: editPath,
+          instruction: editInstruction,
+        }),
+      });
+      const payload = (await response.json()) as
+        | AgentProposeFilePayload
+        | { detail?: string };
+
+      if (!response.ok) {
+        throw new Error(
+          "detail" in payload && payload.detail
+            ? payload.detail
+            : "File proposal request failed.",
+        );
+      }
+
+      setProposalResult(payload);
+    } catch (error) {
+      setProposalError(
+        error instanceof Error ? error.message : "Unable to propose a file change.",
+      );
+    } finally {
+      setProposalPending(false);
+    }
+  }
+
+  async function handleApplyProposal() {
+    if (!proposalResult) {
+      return;
+    }
+
+    setApplyPending(true);
+    setApplyError(null);
+    setWriteResult(null);
+    setDiffResult(null);
+
+    try {
+      const writeResponse = await fetch("/api/worker/fs-write", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_path: projectPath,
+          relative_path: proposalResult.relative_path,
+          content: proposalResult.proposed_content,
+        }),
+      });
+      const writePayload = (await writeResponse.json()) as
+        | FileWritePayload
+        | { detail?: string };
+
+      if (!writeResponse.ok) {
+        throw new Error(
+          "detail" in writePayload && writePayload.detail
+            ? writePayload.detail
+            : "File write request failed.",
+        );
+      }
+
+      setWriteResult(writePayload);
+
+      const diffResponse = await fetch("/api/worker/git-diff", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_path: projectPath,
+          relative_paths: [proposalResult.relative_path],
+        }),
+      });
+      const diffPayload = (await diffResponse.json()) as
+        | GitDiffPayload
+        | { detail?: string };
+
+      if (!diffResponse.ok) {
+        throw new Error(
+          "detail" in diffPayload && diffPayload.detail
+            ? diffPayload.detail
+            : "Git diff request failed.",
+        );
+      }
+
+      setDiffResult(diffPayload);
+    } catch (error) {
+      setApplyError(
+        error instanceof Error ? error.message : "Unable to apply the proposed change.",
+      );
+    } finally {
+      setApplyPending(false);
+    }
+  }
+
   const connectionLabel =
     connectionState === "connected"
       ? "Connected"
@@ -169,10 +313,11 @@ export function OpenPatchConsole() {
       <section className="hero">
         <div className="panel hero-panel">
           <span className="hero-kicker">Hosted UI + local worker + central inference</span>
-          <h2>OpenPatch can now reach a local worker for read-only repository tasks.</h2>
+          <h2>OpenPatch now supports explicit proposal, write, and diff review steps.</h2>
           <p>
-            This connected UI can verify worker availability, open a repository, and
-            send a basic read-only task to the worker&apos;s centralized model flow.
+            The UI can verify worker availability, open a repository, run read-only
+            tasks, request a file proposal, apply that exact content explicitly, and
+            show the resulting git diff.
           </p>
 
           <div className="hero-grid">
@@ -181,12 +326,12 @@ export function OpenPatchConsole() {
               <span>Visible connection checks and graceful unavailable states.</span>
             </div>
             <div className="mini-card">
-              <strong>Repository open</strong>
-              <span>Open or fetch a repository through the local worker.</span>
+              <strong>Proposal review</strong>
+              <span>Current and proposed file content are visible before writing.</span>
             </div>
             <div className="mini-card">
-              <strong>Read-only tasks</strong>
-              <span>Submit a task and display the generated response from `/agent/run`.</span>
+              <strong>Explicit write</strong>
+              <span>No auto-commit and no auto-push. Diff review stays in the UI.</span>
             </div>
           </div>
         </div>
@@ -225,7 +370,7 @@ export function OpenPatchConsole() {
           <h3 id="repo-open-title">Open repository through the local worker</h3>
           <p>
             Use a repository path under the worker&apos;s configured local repo base
-            directory. The first version remains read-only from the UI.
+            directory. This sets up the read-only and edit-review flows.
           </p>
 
           <form className="task-form" onSubmit={handleRepoOpen}>
@@ -299,8 +444,8 @@ export function OpenPatchConsole() {
         </section>
 
         <section className="panel response-panel" aria-labelledby="task-run-title">
-          <p className="section-label">Task</p>
-          <h3 id="task-run-title">Run a read-only repository task</h3>
+          <p className="section-label">Read-Only Task</p>
+          <h3 id="task-run-title">Run a repository task</h3>
           <p>
             Submit a task to the local worker. It will gather a small amount of local
             repository context and call the centralized model backend.
@@ -322,7 +467,7 @@ export function OpenPatchConsole() {
 
             <div className="task-actions">
               <span className="task-hint">
-                This first flow is read-only. Editing and patch application are not wired yet.
+                This flow remains read-only and does not change files.
               </span>
               <button
                 className="primary-button"
@@ -353,25 +498,158 @@ export function OpenPatchConsole() {
                 </div>
               </>
             ) : (
-              <>
-                <div className="response-placeholder">
-                  <strong>Awaiting task result</strong>
-                  <p>
-                    After a successful task run, the generated response from
-                    `/agent/run` will appear here.
-                  </p>
+              <div className="response-placeholder">
+                <strong>Awaiting task result</strong>
+                <p>
+                  After a successful task run, the generated response from `/agent/run`
+                  will appear here.
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+      </section>
+
+      <section className="edit-workspace">
+        <section className="panel composer-panel" aria-labelledby="proposal-title">
+          <p className="section-label">Edit Proposal</p>
+          <h3 id="proposal-title">Ask the model to propose a full-file replacement</h3>
+          <p>
+            This first editing flow is explicit: propose content for one file, inspect
+            it, then choose whether to write it.
+          </p>
+
+          <form className="task-form" onSubmit={handleProposalSubmit}>
+            <label className="field-label" htmlFor="edit-path">
+              File path
+            </label>
+            <input
+              id="edit-path"
+              className="text-input mono"
+              value={editPath}
+              onChange={(event) => setEditPath(event.target.value)}
+              placeholder="README.md"
+            />
+
+            <label className="field-label" htmlFor="edit-instruction">
+              Change request
+            </label>
+            <textarea
+              id="edit-instruction"
+              className="task-textarea task-textarea-compact"
+              value={editInstruction}
+              onChange={(event) => setEditInstruction(event.target.value)}
+              placeholder="Describe the exact change you want proposed..."
+            />
+
+            {proposalError ? <p className="inline-error">{proposalError}</p> : null}
+
+            <div className="task-actions">
+              <span className="task-hint">
+                The model returns a visible full replacement file, not an automatic edit.
+              </span>
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={proposalPending || connectionState !== "connected"}
+              >
+                {proposalPending ? "Proposing..." : "Propose change"}
+              </button>
+            </div>
+          </form>
+
+          {proposalResult ? (
+            <div className="response-meta">
+              <div className="meta-card">
+                <strong>Proposal model</strong>
+                <span>{proposalResult.model}</span>
+              </div>
+              <div className="meta-card">
+                <strong>Context summary</strong>
+                <span>{proposalResult.context_summary}</span>
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        <section className="panel response-panel" aria-labelledby="review-title">
+          <p className="section-label">Review</p>
+          <h3 id="review-title">Inspect the current and proposed file content</h3>
+          <p>
+            File writes only happen when you explicitly apply the proposal below.
+          </p>
+
+          {proposalResult ? (
+            <>
+              <div className="code-review-grid">
+                <div className="code-card">
+                  <strong>Current content</strong>
+                  <pre className="code-block">{proposalResult.original_content || "(file does not exist yet)"}</pre>
                 </div>
-                <div className="response-meta">
-                  <div className="meta-card">
-                    <strong>Connection state</strong>
-                    <span>{connectionLabel}</span>
-                  </div>
-                  <div className="meta-card">
-                    <strong>Active target</strong>
-                    <span className="mono">{workerBaseUrl}</span>
-                  </div>
+                <div className="code-card">
+                  <strong>Proposed content</strong>
+                  <pre className="code-block">{proposalResult.proposed_content}</pre>
                 </div>
-              </>
+              </div>
+
+              {applyError ? <p className="inline-error">{applyError}</p> : null}
+
+              <div className="task-actions">
+                <span className="task-hint">
+                  Apply writes only this file and does not commit or push anything.
+                </span>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => void handleApplyProposal()}
+                  disabled={applyPending}
+                >
+                  {applyPending ? "Applying..." : "Apply proposed file"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="response-placeholder">
+              <strong>Awaiting proposal</strong>
+              <p>
+                Request a file proposal to inspect the current content, the proposed
+                replacement, and the resulting diff after an explicit write.
+              </p>
+            </div>
+          )}
+        </section>
+      </section>
+
+      <section className="workspace">
+        <section className="panel response-panel" aria-labelledby="diff-title">
+          <p className="section-label">Result</p>
+          <h3 id="diff-title">Inspect the write result and git diff</h3>
+          <p>
+            After applying a proposal, the worker returns the write result and the
+            current unstaged diff for the edited file.
+          </p>
+
+          {writeResult ? (
+            <div className="result-card">
+              <strong>Write complete</strong>
+              <p>{writeResult.message}</p>
+              <p className="result-meta">
+                File: {writeResult.relative_path} | Bytes written: {writeResult.bytes_written}
+              </p>
+            </div>
+          ) : null}
+
+          <div className="response-shell">
+            {diffResult ? (
+              <div className="code-card">
+                <strong>Git diff</strong>
+                <pre className="code-block">{diffResult.diff || "(no diff returned)"}</pre>
+              </div>
+            ) : (
+              <div className="response-placeholder">
+                <strong>Awaiting write result</strong>
+                <p>The git diff for the edited file will appear here after an explicit apply step.</p>
+              </div>
             )}
           </div>
         </section>

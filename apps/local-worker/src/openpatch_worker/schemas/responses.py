@@ -24,6 +24,13 @@ class FileReadResponse(BaseModel):
     bytes_read: int
 
 
+class FileWriteResponse(BaseModel):
+    project_path: str
+    relative_path: str
+    bytes_written: int
+    message: str
+
+
 class CommandRunResponse(BaseModel):
     project_path: str
     command: str
@@ -43,3 +50,12 @@ class AgentRunResponse(BaseModel):
     model: str
     context_summary: str
     response: str
+
+
+class AgentProposeFileResponse(BaseModel):
+    repo_path: str
+    relative_path: str
+    model: str
+    context_summary: str
+    original_content: str
+    proposed_content: str

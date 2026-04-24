@@ -248,6 +248,14 @@ select {
   gap: 24px;
 }
 
+.edit-workspace {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 24px;
+  margin-bottom: 24px;
+}
+
 .composer-panel,
 .response-panel {
   padding: 24px;
@@ -285,6 +293,10 @@ select {
 .task-textarea:focus {
   outline: 2px solid rgba(31, 106, 83, 0.18);
   border-color: rgba(31, 106, 83, 0.4);
+}
+
+.task-textarea-compact {
+  min-height: 140px;
 }
 
 .text-input {
@@ -369,6 +381,38 @@ select {
   gap: 16px;
 }
 
+.code-review-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.code-card {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.code-card strong {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.code-block {
+  margin: 0;
+  padding: 16px;
+  border-radius: var(--radius-sm);
+  background: #172018;
+  color: #f7f8f4;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.6;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .result-card {
   padding: 18px;
   border: 1px solid var(--border);
@@ -432,13 +476,15 @@ select {
 
 @media (max-width: 960px) {
   .hero,
-  .workspace {
+  .workspace,
+  .edit-workspace {
     grid-template-columns: 1fr;
   }
 
   .hero-grid,
   .response-meta,
-  .inline-fields {
+  .inline-fields,
+  .code-review-grid {
     grid-template-columns: 1fr;
   }
 }

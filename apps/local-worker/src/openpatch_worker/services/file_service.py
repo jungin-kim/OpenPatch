@@ -1,5 +1,14 @@
-from openpatch_worker.schemas import FileReadRequest, FileReadResponse
-from openpatch_worker.services.common import ensure_relative_to_repo, resolve_project_path
+from openpatch_worker.schemas import (
+    FileReadRequest,
+    FileReadResponse,
+    FileWriteRequest,
+    FileWriteResponse,
+)
+from openpatch_worker.services.common import (
+    ensure_relative_to_repo,
+    ensure_safe_write_path,
+    resolve_project_path,
+)
 
 
 def read_text_file(request: FileReadRequest) -> FileReadResponse:
@@ -21,4 +30,23 @@ def read_text_file(request: FileReadRequest) -> FileReadResponse:
         content=content,
         truncated=len(raw_bytes) > request.max_bytes,
         bytes_read=len(truncated_bytes),
+    )
+
+
+def write_text_file(request: FileWriteRequest) -> FileWriteResponse:
+    repo_path = resolve_project_path(request.project_path)
+    target_path = ensure_safe_write_path(repo_path, request.relative_path)
+
+    if target_path.exists() and not target_path.is_file():
+        raise ValueError(f"Target is not a file: {request.relative_path}")
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    encoded_content = request.content.encode(request.encoding)
+    target_path.write_text(request.content, encoding=request.encoding)
+
+    return FileWriteResponse(
+        project_path=request.project_path,
+        relative_path=request.relative_path,
+        bytes_written=len(encoded_content),
+        message=f"Wrote {request.relative_path}",
     )
