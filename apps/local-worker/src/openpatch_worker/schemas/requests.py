@@ -121,3 +121,30 @@ class GitDiffRequest(BaseModel):
         if ".." in path.parts:
             raise ValueError("project_path must not escape the repo base directory")
         return value.strip("/")
+
+
+class AgentRunRequest(BaseModel):
+    repo_path: str = Field(
+        ...,
+        description="Repository path relative to the configured local repo base directory.",
+    )
+    task: str = Field(..., description="User task sent to the centralized model backend.")
+
+    @field_validator("repo_path")
+    @classmethod
+    def validate_repo_path(cls, value: str) -> str:
+        path = Path(value)
+        if not value.strip():
+            raise ValueError("repo_path must not be empty")
+        if path.is_absolute():
+            raise ValueError("repo_path must be relative")
+        if ".." in path.parts:
+            raise ValueError("repo_path must not escape the repo base directory")
+        return value.strip("/")
+
+    @field_validator("task")
+    @classmethod
+    def validate_task(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("task must not be empty")
+        return value.strip()

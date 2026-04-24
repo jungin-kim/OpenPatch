@@ -9,6 +9,7 @@ This worker provides the first Phase 1 endpoints:
 - `POST /fs/read`
 - `POST /cmd/run`
 - `POST /git/diff`
+- `POST /agent/run`
 
 The worker is intentionally small and modular:
 
@@ -37,6 +38,9 @@ pip install -e .
 
 ```bash
 export LOCAL_REPO_BASE_DIR="$HOME/.openpatch/repos"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_MODEL="gpt-4.1-mini"
 uvicorn openpatch_worker.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -88,9 +92,22 @@ curl -X POST http://127.0.0.1:8000/fs/read \
   }'
 ```
 
+Run a task through the centralized model backend using minimal local context:
+
+```bash
+curl -X POST http://127.0.0.1:8000/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_path": "examples/demo-repo",
+    "task": "Summarize the repository and identify the most likely starting point for changes."
+  }'
+```
+
 ## Notes
 
 - The worker is intended to bind to `localhost` during early development.
 - All repositories are scoped under `LOCAL_REPO_BASE_DIR`.
 - GitLab clone and fetch support uses `GITLAB_BASE_URL` and `GITLAB_TOKEN` from the server environment.
+- Centralized model calls use `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL`.
+- `/agent/run` gathers a small, explicit repo summary locally before sending it upstream.
 - Future provider integrations, approval workflows, and stronger execution policy controls are intentionally left for follow-up work.

@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException
 
 from openpatch_worker.config import get_settings
 from openpatch_worker.schemas import (
+    AgentRunRequest,
+    AgentRunResponse,
     CommandRunRequest,
     CommandRunResponse,
     FileReadRequest,
@@ -12,6 +14,7 @@ from openpatch_worker.schemas import (
     RepoOpenRequest,
     RepoOpenResponse,
 )
+from openpatch_worker.services.agent_service import run_agent_task
 from openpatch_worker.services.command_runner import run_command
 from openpatch_worker.services.file_service import read_text_file
 from openpatch_worker.services.git_service import get_diff
@@ -64,6 +67,16 @@ def cmd_run(request: CommandRunRequest) -> CommandRunResponse:
 def git_diff(request: GitDiffRequest) -> GitDiffResponse:
     try:
         return get_diff(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/agent/run", response_model=AgentRunResponse)
+def agent_run(request: AgentRunRequest) -> AgentRunResponse:
+    try:
+        return run_agent_task(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

@@ -36,3 +36,10 @@ class CommandRunResponse(BaseModel):
 class GitDiffResponse(BaseModel):
     project_path: str
     diff: str
+
+
+class AgentRunResponse(BaseModel):
+    repo_path: str
+    model: str
+    context_summary: str
+    response: str

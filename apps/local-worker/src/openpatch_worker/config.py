@@ -11,6 +11,10 @@ class Settings:
     git_fetch_timeout_seconds: int
     gitlab_base_url: str | None
     gitlab_token: str | None
+    openai_base_url: str | None
+    openai_api_key: str | None
+    openai_model: str | None
+    model_request_timeout_seconds: int
 
 
 def get_settings() -> Settings:
@@ -27,6 +31,12 @@ def get_settings() -> Settings:
         git_fetch_timeout_seconds=int(os.getenv("OPENPATCH_GIT_FETCH_TIMEOUT_SECONDS", "120")),
         gitlab_base_url=_normalize_optional_url(os.getenv("GITLAB_BASE_URL")),
         gitlab_token=_normalize_optional_value(os.getenv("GITLAB_TOKEN")),
+        openai_base_url=_normalize_optional_url(os.getenv("OPENAI_BASE_URL")),
+        openai_api_key=_normalize_optional_value(os.getenv("OPENAI_API_KEY")),
+        openai_model=_normalize_optional_value(os.getenv("OPENAI_MODEL")),
+        model_request_timeout_seconds=int(
+            os.getenv("OPENPATCH_MODEL_REQUEST_TIMEOUT_SECONDS", "60")
+        ),
     )
 
 
