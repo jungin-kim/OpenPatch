@@ -11,7 +11,7 @@ OpenPatch separates the user interface, local repository execution, and model in
 
 This architecture is designed to keep machine-specific operations close to the developer environment while allowing model inference and higher-level orchestration to be centralized.
 
-For a visual overview, see [docs/architecture-diagram.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture-diagram.md).
+For a visual overview, see [the architecture diagram](architecture-diagram.md).
 
 ## System Components
 

@@ -61,6 +61,6 @@ This is the current practical development setup. A future hosted version will ne
 
 ## Related Docs
 
-- [docs/architecture.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture.md)
-- [docs/security.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/security.md)
-- [DEPLOYMENT.md](/Users/junginkim/Documents/GitHub/OpenPatch/DEPLOYMENT.md)
+- [Architecture](architecture.md)
+- [Security](security.md)
+- [Deployment guide](../DEPLOYMENT.md)

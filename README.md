@@ -85,7 +85,7 @@ The current repository is establishing the project structure, architecture direc
 - Phase 5: Git workflow support
 - Phase 6: Packaging, deployment, and operational hardening
 
-See [docs/roadmap.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/roadmap.md) for the fuller phase breakdown.
+See [the roadmap](docs/roadmap.md) for the fuller phase breakdown.
 
 ## Getting Started
 
@@ -98,10 +98,10 @@ For the current practical setup:
 
 Helpful onboarding docs:
 
-- [DEPLOYMENT.md](/Users/junginkim/Documents/GitHub/OpenPatch/DEPLOYMENT.md)
-- [docs/local-worker-setup.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/local-worker-setup.md)
-- [docs/troubleshooting.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/troubleshooting.md)
-- [docs/architecture-diagram.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture-diagram.md)
+- [Deployment guide](DEPLOYMENT.md)
+- [Local worker setup](docs/local-worker-setup.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Architecture diagram](docs/architecture-diagram.md)
 
 ## Contribution Guidance
 
@@ -113,12 +113,12 @@ Contributions are welcome early, especially around:
 - security review and threat modeling
 - docs, examples, and contributor ergonomics
 
-If you want to help, start with [CONTRIBUTING.md](/Users/junginkim/Documents/GitHub/OpenPatch/CONTRIBUTING.md). For deeper design context, see:
+If you want to help, start with [Contributing](CONTRIBUTING.md). For deeper design context, see:
 
-- [docs/architecture.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture.md)
-- [docs/architecture-diagram.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture-diagram.md)
-- [docs/security.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/security.md)
-- [docs/roadmap.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/roadmap.md)
+- [Architecture](docs/architecture.md)
+- [Architecture diagram](docs/architecture-diagram.md)
+- [Security](docs/security.md)
+- [Roadmap](docs/roadmap.md)
 
 ## Design Priorities
 
@@ -130,4 +130,4 @@ If you want to help, start with [CONTRIBUTING.md](/Users/junginkim/Documents/Git
 
 ## License
 
-OpenPatch is released under the MIT License. See [LICENSE](/Users/junginkim/Documents/GitHub/OpenPatch/LICENSE).
+OpenPatch is released under the MIT License. See [LICENSE](LICENSE).

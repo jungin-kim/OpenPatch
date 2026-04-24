@@ -78,15 +78,15 @@ Do not expose the worker on a public interface unless you have added additional 
 
 Use the example files as a starting point:
 
-- [apps/local-worker/.env.example](/Users/junginkim/Documents/GitHub/OpenPatch/apps/local-worker/.env.example)
-- [apps/web/.env.example](/Users/junginkim/Documents/GitHub/OpenPatch/apps/web/.env.example)
+- [Local worker env example](apps/local-worker/.env.example)
+- [Web env example](apps/web/.env.example)
 
 ## Startup Scripts
 
 The repository includes simple startup helpers:
 
-- [scripts/start-local-worker.sh](/Users/junginkim/Documents/GitHub/OpenPatch/scripts/start-local-worker.sh)
-- [scripts/start-web.sh](/Users/junginkim/Documents/GitHub/OpenPatch/scripts/start-web.sh)
+- [Start local worker](scripts/start-local-worker.sh)
+- [Start web app](scripts/start-web.sh)
 
 These are intentionally lightweight and intended for local development and onboarding.
 
@@ -114,8 +114,8 @@ The following areas still need more work before a broader hosted deployment stor
 
 ## Related Docs
 
-- [README.md](/Users/junginkim/Documents/GitHub/OpenPatch/README.md)
-- [docs/architecture.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture.md)
-- [docs/architecture-diagram.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture-diagram.md)
-- [docs/security.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/security.md)
-- [docs/troubleshooting.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/troubleshooting.md)
+- [README](README.md)
+- [Architecture](docs/architecture.md)
+- [Architecture diagram](docs/architecture-diagram.md)
+- [Security](docs/security.md)
+- [Troubleshooting](docs/troubleshooting.md)
