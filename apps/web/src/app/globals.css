@@ -48,6 +48,10 @@ textarea {
   font: inherit;
 }
 
+select {
+  font: inherit;
+}
+
 .app-shell {
   width: min(var(--page-width), calc(100% - 32px));
   margin: 0 auto;
@@ -204,6 +208,16 @@ textarea {
   font-weight: 600;
 }
 
+.status-pill-connected {
+  background: rgba(31, 106, 83, 0.12);
+  color: var(--accent);
+}
+
+.status-pill-checking {
+  background: rgba(53, 92, 125, 0.12);
+  color: #355c7d;
+}
+
 .status-pill::before {
   content: "";
   width: 8px;
@@ -273,6 +287,40 @@ textarea {
   border-color: rgba(31, 106, 83, 0.4);
 }
 
+.text-input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text);
+}
+
+.text-input:focus {
+  outline: 2px solid rgba(31, 106, 83, 0.18);
+  border-color: rgba(31, 106, 83, 0.4);
+}
+
+.field-label {
+  display: block;
+  margin-bottom: -4px;
+  color: var(--text);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.inline-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .task-actions {
   display: flex;
   align-items: center;
@@ -300,10 +348,56 @@ textarea {
   opacity: 0.72;
 }
 
+.secondary-button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 11px 16px;
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
 .response-shell {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.result-card {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(245, 250, 246, 0.88);
+}
+
+.result-card strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.result-card p {
+  margin: 0 0 8px;
+}
+
+.result-meta {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.inline-error {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(159, 74, 63, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(159, 74, 63, 0.08);
+  color: #8d3f35;
+  font-size: 0.94rem;
 }
 
 .response-placeholder {
@@ -343,7 +437,8 @@ textarea {
   }
 
   .hero-grid,
-  .response-meta {
+  .response-meta,
+  .inline-fields {
     grid-template-columns: 1fr;
   }
 }
