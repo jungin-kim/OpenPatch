@@ -46,6 +46,37 @@ class GitDiffResponse(BaseModel):
     diff: str
 
 
+class GitBranchCreateResponse(BaseModel):
+    project_path: str
+    branch: str
+    from_ref: str
+    head_sha: str
+    message: str
+
+
+class GitCommitResponse(BaseModel):
+    project_path: str
+    branch: str
+    commit_sha: str
+    message: str
+
+
+class GitPushResponse(BaseModel):
+    project_path: str
+    remote: str
+    branch: str
+    message: str
+
+
+class GitMergeRequestCreateResponse(BaseModel):
+    project_path: str
+    git_provider: str
+    title: str
+    web_url: str
+    iid: str
+    state: str
+
+
 class AgentRunResponse(BaseModel):
     repo_path: str
     model: str

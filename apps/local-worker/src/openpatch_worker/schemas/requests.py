@@ -160,6 +160,134 @@ class GitDiffRequest(BaseModel):
         return cleaned
 
 
+class GitBranchCreateRequest(BaseModel):
+    project_path: str
+    branch: str
+    from_ref: str = "HEAD"
+    checkout: bool = True
+
+    @field_validator("project_path", "branch", "from_ref")
+    @classmethod
+    def validate_values(cls, value: str, info) -> str:
+        if info.field_name == "project_path":
+            path = Path(value)
+            if not value.strip():
+                raise ValueError("project_path must not be empty")
+            if path.is_absolute():
+                raise ValueError("project_path must be relative")
+            if ".." in path.parts:
+                raise ValueError("project_path must not escape the repo base directory")
+            return value.strip("/")
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value.strip()
+
+
+class GitCommitRequest(BaseModel):
+    project_path: str
+    message: str
+    stage_all: bool = True
+
+    @field_validator("project_path")
+    @classmethod
+    def validate_project_path_for_commit(cls, value: str) -> str:
+        path = Path(value)
+        if not value.strip():
+            raise ValueError("project_path must not be empty")
+        if path.is_absolute():
+            raise ValueError("project_path must be relative")
+        if ".." in path.parts:
+            raise ValueError("project_path must not escape the repo base directory")
+        return value.strip("/")
+
+    @field_validator("message")
+    @classmethod
+    def validate_commit_message(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("message must not be empty")
+        return value.strip()
+
+
+class GitPushRequest(BaseModel):
+    project_path: str
+    branch: str
+    remote: str = "origin"
+    set_upstream: bool = True
+    git_provider: str | None = None
+
+    @field_validator("project_path", "branch", "remote")
+    @classmethod
+    def validate_push_values(cls, value: str, info) -> str:
+        if info.field_name == "project_path":
+            path = Path(value)
+            if not value.strip():
+                raise ValueError("project_path must not be empty")
+            if path.is_absolute():
+                raise ValueError("project_path must be relative")
+            if ".." in path.parts:
+                raise ValueError("project_path must not escape the repo base directory")
+            return value.strip("/")
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value.strip()
+
+    @field_validator("git_provider")
+    @classmethod
+    def validate_push_provider(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized not in {"gitlab"}:
+            raise ValueError("git_provider must be one of: gitlab")
+        return normalized
+
+
+class GitMergeRequestCreateRequest(BaseModel):
+    project_path: str
+    git_provider: str
+    source_branch: str
+    target_branch: str
+    title: str
+    description: str | None = None
+
+    @field_validator("project_path")
+    @classmethod
+    def validate_project_path_for_mr(cls, value: str) -> str:
+        path = Path(value)
+        if not value.strip():
+            raise ValueError("project_path must not be empty")
+        if path.is_absolute():
+            raise ValueError("project_path must be relative")
+        if ".." in path.parts:
+            raise ValueError("project_path must not escape the repo base directory")
+        return value.strip("/")
+
+    @field_validator("git_provider")
+    @classmethod
+    def validate_mr_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"gitlab"}:
+            raise ValueError("git_provider must be one of: gitlab")
+        return normalized
+
+    @field_validator("source_branch", "target_branch", "title")
+    @classmethod
+    def validate_required_strings(cls, value: str, info) -> str:
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value.strip()
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
 class AgentRunRequest(BaseModel):
     repo_path: str = Field(
         ...,

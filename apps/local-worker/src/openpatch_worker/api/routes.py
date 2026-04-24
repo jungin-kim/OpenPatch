@@ -12,8 +12,16 @@ from openpatch_worker.schemas import (
     FileReadResponse,
     FileWriteRequest,
     FileWriteResponse,
+    GitBranchCreateRequest,
+    GitBranchCreateResponse,
+    GitCommitRequest,
+    GitCommitResponse,
     GitDiffRequest,
     GitDiffResponse,
+    GitMergeRequestCreateRequest,
+    GitMergeRequestCreateResponse,
+    GitPushRequest,
+    GitPushResponse,
     HealthResponse,
     RepoOpenRequest,
     RepoOpenResponse,
@@ -22,7 +30,13 @@ from openpatch_worker.services.edit_service import propose_file_edit
 from openpatch_worker.services.agent_service import run_agent_task
 from openpatch_worker.services.command_runner import run_command
 from openpatch_worker.services.file_service import read_text_file, write_text_file
-from openpatch_worker.services.git_service import get_diff
+from openpatch_worker.services.git_service import (
+    commit_changes,
+    create_branch,
+    create_provider_merge_request,
+    get_diff,
+    push_branch,
+)
 from openpatch_worker.services.repo_service import open_repository
 
 router = APIRouter()
@@ -80,6 +94,48 @@ def cmd_run(request: CommandRunRequest) -> CommandRunResponse:
 def git_diff(request: GitDiffRequest) -> GitDiffResponse:
     try:
         return get_diff(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/git/branch", response_model=GitBranchCreateResponse)
+def git_branch(request: GitBranchCreateRequest) -> GitBranchCreateResponse:
+    try:
+        return create_branch(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/git/commit", response_model=GitCommitResponse)
+def git_commit(request: GitCommitRequest) -> GitCommitResponse:
+    try:
+        return commit_changes(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/git/push", response_model=GitPushResponse)
+def git_push(request: GitPushRequest) -> GitPushResponse:
+    try:
+        return push_branch(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/git/merge-request", response_model=GitMergeRequestCreateResponse)
+def git_merge_request(
+    request: GitMergeRequestCreateRequest,
+) -> GitMergeRequestCreateResponse:
+    try:
+        return create_provider_merge_request(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

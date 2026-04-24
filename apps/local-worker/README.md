@@ -9,7 +9,11 @@ This worker provides the first Phase 1 endpoints:
 - `POST /fs/read`
 - `POST /fs/write`
 - `POST /cmd/run`
+- `POST /git/branch`
 - `POST /git/diff`
+- `POST /git/commit`
+- `POST /git/push`
+- `POST /git/merge-request`
 - `POST /agent/run`
 - `POST /agent/propose-file`
 
@@ -152,6 +156,57 @@ cargo test
 go test ./...
 ```
 
+Create a new local branch explicitly:
+
+```bash
+curl -X POST http://127.0.0.1:8000/git/branch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "examples/demo-repo",
+    "branch": "openpatch/readme-update",
+    "from_ref": "main",
+    "checkout": true
+  }'
+```
+
+Create a commit explicitly:
+
+```bash
+curl -X POST http://127.0.0.1:8000/git/commit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "examples/demo-repo",
+    "message": "Update README introduction"
+  }'
+```
+
+Push a branch explicitly:
+
+```bash
+curl -X POST http://127.0.0.1:8000/git/push \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "examples/demo-repo",
+    "branch": "openpatch/readme-update",
+    "git_provider": "gitlab"
+  }'
+```
+
+Create a GitLab merge request explicitly:
+
+```bash
+curl -X POST http://127.0.0.1:8000/git/merge-request \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "group/demo-repo",
+    "git_provider": "gitlab",
+    "source_branch": "openpatch/readme-update",
+    "target_branch": "main",
+    "title": "Update README introduction",
+    "description": "Refines the README intro after local review and validation."
+  }'
+```
+
 ## Notes
 
 - The worker is intended to bind to `localhost` during early development.
@@ -161,4 +216,6 @@ go test ./...
 - `/agent/run` gathers a small, explicit repo summary locally before sending it upstream.
 - `/agent/propose-file` returns a visible full-file proposal; the worker does not write it until `/fs/write` is called explicitly.
 - `/cmd/run` remains explicit and returns the command, timeout, exit code, stdout, stderr, and timeout state.
+- Branch creation, commit, push, and merge request creation are all explicit user-triggered operations.
+- Provider-specific merge request code is isolated so future PR and MR providers can be added alongside GitLab support.
 - Future provider integrations, approval workflows, and stronger execution policy controls are intentionally left for follow-up work.

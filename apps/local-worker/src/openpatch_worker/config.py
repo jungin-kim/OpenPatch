@@ -9,6 +9,7 @@ class Settings:
     default_command_timeout_seconds: int
     git_clone_timeout_seconds: int
     git_fetch_timeout_seconds: int
+    git_push_timeout_seconds: int
     gitlab_base_url: str | None
     gitlab_token: str | None
     openai_base_url: str | None
@@ -29,6 +30,7 @@ def get_settings() -> Settings:
         ),
         git_clone_timeout_seconds=int(os.getenv("OPENPATCH_GIT_CLONE_TIMEOUT_SECONDS", "300")),
         git_fetch_timeout_seconds=int(os.getenv("OPENPATCH_GIT_FETCH_TIMEOUT_SECONDS", "120")),
+        git_push_timeout_seconds=int(os.getenv("OPENPATCH_GIT_PUSH_TIMEOUT_SECONDS", "180")),
         gitlab_base_url=_normalize_optional_url(os.getenv("GITLAB_BASE_URL")),
         gitlab_token=_normalize_optional_value(os.getenv("GITLAB_TOKEN")),
         openai_base_url=_normalize_optional_url(os.getenv("OPENAI_BASE_URL")),
