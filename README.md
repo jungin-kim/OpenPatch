@@ -59,6 +59,7 @@ In this model, the local worker gathers only the necessary repository context, s
 |   |-- web/
 |   `-- local-worker/
 |-- packages/
+|   |-- cli/
 |   |-- shared/
 |   `-- agent-core/
 |-- docs/
@@ -85,23 +86,38 @@ The current repository is establishing the project structure, architecture direc
 - Phase 5: Git workflow support
 - Phase 6: Packaging, deployment, and operational hardening
 
-See [docs/roadmap.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/roadmap.md) for the fuller phase breakdown.
+See [the roadmap](docs/roadmap.md) for the fuller phase breakdown.
+
+## Product Direction
+
+OpenPatch is evolving from a raw architecture prototype into an easy-to-adopt developer product.
+
+The next product goals are:
+
+- one-command install
+- one-command onboarding
+- a local worker on each developer machine
+- a centralized model backend
+- pluggable git providers such as GitLab and GitHub
+
+The first step in that direction is the new `openpatch` CLI under `packages/cli`.
 
 ## Getting Started
 
 For the current practical setup:
 
-1. Start the local worker on the developer machine.
-2. Start the web app locally.
-3. Point the worker at an OpenAI-compatible model API.
-4. Use the web UI to connect to the localhost worker.
+1. Install the CLI from this repository.
+2. Run `openpatch onboard`.
+3. Run `openpatch doctor`.
+4. Start the local worker and web app as needed during development.
 
 Helpful onboarding docs:
 
-- [DEPLOYMENT.md](/Users/junginkim/Documents/GitHub/OpenPatch/DEPLOYMENT.md)
-- [docs/local-worker-setup.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/local-worker-setup.md)
-- [docs/troubleshooting.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/troubleshooting.md)
-- [docs/architecture-diagram.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture-diagram.md)
+- [Deployment guide](DEPLOYMENT.md)
+- [Onboarding guide](docs/onboarding.md)
+- [Local worker setup](docs/local-worker-setup.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Architecture diagram](docs/architecture-diagram.md)
 
 ## Contribution Guidance
 
@@ -113,12 +129,12 @@ Contributions are welcome early, especially around:
 - security review and threat modeling
 - docs, examples, and contributor ergonomics
 
-If you want to help, start with [CONTRIBUTING.md](/Users/junginkim/Documents/GitHub/OpenPatch/CONTRIBUTING.md). For deeper design context, see:
+If you want to help, start with [Contributing](CONTRIBUTING.md). For deeper design context, see:
 
-- [docs/architecture.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture.md)
-- [docs/architecture-diagram.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture-diagram.md)
-- [docs/security.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/security.md)
-- [docs/roadmap.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/roadmap.md)
+- [Architecture](docs/architecture.md)
+- [Architecture diagram](docs/architecture-diagram.md)
+- [Security](docs/security.md)
+- [Roadmap](docs/roadmap.md)
 
 ## Design Priorities
 
@@ -130,4 +146,4 @@ If you want to help, start with [CONTRIBUTING.md](/Users/junginkim/Documents/Git
 
 ## License
 
-OpenPatch is released under the MIT License. See [LICENSE](/Users/junginkim/Documents/GitHub/OpenPatch/LICENSE).
+OpenPatch is released under the MIT License. See [LICENSE](LICENSE).

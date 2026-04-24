@@ -45,7 +45,7 @@ Optional, for GitLab workflows:
 ## Install
 
 ```bash
-cd /Users/junginkim/Documents/GitHub/OpenPatch/apps/local-worker
+cd apps/local-worker
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -53,7 +53,7 @@ pip install -e .
 
 ## Configure Environment
 
-Start from [apps/local-worker/.env.example](/Users/junginkim/Documents/GitHub/OpenPatch/apps/local-worker/.env.example).
+Start from [the local worker env example](../apps/local-worker/.env.example).
 
 Required variables for the basic worker flow:
 
@@ -75,7 +75,7 @@ Optional variables:
 ## Start The Worker
 
 ```bash
-cd /Users/junginkim/Documents/GitHub/OpenPatch/apps/local-worker
+cd apps/local-worker
 source .venv/bin/activate
 set -a
 source .env
@@ -117,6 +117,6 @@ After the worker is running, users can:
 
 ## Related Docs
 
-- [apps/local-worker/README.md](/Users/junginkim/Documents/GitHub/OpenPatch/apps/local-worker/README.md)
-- [docs/security.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/security.md)
-- [docs/troubleshooting.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/troubleshooting.md)
+- [Local worker README](../apps/local-worker/README.md)
+- [Security](security.md)
+- [Troubleshooting](troubleshooting.md)

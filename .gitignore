@@ -1,0 +1,19 @@
+
+# Local secrets
+.env
+*.env
+apps/local-worker/.env
+
+# macOS
+.DS_Store
+# Python
+.venv/
+
+# Local secrets
+.env
+*.env
+apps/local-worker/.env
+# macOS
+.DS_Store
+# Python
+.venv/
