@@ -20,7 +20,7 @@ class RepoOpenRequest(BaseModel):
         ...,
         description="Repository path relative to the configured local repo base directory.",
     )
-    branch: str = Field(default="main", description="Branch to fetch and check out.")
+    branch: str = Field(..., description="Branch to fetch and check out.")
     git_provider: str | None = Field(
         default=None,
         description="Git provider identifier such as 'gitlab'.",

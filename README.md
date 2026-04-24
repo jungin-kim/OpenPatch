@@ -59,7 +59,6 @@ In this model, the local worker gathers only the necessary repository context, s
 |   |-- web/
 |   `-- local-worker/
 |-- packages/
-|   |-- cli/
 |   |-- shared/
 |   `-- agent-core/
 |-- docs/
@@ -88,33 +87,26 @@ The current repository is establishing the project structure, architecture direc
 
 See [the roadmap](docs/roadmap.md) for the fuller phase breakdown.
 
-## Product Direction
-
-OpenPatch is evolving from a raw architecture prototype into an easy-to-adopt developer product.
-
-The next product goals are:
-
-- one-command install
-- one-command onboarding
-- a local worker on each developer machine
-- a centralized model backend
-- pluggable git providers such as GitLab and GitHub
-
-The first step in that direction is the new `openpatch` CLI under `packages/cli`.
-
 ## Getting Started
 
 For the current practical setup:
 
+<<<<<<< HEAD
 1. Install the CLI from this repository.
 2. Run `openpatch onboard`.
 3. Run `openpatch doctor`.
-4. Start the local worker and web app as needed during development.
+4. Use `openpatch worker start` if the worker is not already running.
+5. Start the web app as needed during development.
+=======
+1. Start the local worker on the developer machine.
+2. Start the web app locally.
+3. Point the worker at an OpenAI-compatible model API.
+4. Use the web UI to connect to the localhost worker.
+>>>>>>> parent of df8f26d (Refactoring)
 
 Helpful onboarding docs:
 
 - [Deployment guide](DEPLOYMENT.md)
-- [Onboarding guide](docs/onboarding.md)
 - [Local worker setup](docs/local-worker-setup.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture diagram](docs/architecture-diagram.md)
@@ -143,6 +135,17 @@ If you want to help, start with [Contributing](CONTRIBUTING.md). For deeper desi
 - Minimize the amount of code and secret context sent to centralized services
 - Stay general-purpose and provider-agnostic
 - Build for open-source collaboration from day one
+
+## Current Product Step
+
+OpenPatch now includes a real local worker lifecycle flow through the CLI:
+
+- `openpatch onboard`
+- `openpatch worker start`
+- `openpatch doctor`
+- `openpatch status`
+
+The current implementation manages a development-friendly background worker process with runtime state and logs under `~/.openpatch`.
 
 ## License
 
