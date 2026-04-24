@@ -1,9 +1,9 @@
-from openpatch_worker.models import FileReadRequest, FileReadResponse
-from openpatch_worker.services.common import ensure_relative_to_repo, resolve_repo_path
+from openpatch_worker.schemas import FileReadRequest, FileReadResponse
+from openpatch_worker.services.common import ensure_relative_to_repo, resolve_project_path
 
 
 def read_text_file(request: FileReadRequest) -> FileReadResponse:
-    repo_path = resolve_repo_path(request.repo_path)
+    repo_path = resolve_project_path(request.project_path)
     target_path = ensure_relative_to_repo(repo_path, request.relative_path)
 
     if not target_path.exists():
@@ -16,7 +16,7 @@ def read_text_file(request: FileReadRequest) -> FileReadResponse:
     content = truncated_bytes.decode(request.encoding, errors="replace")
 
     return FileReadResponse(
-        repo_path=str(repo_path),
+        project_path=request.project_path,
         relative_path=request.relative_path,
         content=content,
         truncated=len(raw_bytes) > request.max_bytes,

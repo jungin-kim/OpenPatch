@@ -1,28 +1,26 @@
 import os
 import subprocess
 
-from openpatch_worker.models import CommandRunRequest, CommandRunResponse
-from openpatch_worker.services.common import resolve_repo_path
+from openpatch_worker.config import get_settings
+from openpatch_worker.schemas import CommandRunRequest, CommandRunResponse
+from openpatch_worker.services.common import ensure_git_repository, resolve_project_path
 from openpatch_worker.services.subprocess_utils import run_subprocess
 
 
 def run_command(request: CommandRunRequest) -> CommandRunResponse:
-    repo_path = resolve_repo_path(request.repo_path)
-
-    environment = os.environ.copy()
-    if request.env:
-        # TODO: Add an approval or policy layer before allowing arbitrary env overrides.
-        environment.update(request.env)
+    repo_path = resolve_project_path(request.project_path)
+    ensure_git_repository(repo_path)
+    timeout_seconds = request.timeout_seconds or get_settings().default_command_timeout_seconds
 
     try:
         result = run_subprocess(
-            command=request.command,
+            command=["sh", "-lc", request.command],
             cwd=repo_path,
-            timeout_seconds=request.timeout_seconds,
-            env=environment,
+            timeout_seconds=timeout_seconds,
+            env=os.environ.copy(),
         )
         return CommandRunResponse(
-            repo_path=str(repo_path),
+            project_path=request.project_path,
             command=request.command,
             exit_code=result.returncode,
             stdout=result.stdout,
@@ -37,7 +35,7 @@ def run_command(request: CommandRunRequest) -> CommandRunResponse:
         if isinstance(stderr, bytes):
             stderr = stderr.decode("utf-8", errors="replace")
         return CommandRunResponse(
-            repo_path=str(repo_path),
+            project_path=request.project_path,
             command=request.command,
             exit_code=None,
             stdout=stdout,

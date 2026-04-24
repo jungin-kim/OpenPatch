@@ -1,79 +1,76 @@
 from pathlib import Path
 
-from openpatch_worker.models import RepoOpenRequest, RepoOpenResponse
+from openpatch_worker.config import get_settings
+from openpatch_worker.schemas import RepoOpenRequest, RepoOpenResponse
+from openpatch_worker.services.common import get_repo_base_dir
 from openpatch_worker.services.subprocess_utils import run_subprocess
 
 
 def open_repository(request: RepoOpenRequest) -> RepoOpenResponse:
-    repo_path = Path(request.local_path).expanduser().resolve()
+    repo_base_dir = get_repo_base_dir()
+    repo_path = _resolve_repo_path(repo_base_dir, request.project_path)
     cloned = False
-    updated = False
 
     if not repo_path.exists():
-        if not request.clone_if_missing:
-            raise ValueError(f"Repository path does not exist: {repo_path}")
-        if not request.repository_url:
-            raise ValueError("repository_url is required when clone_if_missing is true")
         repo_path.parent.mkdir(parents=True, exist_ok=True)
-        _clone_repository(request.repository_url, repo_path)
+        clone_url = _get_clone_url(request)
+        _clone_repository(clone_url, repo_path)
         cloned = True
     elif not repo_path.is_dir():
         raise ValueError(f"Repository path is not a directory: {repo_path}")
 
     _ensure_git_repository(repo_path)
-
-    if request.update_if_present and not cloned:
-        _fetch_repository(repo_path)
-        updated = True
-
-    if request.branch:
-        _checkout_branch(
-            repo_path=repo_path,
-            branch=request.branch,
-            create_if_missing=request.create_branch_if_missing,
-            base_ref=request.base_ref,
-        )
+    _fetch_repository(repo_path)
+    _checkout_branch(repo_path=repo_path, branch=request.branch)
 
     head_sha = _git_stdout(["git", "rev-parse", "HEAD"], repo_path)
-    current_branch = _git_stdout(["git", "branch", "--show-current"], repo_path) or None
-
-    message_parts = []
-    if cloned:
-        message_parts.append("repository cloned")
-    else:
-        message_parts.append("repository attached")
-    if updated:
-        message_parts.append("remote refs updated")
-    if current_branch:
-        message_parts.append(f"checked out {current_branch}")
+    current_branch = _git_stdout(["git", "branch", "--show-current"], repo_path) or request.branch
+    message = "repository cloned and branch checked out" if cloned else "repository fetched and branch checked out"
 
     return RepoOpenResponse(
-        local_path=str(repo_path),
+        project_path=request.project_path,
+        local_repo_path=str(repo_path),
         branch=current_branch,
         head_sha=head_sha,
         cloned=cloned,
-        updated=updated,
-        message=", ".join(message_parts),
+        message=message,
     )
 
 
-def _clone_repository(repository_url: str, repo_path: Path) -> None:
-    # TODO: Add provider-aware clone flows and explicit credential handling hooks.
+def _resolve_repo_path(repo_base_dir: Path, project_path: str) -> Path:
+    repo_path = (repo_base_dir / project_path).resolve()
+    try:
+        repo_path.relative_to(repo_base_dir)
+    except ValueError as exc:
+        raise ValueError("Resolved repository path escapes OPENPATCH_REPO_BASE_DIR") from exc
+    return repo_path
+
+
+def _get_clone_url(request: RepoOpenRequest) -> str:
+    if request.git and request.git.clone_url:
+        return request.git.clone_url
+    raise ValueError(
+        "Repository is missing locally and no git.clone_url was provided for clone."
+    )
+
+
+def _clone_repository(clone_url: str, repo_path: Path) -> None:
+    # TODO: Add provider-specific auth hooks for private repository access.
     result = run_subprocess(
-        command=["git", "clone", repository_url, str(repo_path)],
+        command=["git", "clone", clone_url, str(repo_path)],
         cwd=repo_path.parent,
-        timeout_seconds=300,
+        timeout_seconds=get_settings().git_clone_timeout_seconds,
     )
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "git clone failed")
+        raise RuntimeError(result.stderr.strip() or f"git clone failed for {clone_url}")
 
 
 def _fetch_repository(repo_path: Path) -> None:
-    # TODO: Add provider/auth integration for managed remotes and token refresh flows.
+    # TODO: Add provider-aware auth refresh when remote access needs explicit credentials.
     result = run_subprocess(
         command=["git", "fetch", "--all", "--prune"],
         cwd=repo_path,
-        timeout_seconds=300,
+        timeout_seconds=get_settings().git_fetch_timeout_seconds,
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "git fetch failed")
@@ -92,8 +89,6 @@ def _ensure_git_repository(repo_path: Path) -> None:
 def _checkout_branch(
     repo_path: Path,
     branch: str,
-    create_if_missing: bool,
-    base_ref: str | None,
 ) -> None:
     existing_local = run_subprocess(
         command=["git", "rev-parse", "--verify", branch],
@@ -111,13 +106,13 @@ def _checkout_branch(
         return
 
     existing_remote = run_subprocess(
-        command=["git", "ls-remote", "--heads", "origin", branch],
+        command=["git", "show-ref", "--verify", f"refs/remotes/origin/{branch}"],
         cwd=repo_path,
         timeout_seconds=60,
     )
-    if existing_remote.returncode == 0 and existing_remote.stdout.strip():
+    if existing_remote.returncode == 0:
         result = run_subprocess(
-            command=["git", "checkout", "-b", branch, f"origin/{branch}"],
+            command=["git", "checkout", "-B", branch, f"origin/{branch}"],
             cwd=repo_path,
             timeout_seconds=60,
         )
@@ -125,19 +120,9 @@ def _checkout_branch(
             raise RuntimeError(result.stderr.strip() or f"git checkout origin/{branch} failed")
         return
 
-    if not create_if_missing:
-        raise ValueError(
-            f"Branch '{branch}' does not exist locally or on origin and create_branch_if_missing is false"
-        )
-
-    start_ref = base_ref or "HEAD"
-    result = run_subprocess(
-        command=["git", "checkout", "-b", branch, start_ref],
-        cwd=repo_path,
-        timeout_seconds=60,
+    raise ValueError(
+        f"Branch '{branch}' was not found locally or on origin for repository {repo_path.name}"
     )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"git checkout -b {branch} failed")
 
 
 def _git_stdout(command: list[str], repo_path: Path) -> str:

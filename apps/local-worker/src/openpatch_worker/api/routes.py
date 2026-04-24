@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
-from openpatch_worker.models import (
+from openpatch_worker.config import get_settings
+from openpatch_worker.schemas import (
     CommandRunRequest,
     CommandRunResponse,
     FileReadRequest,
@@ -21,7 +22,12 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", service="openpatch-local-worker")
+    settings = get_settings()
+    return HealthResponse(
+        status="ok",
+        service="openpatch-local-worker",
+        repo_base_dir=str(settings.repo_base_dir),
+    )
 
 
 @router.post("/repo/open", response_model=RepoOpenResponse)
