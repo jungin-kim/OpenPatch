@@ -1,142 +1,116 @@
 # OpenPatch
 
-OpenPatch is an open-source coding agent architecture for teams that want:
+OpenPatch is an open-source foundation for coding-agent workflows built around a practical split architecture:
 
-- a hosted web UI
+- a hosted web UI for interaction and collaboration
 - a local worker running on each developer machine
-- centralized model inference
-- repository operations performed locally, not on a central server
+- a centralized model backend for inference and orchestration
 
-## Why OpenPatch?
+The core idea is simple: repositories, file access, diffs, and command execution should stay on the developer's machine, while model inference can be provided by a shared backend.
 
-Most coding-agent systems fall into one of two categories:
+## Why OpenPatch Exists
 
-1. Everything runs on a central server, including repository checkout and file operations
-2. Everything runs locally on a developer machine
+Many agent systems choose one of two extremes:
 
-OpenPatch is designed for a third model:
+- everything runs remotely on centrally managed clones
+- everything runs locally in a single machine or editor integration
 
-- **UI is centralized**
-- **model inference is centralized**
-- **repository clone, file access, patch application, and command execution happen locally**
+OpenPatch aims for a third path that is useful for open-source and general-purpose developer workflows:
 
-This architecture is useful when teams want:
+- the user experience can be hosted and collaborative
+- the model backend can be centralized and reusable
+- repository operations remain local to the machine that already has the code, tools, credentials, and runtime context
 
-- shared access through a hosted web app
-- centralized GPU/model infrastructure
-- local repository ownership and execution
-- stronger control over what code leaves a developer machine
+This design reduces unnecessary repository duplication, keeps command execution close to the actual development environment, and makes it easier to support diverse local setups without forcing all work through a central execution layer.
 
-## Core architecture
+## Architecture At A Glance
+
+OpenPatch is designed around three major components:
+
+1. Hosted Web UI
+   A browser-based interface for task submission, agent state, patch review, and future collaboration features.
+2. Local Worker
+   A lightweight service on the developer machine that owns repository operations such as file reads and writes, diff generation, and command execution.
+3. Central Model Backend
+   A shared backend that handles model inference, orchestration logic, streaming responses, and policy-aware request handling.
+
+### High-Level Flow
 
 ```text
 Browser
   -> Hosted Web UI
-  -> Local Worker on the developer machine
-  -> Local repository clone, file reads/writes, command execution
-  -> Central model API
+  -> Local Worker on developer machine
+     -> local repository access
+     -> local command execution
+     -> local git operations
+  -> Central Model Backend
+     -> model inference
+     -> response streaming
+     -> orchestration
 ```
-Project status
 
-OpenPatch is currently in the early design / build phase.
+In this model, the local worker gathers only the necessary repository context, sends minimal task context to the central backend, and applies model-produced edits locally after user review or explicit workflow steps.
 
-The first goal is to create a minimal end-to-end system with:
+## Repository Layout
 
-a local worker API
-repository clone/pull
-file read/write
-command execution
-central model inference
-a simple hosted UI
-Planned components
-Hosted Web UI
+```text
+.
+|-- apps/
+|   |-- web/
+|   `-- local-worker/
+|-- packages/
+|   |-- shared/
+|   `-- agent-core/
+|-- docs/
+|-- .github/
+|   `-- ISSUE_TEMPLATE/
+|-- CONTRIBUTING.md
+|-- LICENSE
+`-- README.md
+```
 
-The hosted web UI handles:
+## Project Status
 
-authentication
-project selection
-task input
-result display
-patch/diff review
-future PR/MR workflows
-Local Worker
+OpenPatch is in the bootstrap stage.
 
-The local worker runs on each developer machine and handles:
+The current repository is establishing the project structure, architecture direction, and contribution guidelines before implementation begins. The first milestone is a minimal vertical slice that proves the hosted UI, local worker, and centralized model backend can cooperate cleanly.
 
-cloning or updating repositories
-reading and writing files
-generating diffs
-running tests and shell commands
-applying patches
-Central Model Backend
+## Phased Roadmap
 
-The model backend handles:
+- Phase 0: Repository bootstrap, documentation, and interface planning
+- Phase 1: Local worker MVP for repository and command operations
+- Phase 2: Central model integration and execution loop
+- Phase 3: Hosted web UI MVP
+- Phase 4: Editing workflow with patches and review
+- Phase 5: Git workflow support
+- Phase 6: Packaging, deployment, and operational hardening
 
-prompt completion
-tool-aware planning
-patch generation
-response streaming
-Design principles
-local repositories stay local
-model inference can be centralized
-protocol between UI and worker should be explicit and portable
-git provider support should be pluggable
-the system should support GitHub, GitLab, and self-hosted setups over time
-Initial roadmap
-Phase 1
+See [docs/roadmap.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/roadmap.md) for the fuller phase breakdown.
 
-Local worker MVP
+## Contribution Guidance
 
-GET /health
-POST /repo/open
-POST /fs/read
-POST /cmd/run
-POST /git/diff
-Phase 2
+Contributions are welcome early, especially around:
 
-Central model integration
+- architecture review and protocol design
+- local worker interfaces
+- shared type definitions and message schemas
+- security review and threat modeling
+- docs, examples, and contributor ergonomics
 
-model client abstraction
-task execution loop
-context collection from local repositories
-Phase 3
+If you want to help, start with [CONTRIBUTING.md](/Users/junginkim/Documents/GitHub/OpenPatch/CONTRIBUTING.md). For deeper design context, see:
 
-Hosted UI MVP
+- [docs/architecture.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture.md)
+- [docs/security.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/security.md)
+- [docs/roadmap.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/roadmap.md)
 
-authentication
-local worker connection check
-task composer
-streamed responses
-Phase 4
+## Design Priorities
 
-Editing workflow
+- Keep repository and execution operations local by default
+- Keep interfaces explicit, inspectable, and portable
+- Minimize the amount of code and secret context sent to centralized services
+- Stay general-purpose and provider-agnostic
+- Build for open-source collaboration from day one
 
-write files
-apply patches
-show diffs
-run tests
-Phase 5
+## License
 
-Git provider integration
-
-branch creation
-commit/push
-pull request / merge request creation
-Non-goals for the first version
-full autonomous multi-repo orchestration
-enterprise policy enforcement
-fine-grained remote execution scheduling
-deep IDE integration
-Contributing
-
-Contributions, design feedback, and implementation ideas are welcome.
-
-See:
-
-docs/architecture.md
-docs/roadmap.md
-docs/security.md
-CONTRIBUTING.md
-License
-
-MIT
+OpenPatch is released under the MIT License. See [LICENSE](/Users/junginkim/Documents/GitHub/OpenPatch/LICENSE).
