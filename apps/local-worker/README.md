@@ -36,7 +36,7 @@ pip install -e .
 ### Run
 
 ```bash
-export OPENPATCH_REPO_BASE_DIR="$HOME/.openpatch/repos"
+export LOCAL_REPO_BASE_DIR="$HOME/.openpatch/repos"
 uvicorn openpatch_worker.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -54,14 +54,28 @@ Open or clone a repository into the configured repo base directory:
 curl -X POST http://127.0.0.1:8000/repo/open \
   -H "Content-Type: application/json" \
   -d '{
-    "project_path": "examples/demo-repo",
+    "project_path": "group/demo-repo",
     "branch": "main",
-    "git": {
-      "provider": "generic",
-      "clone_url": "https://example.com/examples/demo-repo.git"
-    }
+    "git_provider": "gitlab"
   }'
 ```
+
+GitLab setup:
+
+```bash
+export LOCAL_REPO_BASE_DIR="$HOME/.openpatch/repos"
+export GITLAB_BASE_URL="https://gitlab.example.com"
+export GITLAB_TOKEN="your-gitlab-token"
+uvicorn openpatch_worker.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+When `git_provider` is set to `"gitlab"`, the worker builds the clone URL as:
+
+```text
+{GITLAB_BASE_URL}/{project_path}.git
+```
+
+The token stays server-side and is passed to git through temporary command configuration rather than being embedded in the request payload.
 
 Read a file relative to the repository root:
 
@@ -77,6 +91,6 @@ curl -X POST http://127.0.0.1:8000/fs/read \
 ## Notes
 
 - The worker is intended to bind to `localhost` during early development.
-- All repositories are scoped under `OPENPATCH_REPO_BASE_DIR`.
-- Clone and fetch flows currently rely on the local machine's existing `git` configuration and credentials.
-- Future auth, provider integrations, approval workflows, and stronger execution policy controls are intentionally left for follow-up work.
+- All repositories are scoped under `LOCAL_REPO_BASE_DIR`.
+- GitLab clone and fetch support uses `GITLAB_BASE_URL` and `GITLAB_TOKEN` from the server environment.
+- Future provider integrations, approval workflows, and stronger execution policy controls are intentionally left for follow-up work.

@@ -15,7 +15,7 @@ def resolve_project_path(project_path: str) -> Path:
     try:
         repo_path.relative_to(repo_base_dir)
     except ValueError as exc:
-        raise ValueError("Resolved repository path escapes OPENPATCH_REPO_BASE_DIR") from exc
+        raise ValueError("Resolved repository path escapes LOCAL_REPO_BASE_DIR") from exc
 
     if not repo_path.exists():
         raise ValueError(

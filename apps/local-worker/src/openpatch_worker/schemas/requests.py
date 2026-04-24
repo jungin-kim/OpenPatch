@@ -21,6 +21,10 @@ class RepoOpenRequest(BaseModel):
         description="Repository path relative to the configured local repo base directory.",
     )
     branch: str = Field(..., description="Branch to fetch and check out.")
+    git_provider: str | None = Field(
+        default=None,
+        description="Git provider identifier such as 'gitlab'.",
+    )
     git: GitProviderMetadata | None = Field(
         default=None,
         description="Optional git provider metadata used for clone and future provider integration.",
@@ -44,6 +48,18 @@ class RepoOpenRequest(BaseModel):
         if not value.strip():
             raise ValueError("branch must not be empty")
         return value.strip()
+
+    @field_validator("git_provider")
+    @classmethod
+    def validate_git_provider(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized not in {"gitlab"}:
+            raise ValueError("git_provider must be one of: gitlab")
+        return normalized
 
 
 class FileReadRequest(BaseModel):
