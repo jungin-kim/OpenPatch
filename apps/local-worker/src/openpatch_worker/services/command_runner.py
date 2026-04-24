@@ -12,6 +12,7 @@ def run_command(request: CommandRunRequest) -> CommandRunResponse:
     ensure_git_repository(repo_path)
     timeout_seconds = request.timeout_seconds or get_settings().default_command_timeout_seconds
 
+    # TODO: Insert an approval or allowlist policy check here before executing shell commands.
     try:
         result = run_subprocess(
             command=["sh", "-lc", request.command],
@@ -22,6 +23,7 @@ def run_command(request: CommandRunRequest) -> CommandRunResponse:
         return CommandRunResponse(
             project_path=request.project_path,
             command=request.command,
+            timeout_seconds=timeout_seconds,
             exit_code=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
@@ -37,6 +39,7 @@ def run_command(request: CommandRunRequest) -> CommandRunResponse:
         return CommandRunResponse(
             project_path=request.project_path,
             command=request.command,
+            timeout_seconds=timeout_seconds,
             exit_code=None,
             stdout=stdout,
             stderr=stderr,

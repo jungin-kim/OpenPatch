@@ -463,6 +463,10 @@ select {
   gap: 12px;
 }
 
+.response-meta-wide {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .meta-card {
   padding: 14px 16px;
   border: 1px solid var(--border);

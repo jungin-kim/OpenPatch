@@ -34,6 +34,7 @@ class FileWriteResponse(BaseModel):
 class CommandRunResponse(BaseModel):
     project_path: str
     command: str
+    timeout_seconds: int
     exit_code: int | None
     stdout: str
     stderr: str

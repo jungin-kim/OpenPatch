@@ -129,6 +129,29 @@ curl -X POST http://127.0.0.1:8000/agent/propose-file \
   }'
 ```
 
+Run an explicit validation command after a write:
+
+```bash
+curl -X POST http://127.0.0.1:8000/cmd/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "examples/demo-repo",
+    "command": "npm test",
+    "timeout_seconds": 120
+  }'
+```
+
+Common validation examples:
+
+```text
+npm test
+npm run lint
+pytest
+pytest tests/unit
+cargo test
+go test ./...
+```
+
 ## Notes
 
 - The worker is intended to bind to `localhost` during early development.
@@ -137,4 +160,5 @@ curl -X POST http://127.0.0.1:8000/agent/propose-file \
 - Centralized model calls use `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL`.
 - `/agent/run` gathers a small, explicit repo summary locally before sending it upstream.
 - `/agent/propose-file` returns a visible full-file proposal; the worker does not write it until `/fs/write` is called explicitly.
+- `/cmd/run` remains explicit and returns the command, timeout, exit code, stdout, stderr, and timeout state.
 - Future provider integrations, approval workflows, and stronger execution policy controls are intentionally left for follow-up work.

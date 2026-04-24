@@ -45,6 +45,16 @@ type GitDiffPayload = {
   diff: string;
 };
 
+type CommandRunPayload = {
+  project_path: string;
+  command: string;
+  timeout_seconds: number;
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  timed_out: boolean;
+};
+
 type ConnectionState = "checking" | "connected" | "unavailable";
 
 const workerBaseUrl =
@@ -67,16 +77,19 @@ export function OpenPatchConsole() {
   const [editInstruction, setEditInstruction] = useState(
     "Rewrite the introduction to explain the local worker architecture more clearly.",
   );
+  const [validationCommand, setValidationCommand] = useState("npm test");
 
   const [repoPending, setRepoPending] = useState(false);
   const [taskPending, setTaskPending] = useState(false);
   const [proposalPending, setProposalPending] = useState(false);
   const [applyPending, setApplyPending] = useState(false);
+  const [validationPending, setValidationPending] = useState(false);
 
   const [repoError, setRepoError] = useState<string | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   const [repoResult, setRepoResult] = useState<RepoOpenPayload | null>(null);
   const [agentResult, setAgentResult] = useState<AgentRunPayload | null>(null);
@@ -84,6 +97,8 @@ export function OpenPatchConsole() {
     useState<AgentProposeFilePayload | null>(null);
   const [writeResult, setWriteResult] = useState<FileWritePayload | null>(null);
   const [diffResult, setDiffResult] = useState<GitDiffPayload | null>(null);
+  const [validationResult, setValidationResult] =
+    useState<CommandRunPayload | null>(null);
 
   async function refreshHealthCheck() {
     setConnectionState("checking");
@@ -129,6 +144,8 @@ export function OpenPatchConsole() {
     setProposalResult(null);
     setDiffResult(null);
     setWriteResult(null);
+    setValidationResult(null);
+    setValidationError(null);
 
     try {
       const response = await fetch("/api/worker/repo-open", {
@@ -203,6 +220,8 @@ export function OpenPatchConsole() {
     setApplyError(null);
     setWriteResult(null);
     setDiffResult(null);
+    setValidationResult(null);
+    setValidationError(null);
     setProposalResult(null);
 
     try {
@@ -234,6 +253,45 @@ export function OpenPatchConsole() {
       );
     } finally {
       setProposalPending(false);
+    }
+  }
+
+  async function handleValidationRun(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setValidationPending(true);
+    setValidationError(null);
+    setValidationResult(null);
+
+    try {
+      const response = await fetch("/api/worker/cmd-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_path: projectPath,
+          command: validationCommand,
+        }),
+      });
+      const payload = (await response.json()) as
+        | CommandRunPayload
+        | { detail?: string };
+
+      if (!response.ok) {
+        throw new Error(
+          "detail" in payload && payload.detail
+            ? payload.detail
+            : "Validation command failed to start.",
+        );
+      }
+
+      setValidationResult(payload);
+    } catch (error) {
+      setValidationError(
+        error instanceof Error
+          ? error.message
+          : "Unable to run the validation command.",
+      );
+    } finally {
+      setValidationPending(false);
     }
   }
 
@@ -621,6 +679,43 @@ export function OpenPatchConsole() {
       </section>
 
       <section className="workspace">
+        <section className="panel composer-panel" aria-labelledby="validation-title">
+          <p className="section-label">Validation</p>
+          <h3 id="validation-title">Run an explicit validation command</h3>
+          <p>
+            Commands are only executed when you submit them here. This is the first step
+            toward post-edit verification and later approval-controlled execution.
+          </p>
+
+          <form className="task-form" onSubmit={handleValidationRun}>
+            <label className="field-label" htmlFor="validation-command">
+              Validation command
+            </label>
+            <input
+              id="validation-command"
+              className="text-input mono"
+              value={validationCommand}
+              onChange={(event) => setValidationCommand(event.target.value)}
+              placeholder="npm test"
+            />
+
+            {validationError ? <p className="inline-error">{validationError}</p> : null}
+
+            <div className="task-actions">
+              <span className="task-hint">
+                Nothing runs automatically after a write. Validation stays explicit.
+              </span>
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={validationPending || connectionState !== "connected"}
+              >
+                {validationPending ? "Running..." : "Run validation"}
+              </button>
+            </div>
+          </form>
+        </section>
+
         <section className="panel response-panel" aria-labelledby="diff-title">
           <p className="section-label">Result</p>
           <h3 id="diff-title">Inspect the write result and git diff</h3>
@@ -652,6 +747,62 @@ export function OpenPatchConsole() {
               </div>
             )}
           </div>
+        </section>
+      </section>
+
+      <section className="workspace">
+        <section className="panel response-panel" aria-labelledby="validation-output-title">
+          <p className="section-label">Validation Output</p>
+          <h3 id="validation-output-title">Inspect command execution details</h3>
+          <p>
+            The UI shows the exact command, timeout, exit code, stdout, and stderr so
+            command execution stays transparent.
+          </p>
+
+          {validationResult ? (
+            <div className="response-shell">
+              <div className="response-meta response-meta-wide">
+                <div className="meta-card">
+                  <strong>Command</strong>
+                  <span className="mono">{validationResult.command}</span>
+                </div>
+                <div className="meta-card">
+                  <strong>Exit code</strong>
+                  <span>
+                    {validationResult.timed_out
+                      ? "timed out"
+                      : String(validationResult.exit_code)}
+                  </span>
+                </div>
+                <div className="meta-card">
+                  <strong>Timeout</strong>
+                  <span>{validationResult.timeout_seconds}s</span>
+                </div>
+                <div className="meta-card">
+                  <strong>Repository</strong>
+                  <span className="mono">{validationResult.project_path}</span>
+                </div>
+              </div>
+
+              <div className="code-review-grid">
+                <div className="code-card">
+                  <strong>stdout</strong>
+                  <pre className="code-block">{validationResult.stdout || "(empty)"}</pre>
+                </div>
+                <div className="code-card">
+                  <strong>stderr</strong>
+                  <pre className="code-block">{validationResult.stderr || "(empty)"}</pre>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="response-placeholder">
+              <strong>Awaiting validation run</strong>
+              <p>
+                After you run a validation command, its execution details will appear here.
+              </p>
+            </div>
+          )}
         </section>
       </section>
     </>

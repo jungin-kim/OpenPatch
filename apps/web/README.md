@@ -44,6 +44,8 @@ Then open [http://localhost:3000](http://localhost:3000).
 - file edit proposal flow through `/agent/propose-file`
 - explicit file write through `/fs/write`
 - diff review for the written file through `/git/diff`
+- explicit validation command execution through `/cmd/run`
+- validation output display with command, exit code, stdout, and stderr
 - graceful unavailable-worker errors in the UI
 
 ## Notes
@@ -52,6 +54,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 - This keeps the browser flow easy to run locally while avoiding direct browser-to-worker CORS setup in the first version.
 - A future truly hosted deployment will need a browser-to-local-worker connection strategy rather than this server-side proxy approach.
 - File edits remain explicit: the model proposes content, the user reviews it, and the UI only writes the file after an explicit apply step.
+- Validation also remains explicit: the UI never runs commands automatically after a write.
 
 ## Next Steps
 
@@ -62,6 +65,6 @@ The current UI still needs:
 - task streaming and progress updates
 - better patch and diff presentation
 - file selection and explicit context controls
-- validation command execution after a write
+- approval and allowlist policy controls for command execution
 - commit and push workflows
 - authentication and session wiring for a future hosted deployment
