@@ -87,6 +87,22 @@ The current repository is establishing the project structure, architecture direc
 
 See [docs/roadmap.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/roadmap.md) for the fuller phase breakdown.
 
+## Getting Started
+
+For the current practical setup:
+
+1. Start the local worker on the developer machine.
+2. Start the web app locally.
+3. Point the worker at an OpenAI-compatible model API.
+4. Use the web UI to connect to the localhost worker.
+
+Helpful onboarding docs:
+
+- [DEPLOYMENT.md](/Users/junginkim/Documents/GitHub/OpenPatch/DEPLOYMENT.md)
+- [docs/local-worker-setup.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/local-worker-setup.md)
+- [docs/troubleshooting.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/troubleshooting.md)
+- [docs/architecture-diagram.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture-diagram.md)
+
 ## Contribution Guidance
 
 Contributions are welcome early, especially around:
@@ -100,6 +116,7 @@ Contributions are welcome early, especially around:
 If you want to help, start with [CONTRIBUTING.md](/Users/junginkim/Documents/GitHub/OpenPatch/CONTRIBUTING.md). For deeper design context, see:
 
 - [docs/architecture.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture.md)
+- [docs/architecture-diagram.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/architecture-diagram.md)
 - [docs/security.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/security.md)
 - [docs/roadmap.md](/Users/junginkim/Documents/GitHub/OpenPatch/docs/roadmap.md)
 

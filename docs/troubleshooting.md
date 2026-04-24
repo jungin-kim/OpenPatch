@@ -1,0 +1,167 @@
+# Troubleshooting
+
+This guide covers common problems when running OpenPatch locally.
+
+## Worker Health Check Fails
+
+Symptoms:
+
+- the web UI shows the worker as unavailable
+- `GET /health` fails
+
+Checks:
+
+1. Make sure the worker process is running.
+2. Confirm it is bound to `127.0.0.1:8000`.
+3. Run:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+If this fails locally, fix the worker before debugging the web app.
+
+## Web App Cannot Reach The Worker
+
+Symptoms:
+
+- the web UI reports connection errors
+- repository open or task submission fails immediately
+
+Checks:
+
+1. Confirm `NEXT_PUBLIC_LOCAL_WORKER_BASE_URL` is set correctly.
+2. Confirm the worker is listening on the same URL.
+3. Restart the web app after changing environment variables.
+
+Default local value:
+
+```text
+http://127.0.0.1:8000
+```
+
+## Repository Open Fails
+
+Symptoms:
+
+- `/repo/open` returns an error
+
+Checks:
+
+1. Confirm `LOCAL_REPO_BASE_DIR` exists or can be created.
+2. Confirm `project_path` is relative, not absolute.
+3. For GitLab flows, confirm `GITLAB_BASE_URL` and `GITLAB_TOKEN` are set.
+4. Confirm the branch exists on the remote or locally.
+
+## GitLab Authentication Fails
+
+Symptoms:
+
+- clone or push fails
+- merge request creation returns an API error
+
+Checks:
+
+1. Confirm `GITLAB_BASE_URL` matches the actual GitLab host.
+2. Confirm `GITLAB_TOKEN` is valid and not expired.
+3. Confirm the token has sufficient repository and API permissions.
+4. Confirm the `project_path` matches the GitLab project path.
+
+## Model API Request Fails
+
+Symptoms:
+
+- `/agent/run` or `/agent/propose-file` returns an API error
+
+Checks:
+
+1. Confirm `OPENAI_BASE_URL` is correct.
+2. Confirm `OPENAI_API_KEY` is valid.
+3. Confirm `OPENAI_MODEL` is supported by that endpoint.
+4. Confirm the machine can reach the configured API host.
+
+## File Write Fails
+
+Symptoms:
+
+- `/fs/write` returns a path error
+
+Checks:
+
+1. Confirm `project_path` is under `LOCAL_REPO_BASE_DIR`.
+2. Confirm `relative_path` is actually relative.
+3. Confirm the path does not attempt to escape the repository root.
+4. Confirm the write is not targeting `.git` internals.
+
+## Validation Command Fails
+
+Symptoms:
+
+- `/cmd/run` returns a non-zero exit code
+- stdout or stderr contains tool failures
+
+Checks:
+
+1. Review the exact command shown in the UI or API response.
+2. Review `stdout` and `stderr`.
+3. Confirm the required tool is installed locally.
+4. Confirm the command works when run manually in the repository.
+5. If it times out, increase `timeout_seconds` explicitly in the request.
+
+## Commit Fails
+
+Symptoms:
+
+- `/git/commit` reports that there are no staged changes
+- `git commit` fails with author or identity errors
+
+Checks:
+
+1. Confirm there are actual changes in the repository.
+2. Confirm your local git identity is configured.
+3. Confirm the repository is in a valid git state.
+
+Example:
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
+## Push Fails
+
+Symptoms:
+
+- `/git/push` returns an authentication or remote error
+
+Checks:
+
+1. Confirm the branch exists locally.
+2. Confirm the remote name is correct.
+3. Confirm credentials or provider token settings are valid.
+4. Confirm the remote branch is allowed to be pushed.
+
+## Merge Request Creation Fails
+
+Symptoms:
+
+- `/git/merge-request` returns a GitLab API error
+
+Checks:
+
+1. Confirm the source branch has already been pushed.
+2. Confirm the target branch exists.
+3. Confirm `project_path` matches the GitLab project namespace and repo name.
+4. Review the API error body returned by the worker.
+
+## When In Doubt
+
+Collect these details before opening an issue:
+
+- worker version or current branch
+- operating system
+- exact request payload
+- exact error message
+- whether the same command works manually outside OpenPatch
+
+If you file an issue, include sanitized logs and omit secrets or tokens.
