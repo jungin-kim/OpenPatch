@@ -59,6 +59,7 @@ In this model, the local worker gathers only the necessary repository context, s
 |   |-- web/
 |   `-- local-worker/
 |-- packages/
+|   |-- cli/
 |   |-- shared/
 |   `-- agent-core/
 |-- docs/
@@ -89,13 +90,21 @@ See [the roadmap](docs/roadmap.md) for the fuller phase breakdown.
 
 ## Getting Started
 
-For the current practical setup:
+The standard user flow is:
 
-1. Install the CLI from this repository.
+1. Install the CLI.
 2. Run `openpatch onboard`.
-3. Run `openpatch doctor`.
-4. Use `openpatch worker start` if the worker is not already running.
-5. Start the web app as needed during development.
+3. Run `openpatch worker start`.
+4. Run `openpatch doctor`.
+
+```bash
+npm install -g openpatch
+openpatch onboard
+openpatch worker start
+openpatch doctor
+```
+
+All real runtime config lives under `~/.openpatch`, not inside the repository.
 
 Helpful onboarding docs:
 
@@ -134,6 +143,7 @@ If you want to help, start with [Contributing](CONTRIBUTING.md). For deeper desi
 
 OpenPatch now includes a real local worker lifecycle flow through the CLI:
 
+- `openpatch config show`
 - `openpatch onboard`
 - `openpatch worker start`
 - `openpatch doctor`

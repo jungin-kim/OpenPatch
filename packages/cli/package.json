@@ -1,7 +1,7 @@
 {
-  "name": "@openpatch/cli",
+  "name": "openpatch",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "OpenPatch onboarding and local worker management CLI.",
   "bin": {
     "openpatch": "./bin/openpatch.js"

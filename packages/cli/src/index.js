@@ -26,6 +26,9 @@ async function runCli() {
     case "onboard":
       await runOnboard();
       return;
+    case "config":
+      await runConfigCommand(subcommand);
+      return;
     case "doctor":
       await runDoctor();
       return;
@@ -42,6 +45,16 @@ async function runCli() {
       return;
     default:
       throw new Error(`Unknown command: ${command}`);
+  }
+}
+
+async function runConfigCommand(subcommand) {
+  switch (subcommand) {
+    case "show":
+      await showConfig();
+      return;
+    default:
+      throw new Error("Unknown config command. Use show.");
   }
 }
 
@@ -85,6 +98,7 @@ async function runOnboard() {
     );
     const modelName = await promptWithDefault(rl, "Model name", DEFAULT_MODEL);
     const gitProvider = await promptGitProvider(rl);
+    const gitProviderConfig = await promptGitProviderConfig(rl, gitProvider);
     const localRepoBaseDir = await promptWithDefault(
       rl,
       "Local repository base directory",
@@ -107,7 +121,7 @@ async function runOnboard() {
         apiKey: modelApiKey,
         model: modelName,
       },
-      gitProvider: buildGitProviderConfig(gitProvider),
+      gitProvider: gitProviderConfig,
       localRepoBaseDir,
       daemon: {
         prepared: true,
@@ -263,10 +277,10 @@ async function runStatus() {
   console.log(`Worker reachable: ${workerHealth.reachable ? "yes" : "no"}`);
   console.log(`Worker health detail: ${workerHealth.message}`);
   console.log(`Worker log file: ${runtimeState?.logPath || WORKER_LOG_PATH}`);
-  console.log(`Model provider: ${config.modelBackend?.provider || "not configured"}`);
-  console.log(`Model base URL: ${config.modelBackend?.baseUrl || "not configured"}`);
-  console.log(`Model name: ${config.modelBackend?.model || "not configured"}`);
-  console.log(`Git provider: ${config.gitProvider?.provider || "not configured"}`);
+  console.log(
+    `Model backend summary: ${formatModelBackendSummary(config.modelBackend)}`,
+  );
+  console.log(`Selected provider: ${formatProviderSummary(config.gitProvider)}`);
   console.log(`Local repo base dir: ${config.localRepoBaseDir || "not configured"}`);
   console.log(`Daemon prepared: ${config.daemon?.prepared ? "yes" : "no"}`);
 }
@@ -543,13 +557,25 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildGitProviderConfig(provider) {
+async function promptGitProviderConfig(rl, provider) {
   if (provider === "gitlab") {
-    return { provider: "gitlab" };
+    const baseUrl = await promptWithDefault(
+      rl,
+      "GitLab base URL",
+      "https://gitlab.com",
+    );
+    return { provider: "gitlab", baseUrl };
   }
+
   if (provider === "github") {
-    return { provider: "github" };
+    const baseUrl = await promptWithDefault(
+      rl,
+      "GitHub base URL",
+      "https://github.com",
+    );
+    return { provider: "github", baseUrl };
   }
+
   return { provider: "none" };
 }
 
@@ -579,6 +605,13 @@ async function promptWithDefault(rl, label, defaultValue) {
   const answer = await rl.question(`${label}${suffix}: `);
   const trimmed = answer.trim();
   return trimmed || defaultValue;
+}
+
+async function showConfig() {
+  const config = await requireConfig();
+  console.log("OpenPatch config");
+  console.log("");
+  console.log(JSON.stringify(redactConfig(config), null, 2));
 }
 
 async function requireConfig() {
@@ -679,6 +712,43 @@ function makeCheck(name, ok, detail) {
   return { name, ok, detail };
 }
 
+function redactConfig(config) {
+  return {
+    ...config,
+    modelBackend: {
+      ...config.modelBackend,
+      apiKey: config.modelBackend?.apiKey ? redactSecret(config.modelBackend.apiKey) : "",
+    },
+  };
+}
+
+function redactSecret(value) {
+  if (!value) {
+    return "";
+  }
+  if (value.length <= 8) {
+    return "********";
+  }
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
+function formatProviderSummary(gitProvider) {
+  if (!gitProvider?.provider || gitProvider.provider === "none") {
+    return "not configured";
+  }
+  if (gitProvider.baseUrl) {
+    return `${gitProvider.provider} (${gitProvider.baseUrl})`;
+  }
+  return gitProvider.provider;
+}
+
+function formatModelBackendSummary(modelBackend) {
+  if (!modelBackend?.provider || !modelBackend?.baseUrl || !modelBackend?.model) {
+    return "not configured";
+  }
+  return `${modelBackend.provider} | ${modelBackend.model} | ${modelBackend.baseUrl}`;
+}
+
 function printChecks(checks) {
   console.log("OpenPatch doctor");
   console.log("");
@@ -695,6 +765,7 @@ function printHelp() {
   console.log("OpenPatch CLI");
   console.log("");
   console.log("Usage:");
+  console.log("  openpatch config show");
   console.log("  openpatch onboard");
   console.log("  openpatch doctor");
   console.log("  openpatch status");

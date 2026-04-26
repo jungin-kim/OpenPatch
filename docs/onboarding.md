@@ -12,10 +12,10 @@ The first step in that direction is the new `openpatch` CLI.
 
 ## Install The CLI
 
-From the repository root:
+Standard install:
 
 ```bash
-npm install -g ./packages/cli
+npm install -g openpatch
 ```
 
 This makes the `openpatch` command available on your machine.
@@ -31,7 +31,7 @@ The onboarding flow will:
 1. create the local OpenPatch config directory
 2. create a config file
 3. prompt for model backend settings
-4. prompt for git provider selection
+4. prompt for git provider selection and provider base URL
 5. prompt for a local repo base directory
 6. detect whether a local worker installation is already present
 7. prepare local directories for a future daemon installation flow
@@ -54,6 +54,14 @@ This validates:
 - configured worker URL matches the running instance
 - model backend config is present
 - git provider config is present
+
+## Show The Current Config
+
+```bash
+openpatch config show
+```
+
+This prints the current local OpenPatch config with secrets redacted.
 
 ## View Current Status
 
@@ -89,6 +97,15 @@ Show the worker logs:
 openpatch worker logs
 ```
 
+## Standard Flow
+
+```bash
+npm install -g openpatch
+openpatch onboard
+openpatch worker start
+openpatch doctor
+```
+
 ## Development-Friendly Runtime
 
 The current runtime model is intentionally simple:
@@ -109,6 +126,7 @@ That means:
 - the worker remains the trusted local execution layer
 - repository reads, writes, diffs, commands, and git actions stay local
 - the CLI and current web flow assume a localhost worker URL
+- all real runtime config is stored under `~/.openpatch`, not inside the repository
 
 ## Current Limits
 
