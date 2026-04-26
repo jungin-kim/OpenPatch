@@ -91,22 +91,16 @@ See [the roadmap](docs/roadmap.md) for the fuller phase breakdown.
 
 For the current practical setup:
 
-<<<<<<< HEAD
 1. Install the CLI from this repository.
 2. Run `openpatch onboard`.
 3. Run `openpatch doctor`.
 4. Use `openpatch worker start` if the worker is not already running.
 5. Start the web app as needed during development.
-=======
-1. Start the local worker on the developer machine.
-2. Start the web app locally.
-3. Point the worker at an OpenAI-compatible model API.
-4. Use the web UI to connect to the localhost worker.
->>>>>>> parent of df8f26d (Refactoring)
 
 Helpful onboarding docs:
 
 - [Deployment guide](DEPLOYMENT.md)
+- [Onboarding guide](docs/onboarding.md)
 - [Local worker setup](docs/local-worker-setup.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture diagram](docs/architecture-diagram.md)
