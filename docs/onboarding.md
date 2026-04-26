@@ -30,12 +30,42 @@ The onboarding flow will:
 
 1. create the local OpenPatch config directory
 2. create a config file
-3. prompt for model backend settings
-4. prompt for git provider selection and provider base URL
-5. prompt for a local repo base directory
-6. detect whether a local worker installation is already present
-7. prepare local directories for a future daemon installation flow
-8. optionally start the local worker immediately
+3. prompt for a model provider first
+4. ask only for the model fields that match that provider
+5. prompt for git provider selection and provider base URL
+6. prompt for a local repo base directory
+7. detect whether a local worker installation is already present
+8. prepare local directories for a future daemon installation flow
+9. optionally start the local worker immediately
+
+Current model provider choices:
+
+- OpenAI
+- Anthropic
+- Gemini
+- Ollama
+- OpenAI-compatible
+
+Examples of the provider-aware prompts:
+
+- OpenAI: API key and model name, with the default base URL set to `https://api.openai.com/v1`
+- Anthropic: API key and model name, with the default base URL set to `https://api.anthropic.com`
+- Gemini: API key and model name, with the default base URL set to `https://generativelanguage.googleapis.com/v1beta/openai`
+- Ollama: base URL and model name, with defaults of `http://127.0.0.1:11434/v1` and `ollama`
+- OpenAI-compatible: base URL, API key, and model name
+
+The resulting config stores model settings under a nested `model` object in `~/.openpatch/config.json`:
+
+```json
+{
+  "model": {
+    "provider": "ollama",
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "apiKey": "ollama",
+    "model": "llama3.2"
+  }
+}
+```
 
 ## Run Diagnostics
 
@@ -52,7 +82,7 @@ This validates:
 - local worker process is running
 - local worker is reachable
 - configured worker URL matches the running instance
-- model backend config is present
+- model provider config is present
 - git provider config is present
 
 ## Show The Current Config
@@ -70,6 +100,7 @@ openpatch status
 ```
 
 This prints the current configuration summary and worker reachability.
+It also shows the configured model provider clearly.
 
 ## Manage The Local Worker
 

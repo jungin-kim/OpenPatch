@@ -106,6 +106,8 @@ openpatch doctor
 
 All real runtime config lives under `~/.openpatch`, not inside the repository.
 
+During onboarding, OpenPatch now starts with a model provider choice so setup feels product-oriented instead of infrastructure-heavy. Current provider options include OpenAI, Anthropic, Gemini, Ollama, and OpenAI-compatible backends.
+
 Helpful onboarding docs:
 
 - [Deployment guide](DEPLOYMENT.md)
@@ -149,7 +151,7 @@ OpenPatch now includes a real local worker lifecycle flow through the CLI:
 - `openpatch doctor`
 - `openpatch status`
 
-The current implementation manages a development-friendly background worker process with runtime state and logs under `~/.openpatch`.
+The current implementation manages a development-friendly background worker process with runtime state and logs under `~/.openpatch`, plus a provider-first model onboarding flow that clearly shows which model backend is configured.
 
 ## License
 

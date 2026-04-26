@@ -25,7 +25,7 @@ npm install -g openpatch
 
 ### `openpatch onboard`
 
-Creates the local OpenPatch config directory under `~/.openpatch`, writes a config file, collects model and provider settings, prepares local runtime directories, and can optionally start the local worker.
+Creates the local OpenPatch config directory under `~/.openpatch`, writes a config file, starts with a model provider choice, asks only for the fields relevant to that provider, collects git provider settings, prepares local runtime directories, and can optionally start the local worker.
 
 ### `openpatch config show`
 
@@ -33,11 +33,11 @@ Prints the current local OpenPatch configuration with secrets redacted.
 
 ### `openpatch doctor`
 
-Checks whether the local configuration, worker detection, worker process, worker reachability, worker URL, model backend config, and git provider config look healthy.
+Checks whether the local configuration, worker detection, worker process, worker reachability, worker URL, model provider config, and git provider config look healthy.
 
 ### `openpatch status`
 
-Prints the current OpenPatch configuration summary and worker status, including worker URL, reachability, selected provider, repo base directory, and model backend summary.
+Prints the current OpenPatch configuration summary and worker status, including worker URL, reachability, selected git provider, repo base directory, model provider, and model summary.
 
 ### `openpatch worker start`
 
@@ -66,6 +66,18 @@ The current CLI uses a development-friendly runtime strategy:
 - store logs under `~/.openpatch/logs`
 
 This is intentionally simple and inspectable. It is not yet an OS-level daemon installer.
+
+## Model Provider Choices
+
+The onboarding flow currently supports:
+
+- `openai`
+- `anthropic`
+- `gemini`
+- `ollama`
+- `openai-compatible`
+
+Ollama is treated as a first-class option with product-friendly defaults for a local model setup.
 
 ## Standard User Flow
 

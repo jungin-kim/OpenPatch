@@ -14,9 +14,47 @@ const LOG_DIR = path.join(CONFIG_DIR, "logs");
 const STATE_PATH = path.join(DAEMON_DIR, "state.json");
 const WORKER_LOG_PATH = path.join(LOG_DIR, "worker.log");
 const DEFAULT_WORKER_URL = "http://127.0.0.1:8000";
-const DEFAULT_MODEL_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_MODEL = "gpt-4.1-mini";
 const DEFAULT_REPO_BASE_DIR = path.join(os.homedir(), ".openpatch", "repos");
+const MODEL_PROVIDER_OPTIONS = [
+  "openai",
+  "anthropic",
+  "gemini",
+  "ollama",
+  "openai-compatible",
+];
+const MODEL_PROVIDER_CONFIG = {
+  openai: {
+    label: "OpenAI",
+    defaultBaseUrl: "https://api.openai.com/v1",
+    defaultModel: "gpt-4.1-mini",
+    prompts: ["apiKey", "model"],
+  },
+  anthropic: {
+    label: "Anthropic",
+    defaultBaseUrl: "https://api.anthropic.com",
+    defaultModel: "claude-3-7-sonnet-latest",
+    prompts: ["apiKey", "model"],
+  },
+  gemini: {
+    label: "Gemini",
+    defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    defaultModel: "gemini-2.5-pro",
+    prompts: ["apiKey", "model"],
+  },
+  ollama: {
+    label: "Ollama",
+    defaultBaseUrl: "http://127.0.0.1:11434/v1",
+    defaultApiKey: "ollama",
+    defaultModel: "llama3.2",
+    prompts: ["baseUrl", "model"],
+  },
+  "openai-compatible": {
+    label: "OpenAI-compatible",
+    defaultBaseUrl: "",
+    defaultModel: "",
+    prompts: ["baseUrl", "apiKey", "model"],
+  },
+};
 
 async function runCli() {
   const command = process.argv[2];
@@ -83,20 +121,11 @@ async function runOnboard() {
 
   try {
     console.log("OpenPatch onboarding");
-    console.log("This will create your local OpenPatch configuration and prepare your machine for local worker management.");
+    console.log("Set up OpenPatch on this machine.");
+    console.log("We will save your local settings, connect a model provider, choose a git provider, and prepare the local worker runtime.");
     console.log("");
 
-    const modelBaseUrl = await promptWithDefault(
-      rl,
-      "Model API base URL",
-      DEFAULT_MODEL_BASE_URL,
-    );
-    const modelApiKey = await promptWithDefault(
-      rl,
-      "Model API key",
-      "",
-    );
-    const modelName = await promptWithDefault(rl, "Model name", DEFAULT_MODEL);
+    const modelConfig = await promptModelConfig(rl);
     const gitProvider = await promptGitProvider(rl);
     const gitProviderConfig = await promptGitProviderConfig(rl, gitProvider);
     const localRepoBaseDir = await promptWithDefault(
@@ -107,7 +136,7 @@ async function runOnboard() {
 
     const workerDetection = await detectLocalWorkerInstallation(process.cwd());
     const config = {
-      version: 1,
+      version: 2,
       createdAt: new Date().toISOString(),
       worker: {
         baseUrl: DEFAULT_WORKER_URL,
@@ -115,12 +144,7 @@ async function runOnboard() {
         installMode: workerDetection.installMode,
         detectedPath: workerDetection.detectedPath,
       },
-      modelBackend: {
-        provider: "openai-compatible",
-        baseUrl: modelBaseUrl,
-        apiKey: modelApiKey,
-        model: modelName,
-      },
+      model: modelConfig,
       gitProvider: gitProviderConfig,
       localRepoBaseDir,
       daemon: {
@@ -229,13 +253,16 @@ async function runDoctor() {
   );
   checks.push(
     makeCheck(
-      "Model backend config present",
+      "Model provider config present",
       Boolean(
-        config.modelBackend?.baseUrl &&
-          config.modelBackend?.apiKey &&
-          config.modelBackend?.model,
+        config.model?.provider &&
+          config.model?.baseUrl &&
+          config.model?.model &&
+          hasRequiredModelFields(config.model),
       ),
-      "Expected model base URL, API key, and model name.",
+      config.model?.provider
+        ? `Configured provider: ${formatModelSummary(config.model)}`
+        : "Expected a model provider plus its required fields.",
     ),
   );
   checks.push(
@@ -269,7 +296,7 @@ async function runStatus() {
   console.log("OpenPatch status");
   console.log("");
   console.log(`Config file: ${CONFIG_PATH}`);
-  console.log(`Worker URL: ${config.worker?.baseUrl || DEFAULT_WORKER_URL}`);
+  console.log(`Configured worker URL: ${config.worker?.baseUrl || DEFAULT_WORKER_URL}`);
   console.log(`Worker install mode: ${config.worker?.installMode || "unknown"}`);
   console.log(`Worker detected path: ${config.worker?.detectedPath || "not detected"}`);
   console.log(`Worker process running: ${workerRunning.running ? "yes" : "no"}`);
@@ -277,10 +304,9 @@ async function runStatus() {
   console.log(`Worker reachable: ${workerHealth.reachable ? "yes" : "no"}`);
   console.log(`Worker health detail: ${workerHealth.message}`);
   console.log(`Worker log file: ${runtimeState?.logPath || WORKER_LOG_PATH}`);
-  console.log(
-    `Model backend summary: ${formatModelBackendSummary(config.modelBackend)}`,
-  );
-  console.log(`Selected provider: ${formatProviderSummary(config.gitProvider)}`);
+  console.log(`Model provider: ${config.model?.provider || "not configured"}`);
+  console.log(`Model summary: ${formatModelSummary(config.model)}`);
+  console.log(`Selected git provider: ${formatProviderSummary(config.gitProvider)}`);
   console.log(`Local repo base dir: ${config.localRepoBaseDir || "not configured"}`);
   console.log(`Daemon prepared: ${config.daemon?.prepared ? "yes" : "no"}`);
 }
@@ -312,9 +338,9 @@ async function startWorker({ interactive }) {
   const env = {
     ...process.env,
     LOCAL_REPO_BASE_DIR: config.localRepoBaseDir || DEFAULT_REPO_BASE_DIR,
-    OPENAI_BASE_URL: config.modelBackend?.baseUrl || "",
-    OPENAI_API_KEY: config.modelBackend?.apiKey || "",
-    OPENAI_MODEL: config.modelBackend?.model || "",
+    OPENAI_BASE_URL: config.model?.baseUrl || "",
+    OPENAI_API_KEY: config.model?.apiKey || "",
+    OPENAI_MODEL: config.model?.model || "",
   };
 
   if (config.gitProvider?.provider === "gitlab") {
@@ -579,6 +605,75 @@ async function promptGitProviderConfig(rl, provider) {
   return { provider: "none" };
 }
 
+async function promptModelConfig(rl) {
+  const provider = await promptModelProvider(rl);
+  const providerConfig = MODEL_PROVIDER_CONFIG[provider];
+
+  console.log("");
+  console.log(`Model provider: ${providerConfig.label}`);
+  console.log("OpenPatch will use these settings when the local worker calls your centralized model backend.");
+
+  let baseUrl = providerConfig.defaultBaseUrl || "";
+  let apiKey = providerConfig.defaultApiKey || "";
+  let model = providerConfig.defaultModel || "";
+
+  if (providerConfig.prompts.includes("baseUrl")) {
+    baseUrl = await promptWithDefault(rl, "Base URL", baseUrl);
+  }
+
+  if (providerConfig.prompts.includes("apiKey")) {
+    apiKey = await promptWithDefault(rl, "API key", apiKey);
+  }
+
+  if (providerConfig.prompts.includes("model")) {
+    model = await promptWithDefault(rl, "Model name", model);
+  }
+
+  if (!providerConfig.prompts.includes("baseUrl")) {
+    baseUrl = providerConfig.defaultBaseUrl;
+  }
+
+  if (!providerConfig.prompts.includes("apiKey")) {
+    apiKey = providerConfig.defaultApiKey || "";
+  }
+
+  return {
+    provider,
+    baseUrl,
+    apiKey,
+    model,
+  };
+}
+
+async function promptModelProvider(rl) {
+  while (true) {
+    console.log("Choose a model provider:");
+    console.log("  1. OpenAI");
+    console.log("  2. Anthropic");
+    console.log("  3. Gemini");
+    console.log("  4. Ollama");
+    console.log("  5. OpenAI-compatible");
+    const answer = (await rl.question("Choice [1]: ")).trim() || "1";
+
+    if (answer === "1") {
+      return "openai";
+    }
+    if (answer === "2") {
+      return "anthropic";
+    }
+    if (answer === "3") {
+      return "gemini";
+    }
+    if (answer === "4") {
+      return "ollama";
+    }
+    if (answer === "5") {
+      return "openai-compatible";
+    }
+    console.log("Please choose 1, 2, 3, 4, or 5.");
+  }
+}
+
 async function promptGitProvider(rl) {
   while (true) {
     console.log("Select a git provider:");
@@ -623,7 +718,7 @@ async function requireConfig() {
 
 async function readConfig() {
   const raw = await fsp.readFile(CONFIG_PATH, "utf-8");
-  return JSON.parse(raw);
+  return normalizeConfig(JSON.parse(raw));
 }
 
 async function readState() {
@@ -713,13 +808,16 @@ function makeCheck(name, ok, detail) {
 }
 
 function redactConfig(config) {
-  return {
-    ...config,
-    modelBackend: {
-      ...config.modelBackend,
-      apiKey: config.modelBackend?.apiKey ? redactSecret(config.modelBackend.apiKey) : "",
+  const normalized = normalizeConfig(config);
+  const redacted = {
+    ...normalized,
+    model: {
+      ...normalized.model,
+      apiKey: normalized.model?.apiKey ? redactSecret(normalized.model.apiKey) : "",
     },
   };
+  delete redacted.modelBackend;
+  return redacted;
 }
 
 function redactSecret(value) {
@@ -742,11 +840,54 @@ function formatProviderSummary(gitProvider) {
   return gitProvider.provider;
 }
 
-function formatModelBackendSummary(modelBackend) {
-  if (!modelBackend?.provider || !modelBackend?.baseUrl || !modelBackend?.model) {
+function formatModelSummary(modelConfig) {
+  if (!modelConfig?.provider || !modelConfig?.baseUrl || !modelConfig?.model) {
     return "not configured";
   }
-  return `${modelBackend.provider} | ${modelBackend.model} | ${modelBackend.baseUrl}`;
+  return `${modelConfig.provider} | ${modelConfig.model} | ${modelConfig.baseUrl}`;
+}
+
+function hasRequiredModelFields(modelConfig) {
+  if (!modelConfig?.provider || !MODEL_PROVIDER_OPTIONS.includes(modelConfig.provider)) {
+    return false;
+  }
+
+  if (!modelConfig.baseUrl || !modelConfig.model) {
+    return false;
+  }
+
+  const providerConfig = MODEL_PROVIDER_CONFIG[modelConfig.provider];
+  if (providerConfig.prompts.includes("apiKey")) {
+    return Boolean(modelConfig.apiKey);
+  }
+
+  return true;
+}
+
+function normalizeConfig(config) {
+  if (!config || typeof config !== "object") {
+    return config;
+  }
+
+  if (config.model) {
+    return config;
+  }
+
+  if (config.modelBackend) {
+    const normalized = {
+      ...config,
+      model: {
+        provider: config.modelBackend.provider || "openai-compatible",
+        baseUrl: config.modelBackend.baseUrl || "",
+        apiKey: config.modelBackend.apiKey || "",
+        model: config.modelBackend.model || "",
+      },
+    };
+    delete normalized.modelBackend;
+    return normalized;
+  }
+
+  return config;
 }
 
 function printChecks(checks) {
