@@ -17,3 +17,6 @@ apps/local-worker/.env
 .DS_Store
 # Python
 .venv/
+
+# macOS
+.DS_Store
