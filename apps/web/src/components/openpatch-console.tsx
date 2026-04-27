@@ -6,10 +6,8 @@ import {
   getWorkerHealth,
   LocalWorkerClientError,
   openRepository,
-  readRepositoryFile,
   runAgentTask,
   type AgentRunPayload,
-  type FileReadPayload,
   type RepoOpenPayload,
 } from "@/lib/local-worker-client";
 
@@ -26,25 +24,21 @@ export function OpenPatchConsole() {
   );
   const [repoBaseDir, setRepoBaseDir] = useState("");
 
-  const [projectPath, setProjectPath] = useState("examples/demo-repo");
+  const [projectPath, setProjectPath] = useState("group/private-repo");
   const [branch, setBranch] = useState("main");
   const [gitProvider, setGitProvider] = useState("gitlab");
-  const [task, setTask] = useState(
-    "Summarize the repository and identify the best starting point for understanding the codebase.",
+  const [question, setQuestion] = useState(
+    "Summarize this repository and tell me the best place to start reading the code.",
   );
-  const [previewPath, setPreviewPath] = useState("README.md");
 
   const [repoPending, setRepoPending] = useState(false);
-  const [previewPending, setPreviewPending] = useState(false);
-  const [taskPending, setTaskPending] = useState(false);
+  const [questionPending, setQuestionPending] = useState(false);
 
   const [repoResult, setRepoResult] = useState<RepoOpenPayload | null>(null);
-  const [previewResult, setPreviewResult] = useState<FileReadPayload | null>(null);
-  const [taskResult, setTaskResult] = useState<AgentRunPayload | null>(null);
+  const [questionResult, setQuestionResult] = useState<AgentRunPayload | null>(null);
 
   const [repoError, setRepoError] = useState<string | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [taskError, setTaskError] = useState<string | null>(null);
+  const [questionError, setQuestionError] = useState<string | null>(null);
 
   async function refreshHealthCheck() {
     setConnectionState("checking");
@@ -74,21 +68,19 @@ export function OpenPatchConsole() {
     event.preventDefault();
     setRepoPending(true);
     setRepoError(null);
-    setPreviewError(null);
-    setTaskError(null);
-    setRepoResult(null);
-    setPreviewResult(null);
-    setTaskResult(null);
+    setQuestionError(null);
+    setQuestionResult(null);
 
     try {
       const payload = await openRepository({
         project_path: projectPath.trim(),
         branch: branch.trim(),
-        git_provider: gitProvider || undefined,
+        git_provider: gitProvider.trim() || undefined,
       });
       setRepoResult(payload);
       await refreshHealthCheck();
     } catch (error) {
+      setRepoResult(null);
       setRepoError(
         error instanceof LocalWorkerClientError || error instanceof Error
           ? error.message
@@ -99,49 +91,26 @@ export function OpenPatchConsole() {
     }
   }
 
-  async function handlePreviewRead(event: React.FormEvent<HTMLFormElement>) {
+  async function handleQuestionSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setPreviewPending(true);
-    setPreviewError(null);
-    setPreviewResult(null);
-
-    try {
-      const payload = await readRepositoryFile({
-        project_path: projectPath.trim(),
-        relative_path: previewPath.trim(),
-      });
-      setPreviewResult(payload);
-    } catch (error) {
-      setPreviewError(
-        error instanceof LocalWorkerClientError || error instanceof Error
-          ? error.message
-          : "Unable to read the file through the local worker.",
-      );
-    } finally {
-      setPreviewPending(false);
-    }
-  }
-
-  async function handleTaskSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setTaskPending(true);
-    setTaskError(null);
-    setTaskResult(null);
+    setQuestionPending(true);
+    setQuestionError(null);
+    setQuestionResult(null);
 
     try {
       const payload = await runAgentTask({
         project_path: projectPath.trim(),
-        task: task.trim(),
+        task: question.trim(),
       });
-      setTaskResult(payload);
+      setQuestionResult(payload);
     } catch (error) {
-      setTaskError(
+      setQuestionError(
         error instanceof LocalWorkerClientError || error instanceof Error
           ? error.message
-          : "Unable to run the task through the local worker.",
+          : "Unable to run the read-only task through the local worker.",
       );
     } finally {
-      setTaskPending(false);
+      setQuestionPending(false);
     }
   }
 
@@ -152,31 +121,31 @@ export function OpenPatchConsole() {
         ? "Checking"
         : "Unavailable";
 
-  const canUseRepositoryFlow = connectionState === "connected" && Boolean(repoResult);
+  const repositoryReady = connectionState === "connected" && Boolean(repoResult);
 
   return (
     <>
       <section className="hero">
         <div className="panel hero-panel">
-          <span className="hero-kicker">Hosted UI + local worker</span>
-          <h2>OpenPatch can now drive a local worker from the web UI.</h2>
+          <span className="hero-kicker">Read-only repository flow</span>
+          <h2>Use OpenPatch from the browser while repository access stays local.</h2>
           <p>
-            Use the hosted interface to confirm worker availability, open a repository
-            on your machine, and run a basic read-only task through the local worker.
+            Open a repository through the local worker, ask a read-only question, and
+            review the model response in one simple product flow.
           </p>
 
           <div className="hero-grid">
             <div className="mini-card">
-              <strong>Local by default</strong>
-              <span>Repository access and command execution stay on the developer machine.</span>
+              <strong>1. Connect</strong>
+              <span>Confirm the local worker is reachable on your machine.</span>
             </div>
             <div className="mini-card">
-              <strong>Simple onboarding</strong>
-              <span>Health status, repository open, and task execution are visible in one place.</span>
+              <strong>2. Open</strong>
+              <span>Prepare the repository locally with provider, path, and branch.</span>
             </div>
             <div className="mini-card">
-              <strong>Read-only first</strong>
-              <span>This first flow focuses on clarity and end-to-end usability before editing UX.</span>
+              <strong>3. Ask</strong>
+              <span>Send a read-only repository question and review the response here.</span>
             </div>
           </div>
         </div>
@@ -214,36 +183,12 @@ export function OpenPatchConsole() {
           <p className="section-label">Repository</p>
           <h3 id="repo-open-title">Open a repository through the local worker</h3>
           <p>
-            Enter a project path and branch. The local worker will clone the repository
-            if needed, then fetch and check out the requested branch on your machine.
+            Choose the git provider, repository path, and branch. OpenPatch will ask the
+            local worker to clone or refresh the repository on your machine.
           </p>
 
           <form className="task-form" onSubmit={handleRepoOpen}>
-            <label className="field-label" htmlFor="project-path">
-              Project path
-            </label>
-            <input
-              id="project-path"
-              className="text-input mono"
-              value={projectPath}
-              onChange={(event) => setProjectPath(event.target.value)}
-              placeholder="group/demo-repo"
-            />
-
-            <div className="inline-fields">
-              <div className="field-group">
-                <label className="field-label" htmlFor="branch">
-                  Branch
-                </label>
-                <input
-                  id="branch"
-                  className="text-input mono"
-                  value={branch}
-                  onChange={(event) => setBranch(event.target.value)}
-                  placeholder="main"
-                />
-              </div>
-
+            <div className="inline-fields inline-fields-three">
               <div className="field-group">
                 <label className="field-label" htmlFor="git-provider">
                   Git provider
@@ -256,8 +201,33 @@ export function OpenPatchConsole() {
                 >
                   <option value="gitlab">gitlab</option>
                   <option value="github">github</option>
-                  <option value="">use worker defaults</option>
                 </select>
+              </div>
+
+              <div className="field-group field-group-wide">
+                <label className="field-label" htmlFor="project-path">
+                  Project path
+                </label>
+                <input
+                  id="project-path"
+                  className="text-input mono"
+                  value={projectPath}
+                  onChange={(event) => setProjectPath(event.target.value)}
+                  placeholder="group/private-repo"
+                />
+              </div>
+
+              <div className="field-group">
+                <label className="field-label" htmlFor="branch">
+                  Branch
+                </label>
+                <input
+                  id="branch"
+                  className="text-input mono"
+                  value={branch}
+                  onChange={(event) => setBranch(event.target.value)}
+                  placeholder="main"
+                />
               </div>
             </div>
 
@@ -265,184 +235,109 @@ export function OpenPatchConsole() {
 
             <div className="task-actions">
               <span className="task-hint">
-                This request is sent to the local worker, not directly to your repository host.
+                Repository operations happen locally through the worker that is already running.
               </span>
               <button
                 className="primary-button"
                 type="submit"
                 disabled={repoPending || connectionState !== "connected"}
               >
-                {repoPending ? "Opening..." : "Open repository"}
-              </button>
-            </div>
-          </form>
-
-          {repoResult ? (
-            <div className="result-card">
-              <strong>Repository ready</strong>
-              <p>{repoResult.message}</p>
-              <p className="mono">{repoResult.local_repo_path}</p>
-              <p className="result-meta">
-                Branch: {repoResult.branch} | HEAD: {repoResult.head_sha}
-              </p>
-            </div>
-          ) : (
-            <div className="response-placeholder">
-              <strong>Awaiting repository open</strong>
-              <p>
-                Open a repository first so the worker has a local repo to inspect for
-                the read-only task flow.
-              </p>
-            </div>
-          )}
-        </section>
-
-        <section className="panel response-panel" aria-labelledby="task-run-title">
-          <p className="section-label">Repository Preview</p>
-          <h3>Read a file through the local worker</h3>
-          <p>
-            Preview a file from the local checkout before running a repository-level
-            task. This helps confirm the repository is open and readable on your
-            machine.
-          </p>
-
-          <form className="task-form" onSubmit={handlePreviewRead}>
-            <label className="field-label" htmlFor="preview-path">
-              File path
-            </label>
-            <input
-              id="preview-path"
-              className="text-input mono"
-              value={previewPath}
-              onChange={(event) => setPreviewPath(event.target.value)}
-              placeholder="README.md"
-            />
-
-            {previewError ? <p className="inline-error">{previewError}</p> : null}
-
-            <div className="task-actions">
-              <span className="task-hint">
-                This uses the local worker&apos;s `/fs/read` path and does not modify anything.
-              </span>
-              <button
-                className="secondary-button"
-                type="submit"
-                disabled={previewPending || !canUseRepositoryFlow}
-              >
-                {previewPending ? "Reading..." : "Preview file"}
+                {repoPending ? "Opening repository..." : "Open repository"}
               </button>
             </div>
           </form>
 
           <div className="response-shell">
-            {previewResult ? (
-              <div className="code-card">
-                <strong>
-                  {previewResult.relative_path}
-                  {previewResult.truncated ? " (truncated)" : ""}
-                </strong>
-                <pre className="code-block">{previewResult.content || "(file is empty)"}</pre>
+            {repoResult ? (
+              <div className="result-card">
+                <strong>Repository ready</strong>
+                <p>{repoResult.message}</p>
+                <p className="mono">{repoResult.local_repo_path}</p>
+                <p className="result-meta">
+                  Provider: {gitProvider} | Branch: {repoResult.branch}
+                </p>
+                <p className="result-meta">HEAD: {repoResult.head_sha}</p>
               </div>
             ) : (
               <div className="response-placeholder">
-                <strong>Awaiting repository preview</strong>
+                <strong>Awaiting repository open</strong>
                 <p>
-                  After a repository is open, you can preview a local file here through
-                  the worker.
+                  Open a repository first so the worker has a local checkout to inspect
+                  for your question.
                 </p>
               </div>
             )}
           </div>
         </section>
-      </section>
 
-      <section className="workspace">
-        <section className="panel composer-panel" aria-labelledby="task-run-title">
-          <p className="section-label">Read-Only Task</p>
-          <h3 id="task-run-title">Ask the worker to run a task</h3>
+        <section className="panel response-panel" aria-labelledby="question-title">
+          <p className="section-label">Question</p>
+          <h3 id="question-title">Ask a read-only question</h3>
           <p>
-            Submit a question or request. The worker gathers a small amount of local
-            repository context, calls the centralized model backend, and returns the
-            response here.
+            Submit a repository question. The worker gathers minimal local context and
+            calls the configured model backend for a read-only response.
           </p>
 
-          <form className="task-form" onSubmit={handleTaskSubmit}>
-            <label className="field-label" htmlFor="task-input">
-              Task
+          <form className="task-form" onSubmit={handleQuestionSubmit}>
+            <label className="field-label" htmlFor="question-input">
+              Question
             </label>
             <textarea
-              id="task-input"
+              id="question-input"
               className="task-textarea"
-              value={task}
-              onChange={(event) => setTask(event.target.value)}
-              placeholder="Ask for a summary, architecture walkthrough, or likely starting point for changes..."
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder="Ask for a summary, architecture walkthrough, or likely starting point for understanding the codebase..."
             />
 
-            {taskError ? <p className="inline-error">{taskError}</p> : null}
+            {questionError ? <p className="inline-error">{questionError}</p> : null}
 
             <div className="task-actions">
               <span className="task-hint">
-                This first hosted flow is read-only and does not modify files.
+                This first web flow is read-only and does not modify files or branches.
               </span>
               <button
                 className="primary-button"
                 type="submit"
-                disabled={taskPending || !canUseRepositoryFlow}
+                disabled={questionPending || !repositoryReady}
               >
-                {taskPending ? "Running..." : "Run task"}
+                {questionPending ? "Running question..." : "Ask OpenPatch"}
               </button>
             </div>
           </form>
 
           <div className="response-shell">
-            {taskResult ? (
+            {questionResult ? (
               <>
-                <div className="response-placeholder">
-                  <strong>Generated response</strong>
-                  <p>{taskResult.response}</p>
+                <div className="response-card">
+                  <strong>Model response</strong>
+                  <p>{questionResult.response}</p>
                 </div>
+
                 <div className="response-meta">
                   <div className="meta-card">
                     <strong>Model</strong>
-                    <span>{taskResult.model}</span>
-                  </div>
-                  <div className="meta-card">
-                    <strong>Context summary</strong>
-                    <span>{taskResult.context_summary}</span>
+                    <span>{questionResult.model}</span>
                   </div>
                   <div className="meta-card">
                     <strong>Branch</strong>
-                    <span>{taskResult.branch}</span>
+                    <span>{questionResult.branch}</span>
                   </div>
                   <div className="meta-card">
                     <strong>Repository root</strong>
-                    <span>{taskResult.repo_root_name}</span>
-                  </div>
-                </div>
-                <div className="response-meta response-meta-wide">
-                  <div className="meta-card">
-                    <strong>README included</strong>
-                    <span>{taskResult.readme_included ? "yes" : "no"}</span>
+                    <span>{questionResult.repo_root_name}</span>
                   </div>
                   <div className="meta-card">
-                    <strong>Diff included</strong>
-                    <span>{taskResult.diff_included ? "yes" : "no"}</span>
-                  </div>
-                  <div className="meta-card">
-                    <strong>Top-level entries</strong>
-                    <span>{taskResult.top_level_entries.length}</span>
-                  </div>
-                  <div className="meta-card">
-                    <strong>Task type</strong>
-                    <span>Read-only repository understanding</span>
+                    <strong>Context summary</strong>
+                    <span>{questionResult.context_summary}</span>
                   </div>
                 </div>
               </>
             ) : (
               <div className="response-placeholder">
-                <strong>Awaiting task result</strong>
+                <strong>Awaiting response</strong>
                 <p>
-                  After you open a repository and run a task, the local worker response
+                  Once the repository is ready, ask a question and the model response
                   will appear here.
                 </p>
               </div>

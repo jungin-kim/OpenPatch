@@ -327,10 +327,18 @@ select {
   gap: 12px;
 }
 
+.inline-fields-three {
+  grid-template-columns: 0.8fr 1.6fr 0.8fr;
+}
+
 .field-group {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.field-group-wide {
+  min-width: 0;
 }
 
 .task-actions {
@@ -451,7 +459,22 @@ select {
   background: rgba(249, 250, 245, 0.92);
 }
 
+.response-card {
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.response-card p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
 .response-placeholder strong,
+.response-card strong,
 .response-meta strong {
   display: block;
   margin-bottom: 8px;

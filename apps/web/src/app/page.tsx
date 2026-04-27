@@ -8,10 +8,10 @@ export default function HomePage() {
           <div className="brand-mark" aria-hidden="true" />
           <div className="brand-copy">
             <h1>OpenPatch</h1>
-            <p>Hosted interface for local-repo agent workflows.</p>
+            <p>Hosted interface for local repository understanding.</p>
           </div>
         </div>
-        <div className="topbar-note">Hosted UI to local worker connection</div>
+        <div className="topbar-note">Read-only web flow</div>
       </header>
 
       <OpenPatchConsole />
