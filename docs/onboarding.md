@@ -35,8 +35,10 @@ The onboarding flow will:
 5. prompt for git provider selection and provider base URL
 6. prompt for a local repo base directory
 7. detect whether a local worker installation is already present
-8. prepare local directories for a future daemon installation flow
+8. prepare local runtime directories under `~/.openpatch`
 9. optionally start the local worker immediately
+
+If you choose to start the worker during onboarding, OpenPatch launches it as a background process, waits for health for a short bounded timeout, prints success or failure, and exits cleanly.
 
 Current model provider choices:
 
@@ -83,6 +85,7 @@ This validates:
 - local worker is reachable
 - configured worker URL matches the running instance
 - model provider config is present
+- model connectivity responds within a short timeout
 - git provider config is present
 
 ## Show The Current Config
@@ -101,6 +104,12 @@ openpatch status
 
 This prints the current configuration summary and worker reachability.
 It also shows the configured model provider clearly.
+
+To inspect the worker runtime directly:
+
+```bash
+openpatch worker status
+```
 
 ## Manage The Local Worker
 
@@ -128,6 +137,8 @@ Show the worker logs:
 openpatch worker logs
 ```
 
+The log command prints a tail-style view of the current worker log file so startup failures are easy to inspect.
+
 ## Standard Flow
 
 ```bash
@@ -143,8 +154,9 @@ The current runtime model is intentionally simple:
 
 - the CLI launches the FastAPI worker from `apps/local-worker`
 - the worker runs as a managed background process
-- runtime state is stored under `~/.openpatch`
+- runtime state and pid files are stored under `~/.openpatch/run`
 - logs are written to `~/.openpatch/logs`
+- worker and model connectivity checks use short bounded timeouts so CLI commands fail fast instead of hanging
 
 This is a real local process flow, but it is not yet an OS daemon installer.
 

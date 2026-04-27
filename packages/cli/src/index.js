@@ -8,13 +8,18 @@ const { stdin, stdout } = require("node:process");
 
 const CONFIG_DIR = path.join(os.homedir(), ".openpatch");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
-const DAEMON_DIR = path.join(CONFIG_DIR, "daemon");
 const RUN_DIR = path.join(CONFIG_DIR, "run");
 const LOG_DIR = path.join(CONFIG_DIR, "logs");
-const STATE_PATH = path.join(DAEMON_DIR, "state.json");
+const STATE_PATH = path.join(RUN_DIR, "worker-state.json");
+const LEGACY_STATE_PATH = path.join(CONFIG_DIR, "daemon", "state.json");
+const PID_PATH = path.join(RUN_DIR, "worker.pid");
 const WORKER_LOG_PATH = path.join(LOG_DIR, "worker.log");
 const DEFAULT_WORKER_URL = "http://127.0.0.1:8000";
 const DEFAULT_REPO_BASE_DIR = path.join(os.homedir(), ".openpatch", "repos");
+const DEFAULT_WORKER_HEALTH_TIMEOUT_MS = 1500;
+const DEFAULT_WORKER_START_TIMEOUT_MS = 8000;
+const DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS = 2000;
+const DEFAULT_LOG_TAIL_LINES = 40;
 const MODEL_PROVIDER_OPTIONS = [
   "openai",
   "anthropic",
@@ -107,11 +112,14 @@ async function runWorkerCommand(subcommand) {
     case "restart":
       await restartWorker();
       return;
+    case "status":
+      await showWorkerStatus();
+      return;
     case "logs":
       await showWorkerLogs();
       return;
     default:
-      throw new Error("Unknown worker command. Use start, stop, restart, or logs.");
+      throw new Error("Unknown worker command. Use start, stop, restart, status, or logs.");
   }
 }
 
@@ -152,6 +160,7 @@ async function runOnboard() {
         runDirectory: RUN_DIR,
         logDirectory: LOG_DIR,
         stateFile: STATE_PATH,
+        pidFile: PID_PATH,
         launchStrategy: workerDetection.installed ? "repo-source-background-process" : "pending-install",
       },
     };
@@ -163,6 +172,8 @@ async function runOnboard() {
       installMode: workerDetection.installMode,
       workerDetected: workerDetection.installed,
       status: "stopped",
+      pidFile: PID_PATH,
+      logPath: WORKER_LOG_PATH,
     });
 
     console.log("");
@@ -216,7 +227,14 @@ async function runDoctor() {
   const workerDetection = await resolveWorkerInstallation(config, process.cwd());
   const runtimeState = await readState();
   const workerRunning = await isWorkerProcessRunning(runtimeState);
-  const workerHealth = await checkWorkerHealth(config.worker?.baseUrl || DEFAULT_WORKER_URL);
+  const workerHealth = await checkWorkerHealth(
+    config.worker?.baseUrl || DEFAULT_WORKER_URL,
+    DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+  );
+  const modelConnectivity = await checkModelConnectivity(
+    config.model,
+    DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
+  );
   const urlMatches =
     Boolean(runtimeState?.workerUrl) &&
     runtimeState.workerUrl === (config.worker?.baseUrl || DEFAULT_WORKER_URL);
@@ -240,6 +258,13 @@ async function runDoctor() {
       "Local worker reachable",
       workerHealth.reachable,
       workerHealth.message,
+    ),
+  );
+  checks.push(
+    makeCheck(
+      "Model backend connectivity",
+      modelConnectivity.reachable,
+      modelConnectivity.message,
     ),
   );
   checks.push(
@@ -291,7 +316,14 @@ async function runStatus() {
   const config = await readConfig();
   const runtimeState = await readState();
   const workerRunning = await isWorkerProcessRunning(runtimeState);
-  const workerHealth = await checkWorkerHealth(config.worker?.baseUrl || DEFAULT_WORKER_URL);
+  const workerHealth = await checkWorkerHealth(
+    config.worker?.baseUrl || DEFAULT_WORKER_URL,
+    DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+  );
+  const modelConnectivity = await checkModelConnectivity(
+    config.model,
+    DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
+  );
 
   console.log("OpenPatch status");
   console.log("");
@@ -303,9 +335,12 @@ async function runStatus() {
   console.log(`Worker process detail: ${workerRunning.message}`);
   console.log(`Worker reachable: ${workerHealth.reachable ? "yes" : "no"}`);
   console.log(`Worker health detail: ${workerHealth.message}`);
+  console.log(`Worker pid file: ${runtimeState?.pidFile || PID_PATH}`);
   console.log(`Worker log file: ${runtimeState?.logPath || WORKER_LOG_PATH}`);
   console.log(`Model provider: ${config.model?.provider || "not configured"}`);
   console.log(`Model summary: ${formatModelSummary(config.model)}`);
+  console.log(`Model connectivity: ${modelConnectivity.reachable ? "reachable" : "not reachable"}`);
+  console.log(`Model connectivity detail: ${modelConnectivity.message}`);
   console.log(`Selected git provider: ${formatProviderSummary(config.gitProvider)}`);
   console.log(`Local repo base dir: ${config.localRepoBaseDir || "not configured"}`);
   console.log(`Daemon prepared: ${config.daemon?.prepared ? "yes" : "no"}`);
@@ -317,6 +352,8 @@ async function startWorker({ interactive }) {
   const workerInstallation = await resolveWorkerInstallation(config, process.cwd());
   const runtimeState = await readState();
   const running = await isWorkerProcessRunning(runtimeState);
+  const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
+  const workerBinding = parseWorkerBinding(workerUrl);
 
   if (running.running) {
     if (interactive) {
@@ -334,6 +371,16 @@ async function startWorker({ interactive }) {
   const workerRuntime = await resolveWorkerRuntime(workerInstallation.detectedPath);
   await ensureLogFileExists(WORKER_LOG_PATH);
   const logStream = fs.openSync(WORKER_LOG_PATH, "a");
+  const commandArgs = [
+    "-m",
+    "uvicorn",
+    "openpatch_worker.main:app",
+    "--host",
+    workerBinding.host,
+    "--port",
+    String(workerBinding.port),
+  ];
+  const launchedCommand = `${workerRuntime.pythonPath} ${commandArgs.join(" ")}`;
 
   const env = {
     ...process.env,
@@ -349,56 +396,95 @@ async function startWorker({ interactive }) {
     }
   }
 
-  const child = spawn(
-    workerRuntime.pythonPath,
-    [
-      "-m",
-      "uvicorn",
-      "openpatch_worker.main:app",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      "8000",
-    ],
-    {
+  console.log("Launching OpenPatch local worker");
+  console.log(`Command: ${launchedCommand}`);
+  console.log(`Working directory: ${workerInstallation.detectedPath}`);
+  console.log(`Expected health URL: ${workerUrl}/health`);
+  console.log(`Log file: ${WORKER_LOG_PATH}`);
+  console.log(`PID file: ${PID_PATH}`);
+
+  let child;
+  try {
+    child = spawn(workerRuntime.pythonPath, commandArgs, {
       cwd: workerInstallation.detectedPath,
       detached: true,
       stdio: ["ignore", logStream, logStream],
       env,
-    },
-  );
+    });
+  } finally {
+    fs.closeSync(logStream);
+  }
+
+  if (!child.pid) {
+    throw new Error("Worker failed to start. No process id was returned by the launcher.");
+  }
+
+  let earlyExit = null;
+  let startupErrorMessage = null;
+  child.once("exit", (code, signal) => {
+    earlyExit = { code, signal };
+  });
+  child.once("error", (error) => {
+    startupErrorMessage = error instanceof Error ? error.message : String(error);
+  });
 
   child.unref();
 
-  await writeJson(STATE_PATH, {
+  await writeRuntimeState({
+    ...(runtimeState || {}),
     preparedAt: runtimeState?.preparedAt || new Date().toISOString(),
     startedAt: new Date().toISOString(),
-    status: "running",
+    status: "starting",
     pid: child.pid,
-    workerUrl: config.worker?.baseUrl || DEFAULT_WORKER_URL,
+    workerUrl,
+    pidFile: PID_PATH,
     logPath: WORKER_LOG_PATH,
     installMode: workerInstallation.installMode,
     workerPath: workerInstallation.detectedPath,
     pythonPath: workerRuntime.pythonPath,
+    command: launchedCommand,
   });
 
-  const startupHealth = await waitForWorkerHealth(config.worker?.baseUrl || DEFAULT_WORKER_URL, 12_000);
+  const startupHealth = await waitForWorkerStartup({
+    baseUrl: workerUrl,
+    pid: child.pid,
+    timeoutMs: DEFAULT_WORKER_START_TIMEOUT_MS,
+    getEarlyExit: () => earlyExit,
+    getStartupError: () => startupErrorMessage,
+  });
   if (!startupHealth.reachable) {
     await safeStopWorkerProcess(child.pid);
-    await writeJson(STATE_PATH, {
+    const logTail = await readLogTail(WORKER_LOG_PATH, DEFAULT_LOG_TAIL_LINES);
+    await writeRuntimeState({
       ...(await readState()),
       status: "failed",
       failedAt: new Date().toISOString(),
       lastError: startupHealth.message,
+      lastLogTail: logTail,
+      exitCode: startupHealth.exitCode ?? null,
+      exitSignal: startupHealth.exitSignal ?? null,
     });
+    console.log(`Startup failure detail: ${startupHealth.message}`);
+    console.log(`Process exited: ${startupHealth.exited ? "yes" : "no"}`);
+    console.log(`Exit code: ${startupHealth.exitCode ?? "unknown"}`);
+    if (logTail) {
+      console.log("Recent worker log output:");
+      console.log(logTail);
+    }
     throw new Error(
-      `Worker startup failed. ${startupHealth.message} Check logs with \`openpatch worker logs\`.`,
+      `Worker failed to start. ${startupHealth.message} Check logs with \`openpatch worker logs\`.`,
     );
   }
 
+  await writeRuntimeState({
+    ...(await readState()),
+    status: "running",
+    healthyAt: new Date().toISOString(),
+  });
+
   if (interactive) {
     console.log("OpenPatch local worker started.");
-    console.log(`Worker URL: ${config.worker?.baseUrl || DEFAULT_WORKER_URL}`);
+    console.log(`Worker URL: ${workerUrl}`);
     console.log(`Logs: ${WORKER_LOG_PATH}`);
   }
 }
@@ -416,15 +502,17 @@ async function stopWorker({ interactive }) {
       status: "stopped",
       stoppedAt: new Date().toISOString(),
     });
+    await removePidFile();
     return;
   }
 
   await safeStopWorkerProcess(runtimeState.pid);
-  await writeJson(STATE_PATH, {
+  await writeRuntimeState({
     ...runtimeState,
     status: "stopped",
     stoppedAt: new Date().toISOString(),
   });
+  await removePidFile();
 
   if (interactive) {
     console.log("OpenPatch local worker stopped.");
@@ -433,7 +521,7 @@ async function stopWorker({ interactive }) {
 
 async function restartWorker() {
   await stopWorker({ interactive: false });
-  await startWorker({ interactive: false });
+  await startWorker({ interactive: true });
   console.log("OpenPatch local worker restarted.");
 }
 
@@ -445,15 +533,41 @@ async function showWorkerLogs() {
     throw new Error(`Worker log file not found at ${logPath}`);
   }
 
-  const logContent = await fsp.readFile(logPath, "utf-8");
+  const logContent = await readLogTail(logPath, 200);
   console.log(`OpenPatch worker logs: ${logPath}`);
   console.log("");
   process.stdout.write(logContent || "(log file is empty)\n");
 }
 
+async function showWorkerStatus() {
+  const configExists = await fileExists(CONFIG_PATH);
+  if (!configExists) {
+    console.log("OpenPatch is not configured yet.");
+    console.log("Run `openpatch onboard` to create the local configuration.");
+    process.exitCode = 1;
+    return;
+  }
+
+  const config = await readConfig();
+  const runtimeState = await readState();
+  const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
+  const workerRunning = await isWorkerProcessRunning(runtimeState);
+  const workerHealth = await checkWorkerHealth(workerUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS);
+
+  console.log("OpenPatch worker status");
+  console.log("");
+  console.log(`Configured worker URL: ${workerUrl}`);
+  console.log(`PID: ${runtimeState?.pid ?? "not recorded"}`);
+  console.log(`PID file: ${runtimeState?.pidFile || PID_PATH}`);
+  console.log(`Process appears alive: ${workerRunning.running ? "yes" : "no"}`);
+  console.log(`Process detail: ${workerRunning.message}`);
+  console.log(`Health responds: ${workerHealth.reachable ? "yes" : "no"}`);
+  console.log(`Health detail: ${workerHealth.message}`);
+  console.log(`Log file: ${runtimeState?.logPath || WORKER_LOG_PATH}`);
+}
+
 async function ensureBaseDirectories() {
   await fsp.mkdir(CONFIG_DIR, { recursive: true });
-  await fsp.mkdir(DAEMON_DIR, { recursive: true });
   await fsp.mkdir(RUN_DIR, { recursive: true });
   await fsp.mkdir(LOG_DIR, { recursive: true });
 }
@@ -540,9 +654,12 @@ async function commandExists(command) {
   return false;
 }
 
-async function checkWorkerHealth(baseUrl) {
+async function checkWorkerHealth(baseUrl, timeoutMs) {
   try {
-    const response = await fetch(`${baseUrl}/health`);
+    const response = await fetchWithTimeout(`${baseUrl}/health`, {
+      method: "GET",
+      timeoutMs,
+    });
     if (!response.ok) {
       return {
         reachable: false,
@@ -556,7 +673,7 @@ async function checkWorkerHealth(baseUrl) {
       message: `Worker is reachable and reported status '${payload.status}'.`,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatTimeoutAwareError(error, `Worker health check timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
     return {
       reachable: false,
       message: `Worker is not reachable at ${baseUrl}: ${message}`,
@@ -564,10 +681,39 @@ async function checkWorkerHealth(baseUrl) {
   }
 }
 
-async function waitForWorkerHealth(baseUrl, timeoutMs) {
+async function waitForWorkerStartup({ baseUrl, pid, timeoutMs, getEarlyExit, getStartupError }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const health = await checkWorkerHealth(baseUrl);
+    const earlyExit = getEarlyExit();
+    if (earlyExit) {
+      return {
+        reachable: false,
+        exited: true,
+        exitCode: earlyExit.code,
+        exitSignal: earlyExit.signal,
+        message: `Worker process exited immediately${earlyExit.code !== null ? ` with code ${earlyExit.code}` : ""}${earlyExit.signal ? ` and signal ${earlyExit.signal}` : ""}.`,
+      };
+    }
+
+    const startupError = getStartupError();
+    if (startupError) {
+      return {
+        reachable: false,
+        exited: false,
+        message: `Worker failed to start: ${startupError}`,
+      };
+    }
+
+    const running = await isWorkerProcessRunning({ pid });
+    if (!running.running) {
+      return {
+        reachable: false,
+        exited: true,
+        message: "Worker process exited immediately after launch.",
+      };
+    }
+
+    const health = await checkWorkerHealth(baseUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS);
     if (health.reachable) {
       return health;
     }
@@ -575,7 +721,8 @@ async function waitForWorkerHealth(baseUrl, timeoutMs) {
   }
   return {
     reachable: false,
-    message: `Worker did not become healthy at ${baseUrl} within ${Math.round(timeoutMs / 1000)} seconds.`,
+    exited: false,
+    message: `Worker health check timed out after ${Math.round(timeoutMs / 1000)} seconds at ${baseUrl}.`,
   };
 }
 
@@ -722,11 +869,22 @@ async function readConfig() {
 }
 
 async function readState() {
-  if (!(await fileExists(STATE_PATH))) {
-    return null;
+  if (await fileExists(STATE_PATH)) {
+    const raw = await fsp.readFile(STATE_PATH, "utf-8");
+    return JSON.parse(raw);
   }
-  const raw = await fsp.readFile(STATE_PATH, "utf-8");
-  return JSON.parse(raw);
+  if (await fileExists(LEGACY_STATE_PATH)) {
+    const raw = await fsp.readFile(LEGACY_STATE_PATH, "utf-8");
+    return JSON.parse(raw);
+  }
+  return null;
+}
+
+async function writeRuntimeState(state) {
+  await writeJson(STATE_PATH, state);
+  if (state?.pid) {
+    await fsp.writeFile(PID_PATH, `${state.pid}\n`, "utf-8");
+  }
 }
 
 async function writeJson(filePath, value) {
@@ -801,6 +959,116 @@ async function safeStopWorkerProcess(pid) {
       return;
     }
   }
+}
+
+async function removePidFile() {
+  try {
+    await fsp.unlink(PID_PATH);
+  } catch {
+    return;
+  }
+}
+
+async function readLogTail(filePath, lineCount) {
+  if (!(await fileExists(filePath))) {
+    return "";
+  }
+  const content = await fsp.readFile(filePath, "utf-8");
+  return content.split(/\r?\n/).filter(Boolean).slice(-lineCount).join("\n");
+}
+
+async function checkModelConnectivity(modelConfig, timeoutMs) {
+  if (!modelConfig?.provider || !modelConfig?.baseUrl) {
+    return {
+      reachable: false,
+      message: "Model provider is not configured.",
+    };
+  }
+
+  try {
+    const response = await fetchWithTimeout(modelConfig.baseUrl, {
+      method: "GET",
+      headers: buildModelConnectivityHeaders(modelConfig),
+      timeoutMs,
+    });
+    return {
+      reachable: true,
+      message: `Model endpoint responded with status ${response.status}.`,
+    };
+  } catch (error) {
+    const message = formatTimeoutAwareError(
+      error,
+      `Model connectivity timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+    );
+    return {
+      reachable: false,
+      message,
+    };
+  }
+}
+
+function buildModelConnectivityHeaders(modelConfig) {
+  const headers = {
+    "User-Agent": "OpenPatch CLI",
+  };
+
+  if (modelConfig?.apiKey) {
+    headers.Authorization = `Bearer ${modelConfig.apiKey}`;
+  }
+
+  if (modelConfig?.provider === "anthropic" && modelConfig?.apiKey) {
+    headers["x-api-key"] = modelConfig.apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+  }
+
+  return headers;
+}
+
+async function fetchWithTimeout(url, { method, headers, timeoutMs }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      method,
+      headers,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function formatTimeoutAwareError(error, timeoutMessage) {
+  if (error && typeof error === "object" && error.name === "AbortError") {
+    return timeoutMessage;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function parseWorkerBinding(workerUrl) {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(workerUrl);
+  } catch {
+    throw new Error(`Configured worker URL is invalid: ${workerUrl}`);
+  }
+
+  if (parsedUrl.protocol !== "http:") {
+    throw new Error(`Configured worker URL must use http for local development: ${workerUrl}`);
+  }
+
+  const port = parsedUrl.port ? Number(parsedUrl.port) : 80;
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error(`Configured worker URL has an invalid port: ${workerUrl}`);
+  }
+
+  return {
+    host: parsedUrl.hostname,
+    port,
+  };
 }
 
 function makeCheck(name, ok, detail) {
@@ -913,6 +1181,7 @@ function printHelp() {
   console.log("  openpatch worker start");
   console.log("  openpatch worker stop");
   console.log("  openpatch worker restart");
+  console.log("  openpatch worker status");
   console.log("  openpatch worker logs");
 }
 

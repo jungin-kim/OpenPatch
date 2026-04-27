@@ -11,6 +11,7 @@ It currently provides:
 - `openpatch worker start`
 - `openpatch worker stop`
 - `openpatch worker restart`
+- `openpatch worker status`
 - `openpatch worker logs`
 
 ## Install
@@ -33,11 +34,11 @@ Prints the current local OpenPatch configuration with secrets redacted.
 
 ### `openpatch doctor`
 
-Checks whether the local configuration, worker detection, worker process, worker reachability, worker URL, model provider config, and git provider config look healthy.
+Checks whether the local configuration, worker detection, worker process, worker reachability, worker URL, model provider config, model connectivity, and git provider config look healthy. All checks use short bounded timeouts and fail fast.
 
 ### `openpatch status`
 
-Prints the current OpenPatch configuration summary and worker status, including worker URL, reachability, selected git provider, repo base directory, model provider, and model summary.
+Prints the current OpenPatch configuration summary and worker status, including worker URL, reachability, selected git provider, repo base directory, model provider, model summary, and model connectivity detail.
 
 ### `openpatch worker start`
 
@@ -51,9 +52,13 @@ Stops the managed local worker process.
 
 Restarts the managed local worker process.
 
+### `openpatch worker status`
+
+Prints the configured worker URL, pid when known, whether the process appears alive, and whether the worker health endpoint responds.
+
 ### `openpatch worker logs`
 
-Prints the current local worker log file.
+Prints the current local worker log file, using a tail-style view that is easier to scan during startup failures.
 
 ## Local Runtime Strategy
 
@@ -62,10 +67,10 @@ The current CLI uses a development-friendly runtime strategy:
 - launch the worker from `apps/local-worker`
 - use the worker virtual environment in `apps/local-worker/.venv`
 - store config under `~/.openpatch/config.json`
-- store runtime state under `~/.openpatch/daemon`
+- store runtime state and pid files under `~/.openpatch/run`
 - store logs under `~/.openpatch/logs`
 
-This is intentionally simple and inspectable. It is not yet an OS-level daemon installer.
+This is intentionally simple and inspectable. It is not yet an OS-level daemon installer. The worker runs as a background process, not an attached foreground process, and startup waits are short and bounded.
 
 ## Model Provider Choices
 
