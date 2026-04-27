@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 from openpatch_worker.services.common import ensure_git_repository, resolve_project_path
@@ -8,7 +9,20 @@ MAX_DIFF_CHARS = 6_000
 MAX_FILE_LIST = 20
 
 
-def build_minimal_repo_context(repo_path_value: str) -> tuple[str, str]:
+@dataclass(frozen=True)
+class MinimalRepoContext:
+    repo_path_value: str
+    repo_root_name: str
+    branch: str
+    top_level_entries: list[str]
+    git_status_excerpt: str
+    readme_excerpt: str
+    diff_excerpt: str
+    summary: str
+    prompt_context: str
+
+
+def build_minimal_repo_context(repo_path_value: str) -> MinimalRepoContext:
     repo_path = resolve_project_path(repo_path_value)
     ensure_git_repository(repo_path)
 
@@ -51,7 +65,17 @@ def build_minimal_repo_context(repo_path_value: str) -> tuple[str, str]:
 
     # TODO: Replace these fixed heuristics with targeted file selection based on the task.
     # TODO: Add optional explicit file hints so the worker can gather tighter context on demand.
-    return summary, "\n\n".join(context_parts)
+    return MinimalRepoContext(
+        repo_path_value=repo_path_value,
+        repo_root_name=repo_path.name,
+        branch=branch,
+        top_level_entries=top_level_files,
+        git_status_excerpt=status,
+        readme_excerpt=readme_excerpt,
+        diff_excerpt=diff_excerpt,
+        summary=summary,
+        prompt_context="\n\n".join(context_parts),
+    )
 
 
 def _safe_git_output(repo_path: Path, command: list[str]) -> str:

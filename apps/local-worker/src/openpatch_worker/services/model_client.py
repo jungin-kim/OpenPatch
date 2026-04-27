@@ -22,29 +22,10 @@ class OpenAICompatibleModelClient:
         return self._settings.openai_model
 
     def generate_text(self, prompt: ModelGenerationRequest) -> str:
-        base_url = self._settings.openai_base_url
-        api_key = self._settings.openai_api_key
-
-        if not base_url:
-            raise ValueError("OPENAI_BASE_URL is not configured.")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY is not configured.")
-
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": prompt.system_prompt},
-                {"role": "user", "content": prompt.user_prompt},
-            ],
-        }
-
         http_request = request.Request(
-            url=f"{base_url}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            url=self._chat_completions_url,
+            data=json.dumps(self._build_payload(prompt)).encode("utf-8"),
+            headers=self._build_headers(),
             method="POST",
         )
 
@@ -62,7 +43,35 @@ class OpenAICompatibleModelClient:
         except error.URLError as exc:
             raise RuntimeError(f"Model API connection failed: {exc.reason}") from exc
 
-        return _extract_response_text(response_payload)
+        response_text = _extract_response_text(response_payload).strip()
+        if not response_text:
+            raise RuntimeError("Model API response was empty.")
+        return response_text
+
+    @property
+    def _chat_completions_url(self) -> str:
+        base_url = self._settings.openai_base_url
+        if not base_url:
+            raise ValueError("OPENAI_BASE_URL is not configured.")
+        return f"{base_url}/chat/completions"
+
+    def _build_headers(self) -> dict[str, str]:
+        api_key = self._settings.openai_api_key
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY is not configured.")
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def _build_payload(self, prompt: ModelGenerationRequest) -> dict:
+        return {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": prompt.system_prompt},
+                {"role": "user", "content": prompt.user_prompt},
+            ],
+        }
 
 
 def _extract_response_text(response_payload: dict) -> str:

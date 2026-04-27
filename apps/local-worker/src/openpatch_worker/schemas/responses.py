@@ -79,8 +79,14 @@ class GitMergeRequestCreateResponse(BaseModel):
 
 class AgentRunResponse(BaseModel):
     repo_path: str
+    task: str
     model: str
+    branch: str
+    repo_root_name: str
     context_summary: str
+    top_level_entries: list[str]
+    readme_included: bool
+    diff_included: bool
     response: str
 
 

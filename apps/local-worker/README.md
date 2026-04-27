@@ -121,6 +121,54 @@ curl -X POST http://127.0.0.1:8000/agent/run \
   }'
 ```
 
+This first read-only task flow gathers a small local context set before calling the model backend:
+
+- current branch
+- top-level repository entries
+- `git status --short`
+- a README excerpt when present
+- a truncated working diff when present
+
+The response is structured for the web UI and includes:
+
+- `repo_path`
+- `task`
+- `model`
+- `branch`
+- `repo_root_name`
+- `context_summary`
+- `top_level_entries`
+- `readme_included`
+- `diff_included`
+- `response`
+
+### Minimal Test Flow
+
+1. Open or clone a repository locally through `/repo/open`.
+2. Confirm the worker is healthy:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+3. Run a read-only repository understanding task:
+
+```bash
+curl -X POST http://127.0.0.1:8000/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo_path": "examples/demo-repo",
+    "task": "Summarize the repository and recommend the best starting point for understanding the codebase."
+  }'
+```
+
+At a high level, success means:
+
+- the worker returns a structured JSON payload
+- `context_summary` describes the local repository snapshot the worker used
+- `response` contains the model-generated read-only answer
+- no files are modified and no git state changes are applied
+
 Ask the model for a full replacement file proposal:
 
 ```bash
@@ -214,6 +262,7 @@ curl -X POST http://127.0.0.1:8000/git/merge-request \
 - GitLab clone and fetch support uses `GITLAB_BASE_URL` and `GITLAB_TOKEN` from the server environment.
 - Centralized model calls use `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL`.
 - `/agent/run` gathers a small, explicit repo summary locally before sending it upstream.
+- `/agent/run` is intentionally read-only in this first version and is designed for repository understanding tasks.
 - `/agent/propose-file` returns a visible full-file proposal; the worker does not write it until `/fs/write` is called explicitly.
 - `/cmd/run` remains explicit and returns the command, timeout, exit code, stdout, stderr, and timeout state.
 - Branch creation, commit, push, and merge request creation are all explicit user-triggered operations.

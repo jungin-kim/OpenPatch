@@ -20,7 +20,7 @@ def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileRespo
     ensure_git_repository(repo_path)
     target_path = ensure_safe_write_path(repo_path, request.relative_path)
     original_content = _read_existing_text(target_path)
-    context_summary, repo_context = build_minimal_repo_context(request.repo_path)
+    repo_context = build_minimal_repo_context(request.repo_path)
     client = OpenAICompatibleModelClient()
 
     system_prompt = (
@@ -31,7 +31,7 @@ def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileRespo
     user_prompt = (
         f"Task:\n{request.instruction}\n\n"
         f"Target file: {request.relative_path}\n\n"
-        f"Repository context:\n{repo_context}\n\n"
+        f"Repository context:\n{repo_context.prompt_context}\n\n"
         f"Current file content:\n{original_content}"
     )
 
@@ -46,7 +46,7 @@ def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileRespo
         repo_path=request.repo_path,
         relative_path=request.relative_path,
         model=client.model_name,
-        context_summary=context_summary,
+        context_summary=repo_context.summary,
         original_content=original_content,
         proposed_content=_normalize_model_file_content(proposed_content),
     )
