@@ -20,3 +20,7 @@ apps/local-worker/.env
 
 # macOS
 .DS_Store
+
+# Node
+node_modules/
+apps/web/node_modules/
