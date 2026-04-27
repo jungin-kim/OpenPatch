@@ -369,11 +369,14 @@ async function startWorker({ interactive }) {
   }
 
   const workerRuntime = await resolveWorkerRuntime(workerInstallation.detectedPath);
+  const workerLaunch = await resolveWorkerLaunchConfig(workerInstallation.detectedPath);
   await ensureLogFileExists(WORKER_LOG_PATH);
   const logStream = fs.openSync(WORKER_LOG_PATH, "a");
   const commandArgs = [
     "-m",
     "uvicorn",
+    "--app-dir",
+    workerLaunch.appDir,
     "openpatch_worker.main:app",
     "--host",
     workerBinding.host,
@@ -399,6 +402,7 @@ async function startWorker({ interactive }) {
   console.log("Launching OpenPatch local worker");
   console.log(`Command: ${launchedCommand}`);
   console.log(`Working directory: ${workerInstallation.detectedPath}`);
+  console.log(`App directory: ${workerLaunch.appDir}`);
   console.log(`Expected health URL: ${workerUrl}/health`);
   console.log(`Log file: ${WORKER_LOG_PATH}`);
   console.log(`PID file: ${PID_PATH}`);
@@ -441,6 +445,7 @@ async function startWorker({ interactive }) {
     logPath: WORKER_LOG_PATH,
     installMode: workerInstallation.installMode,
     workerPath: workerInstallation.detectedPath,
+    appDir: workerLaunch.appDir,
     pythonPath: workerRuntime.pythonPath,
     command: launchedCommand,
   });
@@ -641,6 +646,19 @@ async function resolveWorkerRuntime(workerPath) {
   }
 
   return { pythonPath };
+}
+
+async function resolveWorkerLaunchConfig(workerPath) {
+  const appDir = "src";
+  const moduleEntry = path.join(workerPath, appDir, "openpatch_worker", "main.py");
+
+  if (!(await fileExists(moduleEntry))) {
+    throw new Error(
+      `Worker app entrypoint not found at ${moduleEntry}. OpenPatch expected a src-layout worker package.`,
+    );
+  }
+
+  return { appDir };
 }
 
 async function commandExists(command) {
@@ -985,26 +1003,93 @@ async function checkModelConnectivity(modelConfig, timeoutMs) {
     };
   }
 
+  const probe = buildModelConnectivityProbe(modelConfig);
   try {
-    const response = await fetchWithTimeout(modelConfig.baseUrl, {
-      method: "GET",
+    const response = await fetchWithTimeout(probe.url, {
+      method: probe.method,
       headers: buildModelConnectivityHeaders(modelConfig),
       timeoutMs,
     });
+    if (!response.ok) {
+      return {
+        reachable: false,
+        message: formatModelConnectivityFailure(modelConfig, probe, response.status),
+      };
+    }
+
     return {
       reachable: true,
-      message: `Model endpoint responded with status ${response.status}.`,
+      message: `Model endpoint responded successfully at ${probe.url} with status ${response.status}.`,
     };
   } catch (error) {
+    const remediation = getModelConnectivityRemediation(modelConfig, probe);
     const message = formatTimeoutAwareError(
       error,
       `Model connectivity timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
     );
     return {
       reachable: false,
-      message,
+      message: `${message} ${remediation}`.trim(),
     };
   }
+}
+
+function buildModelConnectivityProbe(modelConfig) {
+  const baseUrl = modelConfig.baseUrl.replace(/\/+$/, "");
+
+  if (
+    modelConfig.provider === "openai" ||
+    modelConfig.provider === "gemini" ||
+    modelConfig.provider === "ollama" ||
+    modelConfig.provider === "openai-compatible"
+  ) {
+    return {
+      method: "GET",
+      url: `${baseUrl}/models`,
+    };
+  }
+
+  if (modelConfig.provider === "anthropic") {
+    return {
+      method: "GET",
+      url: `${baseUrl}/v1/models`,
+    };
+  }
+
+  return {
+    method: "GET",
+    url: baseUrl,
+  };
+}
+
+function formatModelConnectivityFailure(modelConfig, probe, status) {
+  const remediation = getModelConnectivityRemediation(modelConfig, probe);
+  if (status === 404) {
+    return `Model connectivity failed. ${probe.url} returned HTTP 404. ${remediation}`;
+  }
+  if (status === 401 || status === 403) {
+    return `Model connectivity failed with HTTP ${status}. Check your API key and provider permissions. ${remediation}`;
+  }
+  return `Model connectivity failed with HTTP ${status} at ${probe.url}. ${remediation}`;
+}
+
+function getModelConnectivityRemediation(modelConfig, probe) {
+  if (modelConfig.provider === "ollama") {
+    return `Expected an Ollama-compatible models endpoint. Confirm Ollama is running and that ${probe.url} is reachable.`;
+  }
+  if (modelConfig.provider === "openai-compatible") {
+    return `Expected an OpenAI-compatible models endpoint. Confirm the base URL is correct and that ${probe.url} returns a models list.`;
+  }
+  if (modelConfig.provider === "openai") {
+    return "Confirm the base URL points at the OpenAI API root and that the API key is valid.";
+  }
+  if (modelConfig.provider === "anthropic") {
+    return "Confirm the base URL points at the Anthropic API root and that the API key is valid.";
+  }
+  if (modelConfig.provider === "gemini") {
+    return "Confirm the base URL points at the Gemini-compatible API root and that the API key is valid.";
+  }
+  return "Confirm the model provider base URL and credentials are correct.";
 }
 
 function buildModelConnectivityHeaders(modelConfig) {

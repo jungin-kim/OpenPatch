@@ -39,6 +39,7 @@ The onboarding flow will:
 9. optionally start the local worker immediately
 
 If you choose to start the worker during onboarding, OpenPatch launches it as a background process, waits for health for a short bounded timeout, prints success or failure, and exits cleanly.
+For the repo-source local worker, the CLI handles the Python src-layout automatically, so users do not need to export `PYTHONPATH` during normal CLI startup.
 
 Current model provider choices:
 

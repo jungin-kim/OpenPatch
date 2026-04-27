@@ -42,7 +42,7 @@ Prints the current OpenPatch configuration summary and worker status, including 
 
 ### `openpatch worker start`
 
-Starts the local worker as a managed background process for development.
+Starts the local worker as a managed background process for development. The CLI launches the repo-source worker with `uvicorn --app-dir src`, so users do not need to export `PYTHONPATH` manually for the src-layout package.
 
 ### `openpatch worker stop`
 

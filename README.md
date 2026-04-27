@@ -154,6 +154,7 @@ OpenPatch now includes a real local worker lifecycle flow through the CLI:
 The current implementation manages a development-friendly background worker process with runtime state and logs under `~/.openpatch`, plus a provider-first model onboarding flow that clearly shows which model backend is configured.
 
 The CLI now uses bounded startup and health-check timeouts so `openpatch onboard`, `openpatch doctor`, and `openpatch status` fail fast instead of waiting indefinitely. You can inspect the runtime directly with `openpatch worker status` and `openpatch worker logs`.
+For the repo-source worker, the CLI also handles the Python `src` layout automatically during startup, so users do not need to set `PYTHONPATH` by hand.
 
 ## License
 
