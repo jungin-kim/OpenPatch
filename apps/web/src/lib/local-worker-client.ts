@@ -15,6 +15,14 @@ export type RepoOpenPayload = {
   message: string;
 };
 
+export type FileReadPayload = {
+  project_path: string;
+  relative_path: string;
+  content: string;
+  truncated: boolean;
+  bytes_read: number;
+};
+
 export type AgentRunPayload = {
   project_path: string;
   task: string;
@@ -81,4 +89,17 @@ export async function runAgentTask(input: {
   });
 
   return parseWorkerResponse<AgentRunPayload>(response);
+}
+
+export async function readRepositoryFile(input: {
+  project_path: string;
+  relative_path: string;
+}): Promise<FileReadPayload> {
+  const response = await fetch("/api/worker/fs-read", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  return parseWorkerResponse<FileReadPayload>(response);
 }

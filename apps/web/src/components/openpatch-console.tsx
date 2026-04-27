@@ -6,8 +6,10 @@ import {
   getWorkerHealth,
   LocalWorkerClientError,
   openRepository,
+  readRepositoryFile,
   runAgentTask,
   type AgentRunPayload,
+  type FileReadPayload,
   type RepoOpenPayload,
 } from "@/lib/local-worker-client";
 
@@ -30,14 +32,18 @@ export function OpenPatchConsole() {
   const [task, setTask] = useState(
     "Summarize the repository and identify the best starting point for understanding the codebase.",
   );
+  const [previewPath, setPreviewPath] = useState("README.md");
 
   const [repoPending, setRepoPending] = useState(false);
+  const [previewPending, setPreviewPending] = useState(false);
   const [taskPending, setTaskPending] = useState(false);
 
   const [repoResult, setRepoResult] = useState<RepoOpenPayload | null>(null);
+  const [previewResult, setPreviewResult] = useState<FileReadPayload | null>(null);
   const [taskResult, setTaskResult] = useState<AgentRunPayload | null>(null);
 
   const [repoError, setRepoError] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [taskError, setTaskError] = useState<string | null>(null);
 
   async function refreshHealthCheck() {
@@ -68,8 +74,10 @@ export function OpenPatchConsole() {
     event.preventDefault();
     setRepoPending(true);
     setRepoError(null);
+    setPreviewError(null);
     setTaskError(null);
     setRepoResult(null);
+    setPreviewResult(null);
     setTaskResult(null);
 
     try {
@@ -88,6 +96,29 @@ export function OpenPatchConsole() {
       );
     } finally {
       setRepoPending(false);
+    }
+  }
+
+  async function handlePreviewRead(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPreviewPending(true);
+    setPreviewError(null);
+    setPreviewResult(null);
+
+    try {
+      const payload = await readRepositoryFile({
+        project_path: projectPath.trim(),
+        relative_path: previewPath.trim(),
+      });
+      setPreviewResult(payload);
+    } catch (error) {
+      setPreviewError(
+        error instanceof LocalWorkerClientError || error instanceof Error
+          ? error.message
+          : "Unable to read the file through the local worker.",
+      );
+    } finally {
+      setPreviewPending(false);
     }
   }
 
@@ -121,7 +152,7 @@ export function OpenPatchConsole() {
         ? "Checking"
         : "Unavailable";
 
-  const canRunTask = connectionState === "connected" && Boolean(repoResult);
+  const canUseRepositoryFlow = connectionState === "connected" && Boolean(repoResult);
 
   return (
     <>
@@ -267,6 +298,66 @@ export function OpenPatchConsole() {
         </section>
 
         <section className="panel response-panel" aria-labelledby="task-run-title">
+          <p className="section-label">Repository Preview</p>
+          <h3>Read a file through the local worker</h3>
+          <p>
+            Preview a file from the local checkout before running a repository-level
+            task. This helps confirm the repository is open and readable on your
+            machine.
+          </p>
+
+          <form className="task-form" onSubmit={handlePreviewRead}>
+            <label className="field-label" htmlFor="preview-path">
+              File path
+            </label>
+            <input
+              id="preview-path"
+              className="text-input mono"
+              value={previewPath}
+              onChange={(event) => setPreviewPath(event.target.value)}
+              placeholder="README.md"
+            />
+
+            {previewError ? <p className="inline-error">{previewError}</p> : null}
+
+            <div className="task-actions">
+              <span className="task-hint">
+                This uses the local worker&apos;s `/fs/read` path and does not modify anything.
+              </span>
+              <button
+                className="secondary-button"
+                type="submit"
+                disabled={previewPending || !canUseRepositoryFlow}
+              >
+                {previewPending ? "Reading..." : "Preview file"}
+              </button>
+            </div>
+          </form>
+
+          <div className="response-shell">
+            {previewResult ? (
+              <div className="code-card">
+                <strong>
+                  {previewResult.relative_path}
+                  {previewResult.truncated ? " (truncated)" : ""}
+                </strong>
+                <pre className="code-block">{previewResult.content || "(file is empty)"}</pre>
+              </div>
+            ) : (
+              <div className="response-placeholder">
+                <strong>Awaiting repository preview</strong>
+                <p>
+                  After a repository is open, you can preview a local file here through
+                  the worker.
+                </p>
+              </div>
+            )}
+          </div>
+        </section>
+      </section>
+
+      <section className="workspace">
+        <section className="panel composer-panel" aria-labelledby="task-run-title">
           <p className="section-label">Read-Only Task</p>
           <h3 id="task-run-title">Ask the worker to run a task</h3>
           <p>
@@ -296,7 +387,7 @@ export function OpenPatchConsole() {
               <button
                 className="primary-button"
                 type="submit"
-                disabled={taskPending || !canRunTask}
+                disabled={taskPending || !canUseRepositoryFlow}
               >
                 {taskPending ? "Running..." : "Run task"}
               </button>
@@ -318,6 +409,32 @@ export function OpenPatchConsole() {
                   <div className="meta-card">
                     <strong>Context summary</strong>
                     <span>{taskResult.context_summary}</span>
+                  </div>
+                  <div className="meta-card">
+                    <strong>Branch</strong>
+                    <span>{taskResult.branch}</span>
+                  </div>
+                  <div className="meta-card">
+                    <strong>Repository root</strong>
+                    <span>{taskResult.repo_root_name}</span>
+                  </div>
+                </div>
+                <div className="response-meta response-meta-wide">
+                  <div className="meta-card">
+                    <strong>README included</strong>
+                    <span>{taskResult.readme_included ? "yes" : "no"}</span>
+                  </div>
+                  <div className="meta-card">
+                    <strong>Diff included</strong>
+                    <span>{taskResult.diff_included ? "yes" : "no"}</span>
+                  </div>
+                  <div className="meta-card">
+                    <strong>Top-level entries</strong>
+                    <span>{taskResult.top_level_entries.length}</span>
+                  </div>
+                  <div className="meta-card">
+                    <strong>Task type</strong>
+                    <span>Read-only repository understanding</span>
                   </div>
                 </div>
               </>

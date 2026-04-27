@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from pydantic import ValidationError
+
 
 TESTS_DIR = Path(__file__).resolve().parent
 SRC_DIR = TESTS_DIR.parent / "src"
@@ -12,7 +14,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from openpatch_worker.config import get_settings
-from openpatch_worker.schemas.requests import AgentRunRequest, RepoOpenRequest
+from openpatch_worker.schemas.requests import AgentProposeFileRequest, AgentRunRequest, RepoOpenRequest
 from openpatch_worker.services.git_providers import resolve_provider_git_options
 
 
@@ -29,9 +31,17 @@ class WorkerContractTests(unittest.TestCase):
         payload = AgentRunRequest(project_path="examples/demo-repo", task="Summarize the repo")
         self.assertEqual(payload.project_path, "examples/demo-repo")
 
-    def test_agent_run_request_accepts_legacy_repo_path_alias(self) -> None:
-        payload = AgentRunRequest(repo_path="examples/demo-repo", task="Summarize the repo")
-        self.assertEqual(payload.project_path, "examples/demo-repo")
+    def test_agent_run_request_requires_project_path(self) -> None:
+        with self.assertRaises(ValidationError):
+            AgentRunRequest(repo_path="examples/demo-repo", task="Summarize the repo")
+
+    def test_agent_propose_file_request_requires_project_path(self) -> None:
+        with self.assertRaises(ValidationError):
+            AgentProposeFileRequest(
+                repo_path="examples/demo-repo",
+                relative_path="README.md",
+                instruction="Refresh this file.",
+            )
 
     def test_runtime_config_resolves_gitlab_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:

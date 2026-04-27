@@ -130,3 +130,25 @@ Early interfaces should likely include:
 - model task submission and streaming response events
 
 The exact shape can evolve, but the architectural boundary should remain stable: local worker for repository operations, central backend for inference.
+
+## Normalized Product Contract
+
+The current public-facing OpenPatch contract is intentionally small and explicit:
+
+- The repository identifier is `project_path` across worker APIs.
+- `project_path` is always relative to the configured local repository base directory.
+- Supported git providers for repository open and fetch flows are `gitlab` and `github`.
+- Canonical user configuration lives under `~/.openpatch/config.json`.
+- Environment variables remain available as advanced overrides, but they are not the primary product path.
+
+For the first read-only workflow, the main worker APIs are:
+
+- `POST /repo/open` with `project_path`, `branch`, and optional `git_provider`
+- `POST /fs/read` with `project_path` and `relative_path`
+- `POST /agent/run` with `project_path` and `task`
+
+Provider support is intentionally split by capability:
+
+- GitLab and GitHub are both supported for repository clone and fetch flows.
+- GitLab merge request creation exists as an additional provider-specific workflow.
+- Future provider-specific review features should remain isolated from the core repository contract.

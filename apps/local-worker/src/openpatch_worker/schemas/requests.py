@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class GitProviderMetadata(BaseModel):
@@ -23,7 +23,7 @@ class RepoOpenRequest(BaseModel):
     branch: str = Field(..., description="Branch to fetch and check out.")
     git_provider: str | None = Field(
         default=None,
-        description="Git provider identifier such as 'gitlab'.",
+        description="Git provider identifier such as 'gitlab' or 'github'.",
     )
     git: GitProviderMetadata | None = Field(
         default=None,
@@ -292,7 +292,6 @@ class AgentRunRequest(BaseModel):
     project_path: str = Field(
         ...,
         description="Repository path relative to the configured local repo base directory.",
-        validation_alias=AliasChoices("project_path", "repo_path"),
     )
     task: str = Field(..., description="User task sent to the centralized model backend.")
 
@@ -320,7 +319,6 @@ class AgentProposeFileRequest(BaseModel):
     project_path: str = Field(
         ...,
         description="Repository path relative to the configured local repo base directory.",
-        validation_alias=AliasChoices("project_path", "repo_path"),
     )
     relative_path: str = Field(
         ...,

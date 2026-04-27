@@ -135,6 +135,13 @@ All real runtime config lives under `~/.openpatch`, not inside the repository.
 During onboarding, OpenPatch now starts with a model provider choice so setup feels product-oriented instead of infrastructure-heavy. Current provider options include OpenAI, Anthropic, Gemini, Ollama, and OpenAI-compatible backends.
 Onboarded GitLab and GitHub settings are also stored under `~/.openpatch/config.json` so the local worker can reuse the same provider configuration without extra manual exports.
 
+The normalized public contract for the current product flow is:
+
+- use `project_path` as the repository identifier across worker APIs
+- use `gitlab` or `github` for provider-backed repository access
+- keep user runtime configuration under `~/.openpatch/config.json`
+- treat raw environment variables as advanced overrides rather than the normal onboarding path
+
 ### Example Ollama Flow
 
 If you want a simple local-first setup, choose `Ollama` during onboarding and accept the default base URL:
@@ -163,8 +170,8 @@ High-level success looks like this:
   If `127.0.0.1:8000` is occupied, `openpatch worker start` fails fast with a clear error instead of retrying indefinitely. Stop the other process or choose a different worker URL and port.
 - Wrong repo path:
   If `repo/open` fails, confirm `project_path` matches the provider path exactly and is relative, not absolute.
-- Missing GitLab permissions:
-  If `repo/open` reports repository not found or permission denied, confirm the stored GitLab token can read the private repository.
+- Missing repository permissions:
+  If `repo/open` reports repository not found or permission denied, confirm the stored GitLab or GitHub token can read the target private repository.
 - Ollama not running:
   `openpatch doctor` or `openpatch status` will report model connectivity failure. Start Ollama and confirm the configured models endpoint is reachable.
 - Missing model:

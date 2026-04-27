@@ -8,6 +8,7 @@ This scaffold includes:
 - a landing page
 - a worker connection status section
 - a repository open flow through the local worker
+- a file preview flow through `/fs/read`
 - a read-only task input flow
 - a response panel for worker results
 
@@ -40,6 +41,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 
 - worker health check from the UI
 - repository open flow through the local worker
+- repository file preview through `/fs/read`
 - read-only task submission to `/agent/run`
 - result display for the generated response
 - graceful unavailable-worker errors in the UI
@@ -52,6 +54,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 - A future truly hosted deployment will need a browser-to-local-worker connection strategy rather than this server-side proxy approach.
 - The current interface assumes the worker runs on the local machine, typically at `http://127.0.0.1:8000`.
 - This first version stays read-only in the UI so the connection, repository open flow, and task submission flow are easy to understand.
+- The read-only product flow is: connect to the worker, open a repository, preview a local file, then run a repository summarization task.
 
 ## Next Steps
 

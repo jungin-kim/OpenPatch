@@ -298,8 +298,8 @@ async function runDoctor() {
           hasRequiredModelFields(config.model),
       ),
       config.model?.provider
-        ? `Configured provider: ${formatModelSummary(config.model)}`
-        : "Expected a model provider plus its required fields.",
+        ? `Configured model provider: ${formatModelSummary(config.model)}`
+        : "No model provider is configured yet. Run `openpatch onboard` to add one.",
     ),
   );
   checks.push(
@@ -308,7 +308,7 @@ async function runDoctor() {
       Boolean(config.gitProvider?.provider && config.gitProvider.provider !== "none"),
       config.gitProvider?.provider && config.gitProvider.provider !== "none"
         ? `Configured git provider: ${formatProviderSummary(config.gitProvider)}`
-        : "No git provider is configured yet.",
+        : "No git provider is configured. Choose gitlab or github during onboarding if you want provider-backed repository access.",
     ),
   );
 
@@ -366,9 +366,9 @@ async function runStatus() {
   console.log(`Model summary: ${formatModelSummary(config.model)}`);
   console.log(`Model connectivity: ${modelConnectivity.reachable ? "reachable" : "not reachable"}`);
   console.log(`Model connectivity detail: ${modelConnectivity.message}`);
-  console.log(`Selected git provider: ${formatProviderSummary(config.gitProvider)}`);
+  console.log(`Git provider: ${formatProviderSummary(config.gitProvider)}`);
   console.log(`Local repo base dir: ${config.localRepoBaseDir || "not configured"}`);
-  console.log(`Daemon prepared: ${config.daemon?.prepared ? "yes" : "no"}`);
+  console.log(`Worker runtime prepared: ${config.daemon?.prepared ? "yes" : "no"}`);
 }
 
 async function startWorker({ interactive }) {
@@ -1379,7 +1379,7 @@ function redactSecret(value) {
 
 function formatProviderSummary(gitProvider) {
   if (!gitProvider?.provider || gitProvider.provider === "none") {
-    return "not configured";
+    return "none configured";
   }
   if (gitProvider.baseUrl) {
     return `${gitProvider.provider} (${gitProvider.baseUrl})`;

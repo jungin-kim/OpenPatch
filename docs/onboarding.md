@@ -29,6 +29,13 @@ openpatch onboard
 This is the first complete local onboarding path for OpenPatch. A new user can now install the CLI, choose a model provider, start the local worker, run diagnostics, and verify the local health endpoint end to end.
 It also supports the first real read-only repository workflow: open a private repository through the local worker, read a file locally, and ask for a repository summary through `/agent/run`.
 
+The normalized product contract for this flow is:
+
+- use `project_path` as the repository identifier across worker APIs
+- choose `gitlab`, `github`, or `none` during onboarding
+- keep canonical runtime configuration in `~/.openpatch/config.json`
+- treat environment variables as advanced overrides, not the standard setup path
+
 The onboarding flow will:
 
 1. create the local OpenPatch config directory
@@ -256,6 +263,7 @@ For a private GitLab repository, normal product usage is:
 5. Run `repo/open` with `git_provider: "gitlab"`.
 
 The worker will use the stored provider config from `~/.openpatch/config.json` and perform clone and fetch non-interactively.
+GitHub follows the same repository-open flow with `git_provider: "github"` and matching provider settings from onboarding.
 
 ## Troubleshooting Notes
 

@@ -50,6 +50,7 @@ Creates the local OpenPatch config directory under `~/.openpatch`, writes a conf
 
 For a beginner-friendly local setup, choose `Ollama` during onboarding and accept the default base URL `http://127.0.0.1:11434/v1`.
 For GitLab or GitHub repository flows, onboarding now stores the provider base URL and token in `~/.openpatch/config.json` so the local worker can use them without extra manual exports.
+Across the product, the repository identifier is `project_path`, and the supported onboarding provider choices for repository access are `gitlab`, `github`, or `none`.
 
 ### `openpatch config show`
 
@@ -57,11 +58,11 @@ Prints the current local OpenPatch configuration with secrets redacted.
 
 ### `openpatch doctor`
 
-Checks whether the local configuration, worker detection, worker process, worker reachability, worker URL, model provider config, model connectivity, and git provider config look healthy. All checks use short bounded timeouts and fail fast.
+Checks whether the local configuration, worker detection, worker process, worker reachability, worker URL, model provider config, model connectivity, and git provider configuration look healthy. All checks use short bounded timeouts and fail fast.
 
 ### `openpatch status`
 
-Prints the current OpenPatch configuration summary and worker status, including worker URL, reachability, selected git provider, repo base directory, model provider, model summary, and model connectivity detail.
+Prints the current OpenPatch configuration summary and worker status, including worker URL, reachability, configured git provider, repo base directory, model provider, model summary, and model connectivity detail.
 
 ### `openpatch worker start`
 
