@@ -24,7 +24,7 @@ npm install -g openpatch
 
 ## First End-To-End Local Flow
 
-The first complete local OpenPatch flow is now:
+The first public alpha CLI flow is:
 
 ```bash
 npm install -g openpatch
@@ -41,6 +41,7 @@ At a high level, success means:
 - `doctor` reports the worker process as running and the worker as reachable
 - `status` shows the configured worker URL and model provider clearly
 - the local health endpoint returns JSON with `status: ok`
+- the machine is ready for the read-only web UI flow
 
 ## Commands
 
@@ -116,6 +117,7 @@ npm install -g openpatch
 openpatch onboard
 openpatch worker start
 openpatch doctor
+openpatch status
 ```
 
 ## Example Ollama Flow
@@ -124,7 +126,7 @@ Example choices during onboarding:
 
 - model provider: `Ollama`
 - base URL: `http://127.0.0.1:11434/v1`
-- model name: `llama3.2`
+- model name: `qwen2.5-coder:7b`
 
 Then run:
 
@@ -144,4 +146,4 @@ curl http://127.0.0.1:8000/health
 - Ollama not running:
   `openpatch doctor` and `openpatch status` report model connectivity failures and point to the expected Ollama-compatible models endpoint.
 - Missing model:
-  Pull the model locally, for example `ollama pull llama3.2`, then rerun `openpatch doctor`.
+  Pull the model locally, for example `ollama pull qwen2.5-coder:7b`, then rerun `openpatch doctor`.

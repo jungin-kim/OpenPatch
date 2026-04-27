@@ -1,18 +1,15 @@
 # OpenPatch Web UI
 
-The OpenPatch web UI is a minimal Next.js application that provides the first hosted interface shell for the project.
+The OpenPatch web UI is the first browser-based product surface for the project.
 
-This scaffold includes:
+The current alpha flow is intentionally small:
 
-- a top-level layout
-- a landing page
-- a worker connection status section
-- a repository open flow through the local worker
-- a file preview flow through `/fs/read`
-- a read-only task input flow
-- a response panel for worker results
+- confirm local worker connectivity
+- open a repository through the local worker
+- ask a read-only repository question
+- review the model response in the browser
 
-The current version is intentionally minimal and product-oriented. It focuses on the first end-to-end hosted UI to local worker flow.
+This UI is intentionally focused on the working read-only path. It does not present editing as a finished experience yet.
 
 ## Local Development
 
@@ -20,6 +17,7 @@ The current version is intentionally minimal and product-oriented. It focuses on
 
 - Node.js 20+
 - npm 10+
+- a running OpenPatch local worker on `http://127.0.0.1:8000` or another configured URL
 
 ### Install
 
@@ -40,29 +38,36 @@ Then open [http://localhost:3000](http://localhost:3000).
 ## What Works
 
 - worker health check from the UI
-- repository open flow through the local worker
-- repository file preview through `/fs/read`
-- read-only task submission to `/agent/run`
-- result display for the generated response
+- repository open flow through `/repo/open`
+- read-only repository question flow through `/agent/run`
+- clear loading, success, and error states
+- response display for the generated model answer
 - graceful unavailable-worker errors in the UI
-- clear connection state for worker health and basic task usability
+
+## Expected Product Flow
+
+1. Run `openpatch onboard`
+2. Run `openpatch worker start`
+3. Run `openpatch doctor`
+4. Run `openpatch status`
+5. Start the web UI
+6. Open a private GitLab repository
+7. Ask a read-only repository question
+8. Review the response in the browser
 
 ## Notes
 
-- The UI currently uses local Next.js route handlers under `src/app/api/worker/*` as a simple proxy to the configured worker base URL.
-- This keeps the browser flow easy to run locally while avoiding direct browser-to-worker CORS setup in the first version.
-- A future truly hosted deployment will need a browser-to-local-worker connection strategy rather than this server-side proxy approach.
+- The UI uses local Next.js route handlers under `src/app/api/worker/*` as a simple proxy to the configured worker base URL.
+- This keeps local development easy while avoiding direct browser-to-worker CORS setup in the first version.
 - The current interface assumes the worker runs on the local machine, typically at `http://127.0.0.1:8000`.
-- This first version stays read-only in the UI so the connection, repository open flow, and task submission flow are easy to understand.
-- The read-only product flow is: connect to the worker, open a repository, preview a local file, then run a repository summarization task.
+- The alpha UI stays focused on repository open and read-only Q&A so the main product flow is easy to understand.
 
 ## Next Steps
 
 The current UI still needs:
 
-- browser-to-local-worker pairing for a real hosted deployment
-- richer repository setup and provider-specific repo-open inputs
+- browser-to-local-worker pairing for a truly hosted deployment
 - task streaming and progress updates
+- richer repository setup and context controls
 - editing and patch review UX
-- file selection and explicit context controls
-- authentication and session wiring for a future hosted deployment
+- authentication and session wiring for future hosted deployments
