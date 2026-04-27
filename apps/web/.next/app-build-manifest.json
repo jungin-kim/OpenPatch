@@ -15,6 +15,11 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/api/worker/health/route.js"
+    ],
+    "/api/worker/repo-open/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/worker/repo-open/route.js"
     ]
   }
 }
