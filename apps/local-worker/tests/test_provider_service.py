@@ -15,6 +15,8 @@ from openpatch_worker.services.provider_service import (
     _build_github_api_base,
     _build_gitlab_api_base,
     list_recent_project_paths,
+    record_recent_project,
+    list_provider_projects,
 )
 
 
@@ -54,6 +56,34 @@ class ProviderServiceTests(unittest.TestCase):
 
             self.assertIn("group-one/repo-one", recent)
             self.assertIn("group-two/repo-two", recent)
+
+    def test_local_recent_projects_are_returned_from_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".openpatch"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_path = config_dir / "config.json"
+            config_path.write_text('{"gitProvider":{"provider":"local"}}', encoding="utf-8")
+
+            local_project = Path(temp_home) / "work" / "demo-project"
+            local_project.mkdir(parents=True, exist_ok=True)
+
+            with patch.dict(
+                os.environ,
+                {"OPENPATCH_CONFIG_PATH": str(config_path)},
+                clear=False,
+            ):
+                record_recent_project(
+                    project_path=str(local_project),
+                    git_provider="local",
+                    display_name="demo-project",
+                    is_git_repo=False,
+                )
+                payload = list_provider_projects("local", search=str(local_project))
+
+            self.assertTrue(payload.projects)
+            self.assertEqual(payload.projects[0].git_provider, "local")
+            self.assertEqual(payload.projects[0].project_path, str(local_project.resolve()))
+            self.assertFalse(payload.projects[0].is_git_repository)
 
 
 if __name__ == "__main__":

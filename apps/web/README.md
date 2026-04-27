@@ -5,7 +5,7 @@ The OpenPatch web UI is the first browser-based product surface for the project.
 The current alpha flow is intentionally small:
 
 - confirm local worker connectivity
-- choose a provider, project, and branch through guided lists
+- choose a repository source, project, and branch through guided lists
 - open a repository through the local worker
 - ask a read-only repository question
 - review the model response in the browser
@@ -42,6 +42,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 - provider-aware project list loading
 - provider-aware branch list loading
 - recent project shortcuts
+- local project path entry for local-source workflows
 - repository open flow through `/repo/open`
 - read-only repository question flow through `/agent/run`
 - clear loading, success, and error states
@@ -56,9 +57,9 @@ Then open [http://localhost:3000](http://localhost:3000).
 3. Run `openpatch doctor`
 4. Run `openpatch status`
 5. Start the web UI
-6. Choose `gitlab` or `github`
-7. Select a project from the provider-backed list
-8. Select a branch from the provider-backed list
+6. Choose `gitlab`, `github`, or `local project`
+7. Select a project from the guided list, or enter a local project path
+8. Select a branch when the chosen source is a git repository
 9. Open the repository locally
 10. Ask a read-only repository question
 11. Review the response in the browser
@@ -68,8 +69,9 @@ Then open [http://localhost:3000](http://localhost:3000).
 - The UI uses local Next.js route handlers under `src/app/api/worker/*` as a simple proxy to the configured worker base URL.
 - This keeps local development easy while avoiding direct browser-to-worker CORS setup in the first version.
 - The current interface assumes the worker runs on the local machine, typically at `http://127.0.0.1:8000`.
-- The alpha UI now defaults to guided provider selection instead of manual `project_path` and branch entry.
-- Manual repository and branch entry remain available only under an Advanced toggle.
+- The alpha UI now defaults to guided repository selection instead of manual `project_path` and branch entry.
+- Local projects are a first-class source and support direct absolute-path entry plus recent-project suggestions.
+- Manual hosted-repository overrides remain available only under an Advanced toggle.
 
 ## Next Steps
 

@@ -6,7 +6,7 @@ OpenPatch is moving toward a developer-product onboarding flow built around:
 - one-command onboarding
 - a local worker on each developer machine
 - a centralized model backend
-- pluggable git providers such as GitLab and GitHub
+- pluggable repository sources such as GitLab, GitHub, and local projects
 
 The first step in that direction is the new `openpatch` CLI.
 
@@ -26,13 +26,13 @@ This makes the `openpatch` command available on your machine.
 openpatch onboard
 ```
 
-This is the first complete local onboarding path for OpenPatch. A new user can now install the CLI, choose a model provider, start the local worker, run diagnostics, and verify the local health endpoint end to end.
-It also supports the first real read-only repository workflow: open a private repository through the local worker, read a file locally, and ask for a repository summary through `/agent/run`.
+This is the first complete local onboarding path for OpenPatch. A new user can now install the CLI, choose a model connection mode, start the local worker, run diagnostics, and verify the local health endpoint end to end.
+It also supports the first real read-only repository workflow: open a private hosted repository or a local project through the local worker, read a file locally, and ask for a repository summary through `/agent/run`.
 
 The normalized product contract for this flow is:
 
 - use `project_path` as the repository identifier across worker APIs
-- choose `gitlab`, `github`, or `none` during onboarding
+- choose `gitlab`, `github`, `local`, or `none` during onboarding
 - keep canonical runtime configuration in `~/.openpatch/config.json`
 - treat environment variables as advanced overrides, not the standard setup path
 
@@ -40,40 +40,44 @@ The onboarding flow will:
 
 1. create the local OpenPatch config directory
 2. create a config file
-3. prompt for a model provider first
-4. ask only for the model fields that match that provider
-5. guide the Ollama setup automatically when `Ollama` is selected
-6. prompt for git provider selection, provider base URL, and provider token when needed
-7. prompt for a local repo base directory
-8. detect whether a local worker installation is already present
-9. prepare local runtime directories under `~/.openpatch`
-10. start the local worker automatically
-11. verify worker health and model connectivity before finishing
+3. prompt for a model connection mode first
+4. either guide a local model runtime setup or prompt for a remote model API type
+5. ask only for the fields that match that runtime or API type
+6. guide the Ollama setup automatically when `Ollama` is selected
+7. prompt for repository source selection, plus provider base URL and token when needed
+8. prompt for a local repo base directory
+9. detect whether a local worker installation is already present
+10. prepare local runtime directories under `~/.openpatch`
+11. start the local worker automatically
+12. verify worker health and model connectivity before finishing
 
 OpenPatch now finishes onboarding by launching the worker as a background process, waiting for health for a short bounded timeout, checking model connectivity, and printing a concise success summary.
 For the repo-source local worker, the CLI handles the Python src-layout automatically with an absolute `PYTHONPATH`, so users do not need to export `PYTHONPATH` during normal CLI startup.
 
-Current model provider choices:
+Current model connection choices:
 
-- OpenAI
-- Anthropic
-- Gemini
-- Ollama
-- OpenAI-compatible
+- Local model runtime
+  Ollama
+- Remote model API
+  OpenAI-compatible
+  OpenAI
+  Anthropic
+  Gemini
 
 Examples of the provider-aware prompts:
 
-- OpenAI: API key and model name, with the default base URL set to `https://api.openai.com/v1`
-- Anthropic: API key and model name, with the default base URL set to `https://api.anthropic.com`
-- Gemini: API key and model name, with the default base URL set to `https://generativelanguage.googleapis.com/v1beta/openai`
-- Ollama: guided local detection, server reachability checks, model discovery, and a default base URL of `http://127.0.0.1:11434/v1`
-- OpenAI-compatible: base URL, API key, and model name
+- Local model runtime, Ollama: guided local detection, server reachability checks, model discovery, and a default base URL of `http://127.0.0.1:11434/v1`
+- Remote model API, OpenAI: API key and model name, with the default base URL set to `https://api.openai.com/v1`
+- Remote model API, Anthropic: API key and model name, with the default base URL set to `https://api.anthropic.com`
+- Remote model API, Gemini: API key and model name, with the default base URL set to `https://generativelanguage.googleapis.com/v1beta/openai`
+- Remote model API, OpenAI-compatible: base URL, API key, and model name
 
 The resulting config stores model settings under a nested `model` object in `~/.openpatch/config.json`:
 
 ```json
 {
   "model": {
+    "connectionMode": "local-runtime",
     "provider": "ollama",
     "baseUrl": "http://127.0.0.1:11434/v1",
     "apiKey": "ollama",
@@ -97,7 +101,7 @@ This validates:
 - local worker process is running
 - local worker is reachable
 - configured worker URL matches the running instance
-- model provider config is present
+- model connection config is present
 - model connectivity responds within a short timeout
 - git provider is configured or clearly marked as not configured
 
@@ -116,7 +120,7 @@ openpatch status
 ```
 
 This prints the current configuration summary and worker reachability.
-It also shows the configured model provider clearly.
+It also shows the configured model connection mode and provider clearly.
 
 To inspect the worker runtime directly:
 
@@ -189,11 +193,13 @@ openpatch onboard
 
 4. Choose these onboarding values at a high level:
 
+- model connection mode: `Local model runtime`
 - model provider: `Ollama`
 - base URL: `http://127.0.0.1:11434/v1`
 - model name: `qwen2.5-coder:7b`
-- git provider: your choice, or `None for now`
+- repository source: `gitlab`, `github`, `local`, or `None for now`
 - if you choose GitLab or GitHub, provide the provider base URL and token so the worker can reuse the same config later
+- if you choose `local`, OpenPatch will treat absolute local filesystem paths as first-class project identifiers
 - local repo base directory: accept the default or choose your own
 
 5. Verify the setup:
@@ -209,7 +215,7 @@ Expected success output at a high level:
 - `openpatch onboard` prints a concise onboarding summary
 - the worker starts during onboarding
 - worker health and model connectivity are verified before onboarding finishes
-- `openpatch status` shows the configured worker URL, model provider `ollama`, and healthy worker details
+- `openpatch status` shows the configured worker URL, model connection mode `local runtime`, model provider `ollama`, and healthy worker details
 - `curl http://127.0.0.1:8000/health` returns JSON with `status: ok`
 
 ## First Read-Only Workflow
@@ -286,8 +292,8 @@ GitHub follows the same repository-open flow with `git_provider: "github"` and m
 
 ### Wrong Repo Path
 
-- If `repo/open` fails, confirm `project_path` matches the GitLab project path exactly.
-- Keep `project_path` relative, for example `group/private-repo`.
+- For GitLab or GitHub, confirm `project_path` matches the provider path exactly, for example `group/private-repo` or `owner/repo`.
+- For local projects, use an absolute filesystem path such as `/Users/you/my-project`.
 
 ### Missing GitLab Permissions
 

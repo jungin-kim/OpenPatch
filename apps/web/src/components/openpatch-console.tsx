@@ -212,6 +212,13 @@ export function OpenPatchConsole() {
     ? manualProjectPath.trim()
     : selectedProjectPath.trim();
   const effectiveBranch = useAdvanced ? manualBranch.trim() : selectedBranch.trim();
+  const branchRequired = gitProvider !== "local";
+  const providerLabel =
+    gitProvider === "local" ? "Local project" : gitProvider;
+  const branchSelectionDisabled =
+    branchesPending ||
+    connectionState !== "connected" ||
+    (gitProvider !== "local" && (!selectedProjectPath || branches.length === 0));
 
   async function handleRepoOpen(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -220,16 +227,20 @@ export function OpenPatchConsole() {
     setQuestionError(null);
     setQuestionResult(null);
 
-    if (!effectiveProjectPath || !effectiveBranch) {
+    if (!effectiveProjectPath || (branchRequired && !effectiveBranch)) {
       setRepoPending(false);
-      setRepoError("Choose a project and branch, or use the advanced override fields.");
+      setRepoError(
+        branchRequired
+          ? "Choose a project and branch, or use the advanced override fields."
+          : "Choose a local project path or enter one manually.",
+      );
       return;
     }
 
     try {
       const payload = await openRepository({
         project_path: effectiveProjectPath,
-        branch: effectiveBranch,
+        branch: effectiveBranch || undefined,
         git_provider: gitProvider.trim() || undefined,
       });
       setRepoResult(payload);
@@ -283,11 +294,10 @@ export function OpenPatchConsole() {
       <section className="hero">
         <div className="panel hero-panel">
           <span className="hero-kicker">Guided repository selection</span>
-          <h2>Choose a project from your provider instead of typing repository details manually.</h2>
+          <h2>Choose a provider-backed repository or a local project without dropping to raw worker calls.</h2>
           <p>
-            OpenPatch can now load available projects and branches from the configured
-            provider, suggest recent repositories, and keep manual entry tucked away as
-            an advanced fallback.
+            OpenPatch can load hosted repositories from GitLab or GitHub, remember recent
+            local projects, and keep manual entry tucked away unless you actually need it.
           </p>
 
           <div className="hero-grid">
@@ -339,8 +349,8 @@ export function OpenPatchConsole() {
           <p className="section-label">Repository</p>
           <h3 id="repo-open-title">Select a repository through the local worker</h3>
           <p>
-            Choose a provider first, then load available projects and branches. Manual
-            repository and branch entry is still available under Advanced when you need it.
+            Choose a repository source first. Hosted providers load guided project and
+            branch lists, while local projects support recent suggestions plus direct path entry.
           </p>
 
           <form className="task-form" onSubmit={handleRepoOpen}>
@@ -358,6 +368,7 @@ export function OpenPatchConsole() {
                     setGitProvider(nextProvider);
                     setSelectedProjectPath("");
                     setSelectedBranch("");
+                    setUseAdvanced(nextProvider === "local");
                     setProjects([]);
                     setBranches([]);
                     setRepoResult(null);
@@ -365,26 +376,31 @@ export function OpenPatchConsole() {
                 >
                   <option value="gitlab">gitlab</option>
                   <option value="github">github</option>
+                  <option value="local">local project</option>
                 </select>
               </div>
 
               <div className="field-group">
                 <label className="field-label" htmlFor="project-search">
-                  Search projects
+                  {gitProvider === "local" ? "Search recent local projects" : "Search projects"}
                 </label>
                 <input
                   id="project-search"
                   className="text-input"
                   value={projectSearch}
                   onChange={(event) => setProjectSearch(event.target.value)}
-                  placeholder="Search by project name or path"
+                  placeholder={
+                    gitProvider === "local"
+                      ? "/Users/you/my-project"
+                      : "Search by project name or path"
+                  }
                 />
               </div>
             </div>
 
             {recentProjects.length ? (
               <div className="recent-projects">
-                <strong>Recent projects</strong>
+                <strong>{gitProvider === "local" ? "Recent local projects" : "Recent projects"}</strong>
                 <div className="recent-project-list">
                   {recentProjects.map((project) => (
                     <button
@@ -394,6 +410,7 @@ export function OpenPatchConsole() {
                       onClick={() => {
                         setUseAdvanced(false);
                         setSelectedProjectPath(project.project_path);
+                        setManualProjectPath(project.project_path);
                         setProjectSearch(project.project_path);
                         setRepoResult(null);
                       }}
@@ -407,7 +424,7 @@ export function OpenPatchConsole() {
 
             <div className="field-group">
               <label className="field-label" htmlFor="project-select">
-                Project
+                {gitProvider === "local" ? "Recent local project" : "Project"}
               </label>
               <select
                 id="project-select"
@@ -417,6 +434,7 @@ export function OpenPatchConsole() {
                 onChange={(event) => {
                   setUseAdvanced(false);
                   setSelectedProjectPath(event.target.value);
+                  setManualProjectPath(event.target.value);
                   setRepoResult(null);
                 }}
                 disabled={projectsPending || connectionState !== "connected" || filteredProjects.length === 0}
@@ -429,12 +447,40 @@ export function OpenPatchConsole() {
               </select>
               <p className="field-help">
                 {projectsPending
-                  ? "Loading projects from the configured provider..."
+                  ? gitProvider === "local"
+                    ? "Loading recent local projects..."
+                    : "Loading projects from the configured provider..."
                   : filteredProjects.length
-                    ? "Choose a project from the provider response."
-                    : "No projects are available for the current search or provider."}
+                    ? gitProvider === "local"
+                      ? "Choose a recent local project or enter a path manually below."
+                      : "Choose a project from the provider response."
+                    : gitProvider === "local"
+                      ? "No recent local projects match the current search yet."
+                      : "No projects are available for the current search or provider."}
               </p>
             </div>
+
+            {gitProvider === "local" ? (
+              <div className="field-group">
+                <label className="field-label" htmlFor="local-project-path">
+                  Local project path
+                </label>
+                <input
+                  id="local-project-path"
+                  className="text-input mono"
+                  value={manualProjectPath}
+                  onChange={(event) => {
+                    setManualProjectPath(event.target.value);
+                    setUseAdvanced(true);
+                    setRepoResult(null);
+                  }}
+                  placeholder="/Users/you/my-project"
+                />
+                <p className="field-help">
+                  Enter an absolute filesystem path. OpenPatch can analyze the project even if it is not a git repository.
+                </p>
+              </div>
+            ) : null}
 
             <div className="field-group">
               <label className="field-label" htmlFor="branch-select">
@@ -447,15 +493,12 @@ export function OpenPatchConsole() {
                 onChange={(event) => {
                   setUseAdvanced(false);
                   setSelectedBranch(event.target.value);
+                  setManualBranch(event.target.value);
                   setRepoResult(null);
                 }}
-                disabled={
-                  branchesPending ||
-                  connectionState !== "connected" ||
-                  !selectedProjectPath ||
-                  branches.length === 0
-                }
+                disabled={branchSelectionDisabled}
               >
+                {!branches.length ? <option value="">No branch selected</option> : null}
                 {branches.map((branch) => (
                   <option key={branch.name} value={branch.name}>
                     {branch.name}{branch.is_default ? " (default)" : ""}
@@ -466,8 +509,12 @@ export function OpenPatchConsole() {
                 {branchesPending
                   ? "Loading branches for the selected project..."
                   : branches.length
-                    ? "The default branch is selected automatically when the provider reports one."
-                    : "Branches will appear here after you choose a project."}
+                    ? gitProvider === "local"
+                      ? "If this local project is a git repository, the current branch is selected automatically."
+                      : "The default branch is selected automatically when the provider reports one."
+                    : gitProvider === "local"
+                      ? "This stays empty for non-git local projects."
+                      : "Branches will appear here after you choose a project."}
               </p>
             </div>
 
@@ -477,24 +524,26 @@ export function OpenPatchConsole() {
               </p>
             ) : null}
 
-            <div className="advanced-toggle-row">
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => {
-                  const nextValue = !useAdvanced;
-                  setUseAdvanced(nextValue);
-                  if (nextValue) {
-                    setManualProjectPath(selectedProjectPath);
-                    setManualBranch(selectedBranch);
-                  }
-                }}
-              >
-                {useAdvanced ? "Hide advanced fields" : "Advanced manual override"}
-              </button>
-            </div>
+            {gitProvider !== "local" ? (
+              <div className="advanced-toggle-row">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => {
+                    const nextValue = !useAdvanced;
+                    setUseAdvanced(nextValue);
+                    if (nextValue) {
+                      setManualProjectPath(selectedProjectPath);
+                      setManualBranch(selectedBranch);
+                    }
+                  }}
+                >
+                  {useAdvanced ? "Hide advanced fields" : "Advanced manual override"}
+                </button>
+              </div>
+            ) : null}
 
-            {useAdvanced ? (
+            {useAdvanced && gitProvider !== "local" ? (
               <div className="advanced-panel">
                 <div className="inline-fields inline-fields-two">
                   <div className="field-group">
@@ -532,7 +581,9 @@ export function OpenPatchConsole() {
 
             <div className="task-actions">
               <span className="task-hint">
-                OpenPatch keeps guided selection as the default experience and falls back to manual entry only when needed.
+                {gitProvider === "local"
+                  ? "OpenPatch treats local projects as a first-class source, with recent suggestions and direct path entry."
+                  : "OpenPatch keeps guided selection as the default experience and falls back to manual entry only when needed."}
               </span>
               <button
                 className="primary-button"
@@ -551,16 +602,20 @@ export function OpenPatchConsole() {
                 <p>{repoResult.message}</p>
                 <p className="mono">{repoResult.local_repo_path}</p>
                 <p className="result-meta">
-                  Provider: {gitProvider} | Branch: {repoResult.branch}
+                  Source: {providerLabel}
+                  {repoResult.branch ? ` | Branch: ${repoResult.branch}` : ""}
                 </p>
-                <p className="result-meta">HEAD: {repoResult.head_sha}</p>
+                <p className="result-meta">
+                  Git repository: {repoResult.is_git_repository ? "yes" : "no"}
+                  {repoResult.head_sha ? ` | HEAD: ${repoResult.head_sha}` : ""}
+                </p>
               </div>
             ) : (
               <div className="response-placeholder">
                 <strong>Awaiting repository open</strong>
                 <p>
-                  Choose a provider, project, and branch first so the local worker can
-                  prepare a repository for your question.
+                  Choose a repository source and project first so the local worker can
+                  prepare it for your question.
                 </p>
               </div>
             )}
@@ -618,11 +673,15 @@ export function OpenPatchConsole() {
                   </div>
                   <div className="meta-card">
                     <strong>Branch</strong>
-                    <span>{questionResult.branch}</span>
+                    <span>{questionResult.branch || "Not a git repository"}</span>
                   </div>
                   <div className="meta-card">
                     <strong>Repository root</strong>
                     <span>{questionResult.repo_root_name}</span>
+                  </div>
+                  <div className="meta-card">
+                    <strong>Git repository</strong>
+                    <span>{questionResult.is_git_repository ? "Yes" : "No"}</span>
                   </div>
                   <div className="meta-card">
                     <strong>Context summary</strong>

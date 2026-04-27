@@ -136,8 +136,9 @@ The exact shape can evolve, but the architectural boundary should remain stable:
 The current public-facing OpenPatch contract is intentionally small and explicit:
 
 - The repository identifier is `project_path` across worker APIs.
-- `project_path` is always relative to the configured local repository base directory.
-- Supported git providers for repository open and fetch flows are `gitlab` and `github`.
+- For GitLab and GitHub, `project_path` uses the provider path such as `group/repo` or `owner/repo`.
+- For local projects, `project_path` is an absolute filesystem path on the user's machine.
+- Supported repository sources for repository open flows are `gitlab`, `github`, and `local`.
 - Canonical user configuration lives under `~/.openpatch/config.json`.
 - Environment variables remain available as advanced overrides, but they are not the primary product path.
 
@@ -150,5 +151,6 @@ For the first read-only workflow, the main worker APIs are:
 Provider support is intentionally split by capability:
 
 - GitLab and GitHub are both supported for repository clone and fetch flows.
+- Local projects are supported as a first-class source without clone or fetch.
 - GitLab merge request creation exists as an additional provider-specific workflow.
 - Future provider-specific review features should remain isolated from the core repository contract.

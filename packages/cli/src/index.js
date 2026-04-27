@@ -27,6 +27,10 @@ const DEFAULT_OLLAMA_START_TIMEOUT_MS = 10000;
 const DEFAULT_LOG_TAIL_LINES = 40;
 const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
 const OLLAMA_RECOMMENDED_MODEL = "qwen2.5-coder:7b";
+const MODEL_CONNECTION_MODES = [
+  "local-runtime",
+  "remote-api",
+];
 const MODEL_PROVIDER_OPTIONS = [
   "openai",
   "anthropic",
@@ -137,7 +141,7 @@ async function runOnboard() {
   try {
     console.log("OpenPatch onboarding");
     console.log("Set up OpenPatch on this machine.");
-    console.log("We will save your local settings, connect a model provider, choose a git provider, and prepare the local worker runtime.");
+    console.log("We will save your local settings, choose how OpenPatch should reach a model, choose a git provider, and prepare the local worker runtime.");
     console.log("");
 
     const modelConfig = await promptModelConfig(rl);
@@ -213,7 +217,7 @@ async function runOnboard() {
     console.log("");
     console.log("OpenPatch onboarding summary");
     console.log(`Worker URL: ${config.worker.baseUrl}`);
-    console.log(`Model provider: ${formatModelSummary(config.model)}`);
+    console.log(`Model connection: ${formatModelSummary(config.model)}`);
     console.log(`Worker health: ${workerHealth.reachable ? "ok" : "needs attention"}`);
     console.log(`Model connectivity: ${modelConnectivity.reachable ? "ok" : "needs attention"}`);
 
@@ -306,7 +310,7 @@ async function runDoctor() {
   );
   checks.push(
     makeCheck(
-      "Model backend connectivity",
+      "Model connectivity",
       modelConnectivity.reachable,
       modelConnectivity.message,
     ),
@@ -322,16 +326,17 @@ async function runDoctor() {
   );
   checks.push(
     makeCheck(
-      "Model provider config present",
+      "Model connection config present",
       Boolean(
+        MODEL_CONNECTION_MODES.includes(config.model?.connectionMode) &&
         config.model?.provider &&
           config.model?.baseUrl &&
           config.model?.model &&
           hasRequiredModelFields(config.model),
       ),
       config.model?.provider
-        ? `Configured model provider: ${formatModelSummary(config.model)}`
-        : "No model provider is configured yet. Run `openpatch onboard` to add one.",
+        ? `Configured model connection: ${formatModelSummary(config.model)}`
+        : "No model connection is configured yet. Run `openpatch onboard` to add one.",
     ),
   );
   checks.push(
@@ -340,7 +345,7 @@ async function runDoctor() {
       Boolean(config.gitProvider?.provider && config.gitProvider.provider !== "none"),
       config.gitProvider?.provider && config.gitProvider.provider !== "none"
         ? `Configured git provider: ${formatProviderSummary(config.gitProvider)}`
-        : "No git provider is configured. Choose gitlab or github during onboarding if you want provider-backed repository access.",
+        : "No git provider is configured. Choose gitlab, github, or local during onboarding if you want guided repository access.",
     ),
   );
 
@@ -394,6 +399,7 @@ async function runStatus() {
   }
   console.log(`Worker pid file: ${runtimeState?.pidFile || PID_PATH}`);
   console.log(`Worker log file: ${runtimeState?.logPath || WORKER_LOG_PATH}`);
+  console.log(`Model connection mode: ${formatModelConnectionMode(config.model)}`);
   console.log(`Model provider: ${config.model?.provider || "not configured"}`);
   console.log(`Model summary: ${formatModelSummary(config.model)}`);
   console.log(`Model connectivity: ${modelConnectivity.reachable ? "reachable" : "not reachable"}`);
@@ -987,20 +993,39 @@ async function promptGitProviderConfig(rl, provider) {
     return { provider: "github", baseUrl, token };
   }
 
+  if (provider === "local") {
+    return { provider: "local" };
+  }
+
   return { provider: "none" };
 }
 
 async function promptModelConfig(rl) {
-  const provider = await promptModelProvider(rl);
+  const connectionMode = await promptModelConnectionMode(rl);
+
+  if (connectionMode === "local-runtime") {
+    return promptLocalRuntimeModelConfig(rl);
+  }
+
+  return promptRemoteApiModelConfig(rl);
+}
+
+async function promptLocalRuntimeModelConfig(rl) {
+  const provider = await promptLocalRuntimeProvider(rl);
   if (provider === "ollama") {
     return promptOllamaModelConfig(rl);
   }
+  throw new Error(`Unsupported local runtime provider: ${provider}`);
+}
+
+async function promptRemoteApiModelConfig(rl) {
+  const provider = await promptRemoteApiProvider(rl);
 
   const providerConfig = MODEL_PROVIDER_CONFIG[provider];
 
   console.log("");
-  console.log(`Model provider: ${providerConfig.label}`);
-  console.log("OpenPatch will use these settings when the local worker calls your centralized model backend.");
+  console.log(`Remote model API: ${providerConfig.label}`);
+  console.log("OpenPatch will use these settings when the local worker calls your remote model API.");
 
   let baseUrl = providerConfig.defaultBaseUrl || "";
   let apiKey = providerConfig.defaultApiKey || "";
@@ -1027,6 +1052,7 @@ async function promptModelConfig(rl) {
   }
 
   return {
+    connectionMode: "remote-api",
     provider,
     baseUrl,
     apiKey,
@@ -1036,7 +1062,7 @@ async function promptModelConfig(rl) {
 
 async function promptOllamaModelConfig(rl) {
   console.log("");
-  console.log("Model provider: Ollama");
+  console.log("Local model runtime: Ollama");
   console.log("OpenPatch will look for a local Ollama installation, help you start it if needed, and guide model selection.");
 
   const commandInstalled = await commandExists("ollama");
@@ -1052,6 +1078,7 @@ async function promptOllamaModelConfig(rl) {
   const selectedModel = await chooseOllamaModel(rl, baseUrl, serverState.models || []);
 
   return {
+    connectionMode: "local-runtime",
     provider: "ollama",
     baseUrl,
     apiKey: "ollama",
@@ -1059,32 +1086,58 @@ async function promptOllamaModelConfig(rl) {
   };
 }
 
-async function promptModelProvider(rl) {
+async function promptModelConnectionMode(rl) {
   while (true) {
-    console.log("Choose a model provider:");
-    console.log("  1. OpenAI");
-    console.log("  2. Anthropic");
-    console.log("  3. Gemini");
-    console.log("  4. Ollama");
-    console.log("  5. OpenAI-compatible");
+    console.log("Choose how OpenPatch should connect to your model:");
+    console.log("  1. Local model runtime");
+    console.log("  2. Remote model API");
     const answer = (await rl.question("Choice [1]: ")).trim() || "1";
 
     if (answer === "1") {
-      return "openai";
+      return "local-runtime";
     }
     if (answer === "2") {
-      return "anthropic";
+      return "remote-api";
     }
-    if (answer === "3") {
-      return "gemini";
-    }
-    if (answer === "4") {
+    console.log("Please choose 1 or 2.");
+  }
+}
+
+async function promptLocalRuntimeProvider(rl) {
+  while (true) {
+    console.log("Choose a local model runtime:");
+    console.log("  1. Ollama");
+    const answer = (await rl.question("Choice [1]: ")).trim() || "1";
+
+    if (answer === "1") {
       return "ollama";
     }
-    if (answer === "5") {
+    console.log("Please choose 1.");
+  }
+}
+
+async function promptRemoteApiProvider(rl) {
+  while (true) {
+    console.log("Choose a remote model API:");
+    console.log("  1. OpenAI-compatible");
+    console.log("  2. OpenAI");
+    console.log("  3. Anthropic");
+    console.log("  4. Gemini");
+    const answer = (await rl.question("Choice [1]: ")).trim() || "1";
+
+    if (answer === "1") {
       return "openai-compatible";
     }
-    console.log("Please choose 1, 2, 3, 4, or 5.");
+    if (answer === "2") {
+      return "openai";
+    }
+    if (answer === "3") {
+      return "anthropic";
+    }
+    if (answer === "4") {
+      return "gemini";
+    }
+    console.log("Please choose 1, 2, 3, or 4.");
   }
 }
 
@@ -1093,7 +1146,8 @@ async function promptGitProvider(rl) {
     console.log("Select a git provider:");
     console.log("  1. GitLab");
     console.log("  2. GitHub");
-    console.log("  3. None for now");
+    console.log("  3. Local project");
+    console.log("  4. None for now");
     const answer = (await rl.question("Choice [1]: ")).trim() || "1";
 
     if (answer === "1") {
@@ -1103,9 +1157,12 @@ async function promptGitProvider(rl) {
       return "github";
     }
     if (answer === "3") {
+      return "local";
+    }
+    if (answer === "4") {
       return "none";
     }
-    console.log("Please choose 1, 2, or 3.");
+    console.log("Please choose 1, 2, 3, or 4.");
   }
 }
 
@@ -1680,6 +1737,9 @@ function formatProviderSummary(gitProvider) {
   if (!gitProvider?.provider || gitProvider.provider === "none") {
     return "none configured";
   }
+  if (gitProvider.provider === "local") {
+    return "local project";
+  }
   if (gitProvider.baseUrl) {
     return `${gitProvider.provider} (${gitProvider.baseUrl})`;
   }
@@ -1690,11 +1750,29 @@ function formatModelSummary(modelConfig) {
   if (!modelConfig?.provider || !modelConfig?.baseUrl || !modelConfig?.model) {
     return "not configured";
   }
-  return `${modelConfig.provider} | ${modelConfig.model} | ${modelConfig.baseUrl}`;
+  return `${formatModelConnectionMode(modelConfig)} | ${modelConfig.provider} | ${modelConfig.model} | ${modelConfig.baseUrl}`;
+}
+
+function formatModelConnectionMode(modelConfig) {
+  if (!modelConfig?.connectionMode) {
+    return "not configured";
+  }
+  if (modelConfig.connectionMode === "local-runtime") {
+    return "local runtime";
+  }
+  if (modelConfig.connectionMode === "remote-api") {
+    return "remote API";
+  }
+  return modelConfig.connectionMode;
 }
 
 function hasRequiredModelFields(modelConfig) {
-  if (!modelConfig?.provider || !MODEL_PROVIDER_OPTIONS.includes(modelConfig.provider)) {
+  if (
+    !modelConfig?.provider ||
+    !MODEL_PROVIDER_OPTIONS.includes(modelConfig.provider) ||
+    !modelConfig?.connectionMode ||
+    !MODEL_CONNECTION_MODES.includes(modelConfig.connectionMode)
+  ) {
     return false;
   }
 
@@ -1716,7 +1794,10 @@ function normalizeConfig(config) {
   }
 
   if (config.model) {
-    return config;
+    return {
+      ...config,
+      model: normalizeModelConfig(config.model),
+    };
   }
 
   if (config.modelBackend) {
@@ -1734,6 +1815,20 @@ function normalizeConfig(config) {
   }
 
   return config;
+}
+
+function normalizeModelConfig(modelConfig) {
+  if (!modelConfig || typeof modelConfig !== "object") {
+    return modelConfig;
+  }
+
+  const connectionMode = modelConfig.connectionMode
+    || (modelConfig.provider === "ollama" ? "local-runtime" : "remote-api");
+
+  return {
+    ...modelConfig,
+    connectionMode,
+  };
 }
 
 function printChecks(checks) {

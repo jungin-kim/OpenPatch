@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from openpatch_worker.services.common import ensure_git_repository, resolve_project_path
+from openpatch_worker.services.common import is_git_repository, resolve_project_path
 from openpatch_worker.services.subprocess_utils import run_subprocess
 
 MAX_README_CHARS = 4_000
@@ -13,7 +13,8 @@ MAX_FILE_LIST = 20
 class MinimalRepoContext:
     repo_path_value: str
     repo_root_name: str
-    branch: str
+    branch: str | None
+    is_git_repository: bool
     top_level_entries: list[str]
     git_status_excerpt: str
     readme_excerpt: str
@@ -24,28 +25,41 @@ class MinimalRepoContext:
 
 def build_minimal_repo_context(repo_path_value: str) -> MinimalRepoContext:
     repo_path = resolve_project_path(repo_path_value)
-    ensure_git_repository(repo_path)
+    git_repo = is_git_repository(repo_path)
 
-    branch = _safe_git_output(repo_path, ["git", "branch", "--show-current"]) or "unknown"
-    status = _safe_git_output(repo_path, ["git", "status", "--short"]) or "(clean)"
+    branch = _safe_git_output(repo_path, ["git", "branch", "--show-current"]) or None
+    status = _safe_git_output(repo_path, ["git", "status", "--short"]) if git_repo else ""
     top_level_files = _list_top_level_entries(repo_path)
     readme_excerpt = _read_readme_excerpt(repo_path)
-    diff_excerpt = _safe_git_output(repo_path, ["git", "diff"])[:MAX_DIFF_CHARS]
+    diff_excerpt = (
+        _safe_git_output(repo_path, ["git", "diff"])[:MAX_DIFF_CHARS]
+        if git_repo
+        else ""
+    )
 
     summary = (
-        f"Repo '{repo_path_value}' on branch '{branch}' with "
+        f"Project '{repo_path_value}'"
+        f"{f' on branch {branch!r}' if branch else ''} with "
         f"{len(top_level_files)} top-level entries and "
         f"{'a non-empty' if diff_excerpt else 'no'} working diff."
     )
 
     context_parts = [
         f"Repository path: {repo_path_value}",
-        f"Current branch: {branch}",
+        f"Git repository: {'yes' if git_repo else 'no'}",
         "Top-level entries:",
         "\n".join(f"- {entry}" for entry in top_level_files) or "- (none)",
-        "Git status (--short):",
-        status,
     ]
+
+    if branch:
+        context_parts.insert(1, f"Current branch: {branch}")
+    if git_repo:
+        context_parts.extend(
+            [
+                "Git status (--short):",
+                status or "(clean)",
+            ]
+        )
 
     if readme_excerpt:
         context_parts.extend(
@@ -69,8 +83,9 @@ def build_minimal_repo_context(repo_path_value: str) -> MinimalRepoContext:
         repo_path_value=repo_path_value,
         repo_root_name=repo_path.name,
         branch=branch,
+        is_git_repository=git_repo,
         top_level_entries=top_level_files,
-        git_status_excerpt=status,
+        git_status_excerpt=status or "(not a git repository)",
         readme_excerpt=readme_excerpt,
         diff_excerpt=diff_excerpt,
         summary=summary,

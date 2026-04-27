@@ -27,6 +27,7 @@ class Settings:
     openai_model: str | None
     model_request_timeout_seconds: int
     openpatch_config_path: Path
+    configured_git_provider: str | None
 
     def get_provider_settings(self, provider: str) -> ProviderSettings:
         normalized = provider.strip().lower()
@@ -95,6 +96,7 @@ def get_settings() -> Settings:
             os.getenv("OPENPATCH_MODEL_REQUEST_TIMEOUT_SECONDS", "60")
         ),
         openpatch_config_path=openpatch_config_path,
+        configured_git_provider=_resolve_configured_git_provider(runtime_config),
     )
 
 
@@ -145,3 +147,13 @@ def _normalize_optional_value(value: str | None) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _resolve_configured_git_provider(runtime_config: dict) -> str | None:
+    provider_config = runtime_config.get("gitProvider")
+    if not isinstance(provider_config, dict):
+        return None
+    provider = _normalize_optional_value(provider_config.get("provider"))
+    if provider in {"gitlab", "github", "local"}:
+        return provider
+    return None

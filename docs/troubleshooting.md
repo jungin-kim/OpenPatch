@@ -49,10 +49,10 @@ Symptoms:
 Checks:
 
 1. Confirm `LOCAL_REPO_BASE_DIR` exists or can be created.
-2. Confirm `project_path` is relative, not absolute.
+2. For GitLab or GitHub, confirm `project_path` matches the provider path exactly. For local projects, confirm `project_path` is an absolute filesystem path that exists.
 3. Confirm the git provider configuration in `~/.openpatch/config.json` matches the selected provider.
 4. For advanced override flows, confirm provider environment overrides are correct.
-5. Confirm the branch exists on the remote or locally.
+5. Confirm the branch exists on the remote or locally when the selected source is a git repository.
 
 ## GitLab Authentication Fails
 

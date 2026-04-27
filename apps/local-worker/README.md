@@ -70,6 +70,17 @@ curl -X POST http://127.0.0.1:8000/repo/open \
   }'
 ```
 
+Open a local project directly without clone or fetch:
+
+```bash
+curl -X POST http://127.0.0.1:8000/repo/open \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "/Users/you/my-project",
+    "git_provider": "local"
+  }'
+```
+
 GitLab setup:
 
 ```bash
@@ -88,7 +99,7 @@ When `git_provider` is set to `"gitlab"` or `"github"`, the worker builds the cl
 The token stays server-side and is passed to git through temporary command configuration rather than being embedded in the request payload.
 For GitLab, the worker uses a non-interactive token-based HTTP auth flow so private clone and fetch operations do not depend on terminal credential prompts.
 
-Read a file relative to the repository root:
+Read a file relative to the project root:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/fs/read \
@@ -124,9 +135,9 @@ curl -X POST http://127.0.0.1:8000/agent/run \
 
 This first read-only task flow gathers a small local context set before calling the model backend:
 
-- current branch
+- current branch when the project is a git repository
 - top-level repository entries
-- `git status --short`
+- `git status --short` when available
 - a README excerpt when present
 - a truncated working diff when present
 
@@ -141,6 +152,7 @@ The response is structured for the web UI and includes:
 - `top_level_entries`
 - `readme_included`
 - `diff_included`
+- `is_git_repository`
 - `response`
 
 ### Minimal Test Flow

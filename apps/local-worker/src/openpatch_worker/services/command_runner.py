@@ -3,13 +3,12 @@ import subprocess
 
 from openpatch_worker.config import get_settings
 from openpatch_worker.schemas import CommandRunRequest, CommandRunResponse
-from openpatch_worker.services.common import ensure_git_repository, resolve_project_path
+from openpatch_worker.services.common import resolve_project_path
 from openpatch_worker.services.subprocess_utils import run_subprocess
 
 
 def run_command(request: CommandRunRequest) -> CommandRunResponse:
     repo_path = resolve_project_path(request.project_path)
-    ensure_git_repository(repo_path)
     timeout_seconds = request.timeout_seconds or get_settings().default_command_timeout_seconds
 
     # TODO: Insert an approval or allowlist policy check here before executing shell commands.

@@ -93,6 +93,7 @@ High-level success:
 
 - the UI loads provider-backed projects instead of asking for a manual path first
 - recent local projects appear as shortcuts when available
+- local projects can be entered directly as absolute filesystem paths
 - the default branch is selected automatically when the provider returns one
 
 ## Step 4: Open A Private GitLab Repository
@@ -177,6 +178,7 @@ openpatch worker logs
 
 - Confirm `project_path` matches the provider path exactly.
 - For GitLab, use the project namespace and repository path, for example `group/private-repo`.
+- For local projects, use an absolute filesystem path such as `/Users/you/my-project`.
 
 ### Missing GitLab Permissions
 

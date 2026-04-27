@@ -38,5 +38,6 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
         top_level_entries=repo_context.top_level_entries,
         readme_included=bool(repo_context.readme_excerpt),
         diff_included=bool(repo_context.diff_excerpt),
+        is_git_repository=repo_context.is_git_repository,
         response=response_text,
     )

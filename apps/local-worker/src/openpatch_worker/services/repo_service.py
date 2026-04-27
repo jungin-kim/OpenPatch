@@ -4,22 +4,28 @@ import os
 
 from openpatch_worker.config import get_settings
 from openpatch_worker.schemas import RepoOpenRequest, RepoOpenResponse
-from openpatch_worker.services.common import get_repo_base_dir
+from openpatch_worker.services.common import get_repo_base_dir, is_git_repository, resolve_project_path
 from openpatch_worker.services.git_providers import (
     ProviderGitOptions,
     resolve_provider_git_options,
 )
+from openpatch_worker.services.provider_service import record_recent_project
 from openpatch_worker.services.subprocess_utils import run_subprocess
 
 logger = logging.getLogger(__name__)
 
 
 def open_repository(request: RepoOpenRequest) -> RepoOpenResponse:
+    if _is_local_request(request):
+        return _open_local_project(request)
+
     settings = get_settings()
     repo_base_dir = get_repo_base_dir()
     repo_path = _resolve_repo_path(repo_base_dir, request.project_path)
     cloned = False
     provider_options = _get_provider_options(request, settings)
+    if not request.branch:
+        raise ValueError("branch is required for provider-backed repositories")
 
     if not repo_path.exists():
         repo_path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,6 +42,12 @@ def open_repository(request: RepoOpenRequest) -> RepoOpenResponse:
     head_sha = _git_stdout(["git", "rev-parse", "HEAD"], repo_path)
     current_branch = _git_stdout(["git", "branch", "--show-current"], repo_path) or request.branch
     message = "repository cloned and branch checked out" if cloned else "repository fetched and branch checked out"
+    record_recent_project(
+        project_path=request.project_path,
+        git_provider=request.git_provider or provider_options.provider,
+        display_name=request.project_path,
+        is_git_repo=True,
+    )
 
     return RepoOpenResponse(
         project_path=request.project_path,
@@ -43,7 +55,42 @@ def open_repository(request: RepoOpenRequest) -> RepoOpenResponse:
         branch=current_branch,
         head_sha=head_sha,
         cloned=cloned,
+        is_git_repository=True,
         message=message,
+    )
+
+
+def _open_local_project(request: RepoOpenRequest) -> RepoOpenResponse:
+    repo_path = resolve_project_path(request.project_path)
+    git_repo = is_git_repository(repo_path)
+
+    branch = None
+    head_sha = None
+    if git_repo:
+        if request.branch:
+            _checkout_local_branch(repo_path, request.branch)
+        branch = _git_stdout(["git", "branch", "--show-current"], repo_path) or request.branch
+        head_sha = _git_stdout(["git", "rev-parse", "HEAD"], repo_path) or None
+
+    record_recent_project(
+        project_path=str(repo_path),
+        git_provider="local",
+        display_name=repo_path.name,
+        is_git_repo=git_repo,
+    )
+
+    return RepoOpenResponse(
+        project_path=str(repo_path),
+        local_repo_path=str(repo_path),
+        branch=branch,
+        head_sha=head_sha,
+        cloned=False,
+        is_git_repository=git_repo,
+        message=(
+            "local git project opened"
+            if git_repo
+            else "local project opened (no git repository detected)"
+        ),
     )
 
 
@@ -69,6 +116,10 @@ def _get_provider_options(
     return None
 
 
+def _is_local_request(request: RepoOpenRequest) -> bool:
+    return request.git_provider == "local" or Path(request.project_path).expanduser().is_absolute()
+
+
 def _get_clone_url(
     request: RepoOpenRequest,
     provider_options: ProviderGitOptions | None,
@@ -79,7 +130,7 @@ def _get_clone_url(
         return request.git.clone_url
     raise ValueError(
         "Repository is missing locally and no clone source was provided. "
-        "Set git_provider to a configured provider such as 'gitlab' or 'github', or provide git.clone_url."
+        "Set git_provider to a configured provider such as 'gitlab' or 'github', use 'local' for a local project path, or provide git.clone_url."
     )
 
 
@@ -199,6 +250,33 @@ def _checkout_branch(
     raise ValueError(
         f"Branch '{branch}' was not found locally or on origin for repository {repo_path.name}"
     )
+
+
+def _checkout_local_branch(repo_path: Path, branch: str) -> None:
+    result = run_subprocess(
+        command=["git", "rev-parse", "--verify", branch],
+        cwd=repo_path,
+        timeout_seconds=30,
+    )
+    if result.returncode != 0:
+        raise ValueError(
+            f"Branch '{branch}' was not found in local git repository {repo_path.name}"
+        )
+    checkout_result = run_subprocess(
+        command=["git", "checkout", branch],
+        cwd=repo_path,
+        timeout_seconds=60,
+    )
+    if checkout_result.returncode != 0:
+        logger.error(
+            "git checkout failed for local repo='%s' branch='%s': %s",
+            repo_path,
+            branch,
+            _summarize_git_failure(checkout_result.stderr, checkout_result.stdout),
+        )
+        raise RuntimeError(
+            checkout_result.stderr.strip() or f"git checkout {branch} failed for local project"
+        )
 
 
 def _verify_remote_branch_exists(

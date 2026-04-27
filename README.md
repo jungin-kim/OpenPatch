@@ -34,7 +34,7 @@ The current working milestone is a real end-to-end read-only flow:
 - onboard a machine with the CLI
 - start the local worker
 - verify worker and model connectivity
-- open a private repository locally through the worker
+- open a private GitLab or GitHub repository locally through the worker, or attach a local project path
 - ask a read-only repository question from the web UI
 - receive a response in the browser
 
@@ -46,13 +46,13 @@ The first public alpha flow is:
 
 1. Install the CLI.
 2. Run `openpatch onboard`.
-3. Choose a model provider such as Ollama.
-4. Let OpenPatch detect or guide the Ollama setup.
+3. Choose a model connection mode: local model runtime or remote model API.
+4. If you choose a local runtime, let OpenPatch detect or guide the Ollama setup.
 5. Let OpenPatch start the local worker and verify health.
 6. Run `openpatch doctor`.
 7. Run `openpatch status`.
 8. Start the web UI.
-9. Open a private GitLab repository through the UI.
+9. Open a private GitLab or GitHub repository, or choose a local project in the UI.
 10. Ask a read-only repository question.
 11. Review the response in the browser.
 
@@ -66,17 +66,18 @@ curl http://127.0.0.1:8000/health
 
 For a simple local-first setup during onboarding, choose:
 
+- model connection mode: `local runtime`
 - model provider: `ollama`
 - base URL: `http://127.0.0.1:11434/v1`
 - model name: `qwen2.5-coder:7b`
-- git provider: `gitlab`
+- git provider: `gitlab`, `github`, or `local`
 
 High-level success looks like this:
 
 - `openpatch onboard` detects or guides the local Ollama setup
 - `openpatch onboard` starts the local worker and verifies worker and model connectivity
 - `openpatch doctor` confirms the worker and model are healthy after onboarding
-- `openpatch status` shows the configured worker URL, model provider, and worker health details
+- `openpatch status` shows the configured worker URL, model connection mode, model provider, and worker health details
 - `curl http://127.0.0.1:8000/health` returns JSON with `status: ok`
 - the web UI can load provider-backed project and branch lists
 - the web UI can open a private repository through `/repo/open`
@@ -89,11 +90,12 @@ All real runtime config lives under `~/.openpatch`, not inside the repository.
 
 OpenPatch currently supports these alpha-stage capabilities:
 
-- CLI onboarding with model-provider-first setup
+- CLI onboarding with a model-connection-first setup
 - local worker lifecycle management through `openpatch worker start`, `stop`, `restart`, `status`, and `logs`
 - bounded `doctor` and `status` checks for worker and model connectivity
 - provider-backed repository open flows for GitLab and GitHub
-- provider-backed project and branch discovery for guided repository selection
+- first-class local project open flows using absolute filesystem paths
+- provider-backed and local project discovery for guided repository selection
 - non-interactive private repository clone and fetch through the local worker
 - read-only repository questions through the local worker and centralized model backend
 - a simple hosted web UI flow for repository open, question submission, and response display
@@ -114,7 +116,8 @@ OpenPatch is not a full coding-agent product yet. Current limitations include:
 The current public contract is intentionally small and explicit:
 
 - use `project_path` as the repository identifier across worker APIs
-- use `gitlab` or `github` for provider-backed repository access
+- use `gitlab`, `github`, or `local` as repository sources
+- choose either a local model runtime or a remote model API during onboarding
 - keep user runtime configuration under `~/.openpatch/config.json`
 - treat raw environment variables as advanced overrides rather than the normal onboarding path
 
@@ -126,7 +129,7 @@ The current end-to-end read-only path is:
 2. `openpatch doctor`
 3. `openpatch status`
 4. choose a provider, project, and branch in the web UI
-5. open a private GitLab repository through the worker
+5. open a private GitLab repository, GitHub repository, or local project through the worker
 6. ask a read-only repository question from the web UI
 7. receive a response in the browser
 
@@ -139,6 +142,17 @@ curl -X POST http://127.0.0.1:8000/repo/open \
     "project_path": "group/private-repo",
     "branch": "main",
     "git_provider": "gitlab"
+  }'
+```
+
+For a local project, use an absolute filesystem path instead:
+
+```bash
+curl -X POST http://127.0.0.1:8000/repo/open \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "/Users/you/my-project",
+    "git_provider": "local"
   }'
 ```
 
@@ -162,7 +176,7 @@ curl -X POST http://127.0.0.1:8000/agent/run \
 - Port already in use:
   If `127.0.0.1:8000` is occupied, `openpatch worker start` fails fast with a clear error. Stop the other process or choose a different worker URL and port.
 - Wrong repo path:
-  If `repo/open` fails, confirm `project_path` matches the provider path exactly and is relative, not absolute.
+  For GitLab and GitHub, confirm `project_path` matches the provider path exactly. For local projects, use an absolute filesystem path that already exists on disk.
 - Missing repository permissions:
   If `repo/open` reports repository not found or permission denied, confirm the stored GitLab or GitHub token can read the target private repository.
 - Ollama not running:

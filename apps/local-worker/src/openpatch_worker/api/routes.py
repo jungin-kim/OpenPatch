@@ -56,13 +56,7 @@ def health() -> HealthResponse:
         status="ok",
         service="openpatch-local-worker",
         repo_base_dir=str(settings.repo_base_dir),
-        configured_git_provider=(
-            "gitlab"
-            if settings.gitlab_base_url and settings.gitlab_token
-            else "github"
-            if settings.github_base_url and settings.github_token
-            else None
-        ),
+        configured_git_provider=settings.configured_git_provider,
         recent_projects=list_recent_project_paths(),
     )
 

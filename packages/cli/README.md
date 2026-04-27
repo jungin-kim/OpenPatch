@@ -40,7 +40,7 @@ At a high level, success means:
 - local Ollama models are detected or OpenPatch offers to pull a recommended model
 - the worker starts in the background during onboarding
 - onboarding verifies worker health and model connectivity
-- `status` shows the configured worker URL and model provider clearly
+- `status` shows the configured worker URL, model connection mode, and model provider clearly
 - the local health endpoint returns JSON with `status: ok`
 - the machine is ready for the read-only web UI flow
 
@@ -48,12 +48,12 @@ At a high level, success means:
 
 ### `openpatch onboard`
 
-Creates the local OpenPatch config directory under `~/.openpatch`, writes a config file, starts with a model provider choice, asks only for the fields relevant to that provider, collects git provider settings, prepares local runtime directories, starts the local worker, and verifies the setup.
+Creates the local OpenPatch config directory under `~/.openpatch`, writes a config file, starts with a model connection choice, asks only for the fields relevant to that runtime or API type, collects git provider settings, prepares local runtime directories, starts the local worker, and verifies the setup.
 
-For a beginner-friendly local setup, choose `Ollama` during onboarding and accept the default base URL `http://127.0.0.1:11434/v1`.
+For a beginner-friendly local setup, choose `Local model runtime`, then `Ollama`, and accept the default base URL `http://127.0.0.1:11434/v1`.
 The Ollama path is now guided: OpenPatch detects whether `ollama` is installed, can offer a Homebrew install on macOS, checks whether the Ollama server is running, lists available local models, and can offer to pull `qwen2.5-coder:7b`.
 For GitLab or GitHub repository flows, onboarding now stores the provider base URL and token in `~/.openpatch/config.json` so the local worker can use them without extra manual exports.
-Across the product, the repository identifier is `project_path`, and the supported onboarding provider choices for repository access are `gitlab`, `github`, or `none`.
+Across the product, the repository identifier is `project_path`, and the supported onboarding provider choices for repository access are `gitlab`, `github`, `local`, or `none`.
 
 ### `openpatch config show`
 
@@ -61,11 +61,11 @@ Prints the current local OpenPatch configuration with secrets redacted.
 
 ### `openpatch doctor`
 
-Checks whether the local configuration, worker detection, worker process, worker reachability, worker URL, model provider config, model connectivity, and git provider configuration look healthy. All checks use short bounded timeouts and fail fast.
+Checks whether the local configuration, worker detection, worker process, worker reachability, worker URL, model connection config, model connectivity, and git provider configuration look healthy. All checks use short bounded timeouts and fail fast.
 
 ### `openpatch status`
 
-Prints the current OpenPatch configuration summary and worker status, including worker URL, reachability, configured git provider, repo base directory, model provider, model summary, and model connectivity detail.
+Prints the current OpenPatch configuration summary and worker status, including worker URL, reachability, configured git provider, repo base directory, model connection mode, model provider, model summary, and model connectivity detail.
 
 ### `openpatch worker start`
 
@@ -100,17 +100,22 @@ The current CLI uses a development-friendly runtime strategy:
 This is intentionally simple and inspectable. It is not yet an OS-level daemon installer. The worker runs as a background process, not an attached foreground process, and startup waits are short and bounded.
 The CLI also checks whether the configured worker port is already in use before starting, and surfaces clear startup diagnostics when import, bind, or health checks fail.
 
-## Model Provider Choices
+## Model Connection Choices
 
-The onboarding flow currently supports:
+The onboarding flow starts with two first-class model connection modes:
 
+- `local-runtime`
+- `remote-api`
+
+Under those modes, OpenPatch currently supports:
+
+- `ollama`
+- `openai-compatible`
 - `openai`
 - `anthropic`
 - `gemini`
-- `ollama`
-- `openai-compatible`
 
-Ollama is treated as a first-class option with product-friendly defaults for a local model setup.
+Ollama is treated as the first-class local self-served option with product-friendly defaults and guided setup.
 
 ## Standard User Flow
 
@@ -125,6 +130,7 @@ openpatch status
 
 Example choices during onboarding:
 
+- model connection mode: `Local model runtime`
 - model provider: `Ollama`
 - base URL: `http://127.0.0.1:11434/v1`
 - model name: `qwen2.5-coder:7b`

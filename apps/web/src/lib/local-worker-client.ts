@@ -38,9 +38,10 @@ export type ProviderBranchesPayload = {
 export type RepoOpenPayload = {
   project_path: string;
   local_repo_path: string;
-  branch: string;
-  head_sha: string;
+  branch?: string | null;
+  head_sha?: string | null;
   cloned: boolean;
+  is_git_repository: boolean;
   message: string;
 };
 
@@ -56,12 +57,13 @@ export type AgentRunPayload = {
   project_path: string;
   task: string;
   model: string;
-  branch: string;
+  branch?: string | null;
   repo_root_name: string;
   context_summary: string;
   top_level_entries: string[];
   readme_included: boolean;
   diff_included: boolean;
+  is_git_repository: boolean;
   response: string;
 };
 
@@ -127,7 +129,7 @@ export async function getProviderBranches(input: {
 
 export async function openRepository(input: {
   project_path: string;
-  branch: string;
+  branch?: string;
   git_provider?: string;
 }): Promise<RepoOpenPayload> {
   const response = await fetch("/api/worker/repo-open", {
