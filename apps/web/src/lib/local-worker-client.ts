@@ -16,9 +16,15 @@ export type RepoOpenPayload = {
 };
 
 export type AgentRunPayload = {
-  repo_path: string;
+  project_path: string;
+  task: string;
   model: string;
+  branch: string;
+  repo_root_name: string;
   context_summary: string;
+  top_level_entries: string[];
+  readme_included: boolean;
+  diff_included: boolean;
   response: string;
 };
 
@@ -65,7 +71,7 @@ export async function openRepository(input: {
 }
 
 export async function runAgentTask(input: {
-  repo_path: string;
+  project_path: string;
   task: string;
 }): Promise<AgentRunPayload> {
   const response = await fetch("/api/worker/agent-run", {

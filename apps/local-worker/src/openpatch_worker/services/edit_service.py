@@ -16,11 +16,11 @@ MAX_FILE_CHARS = 12_000
 
 
 def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileResponse:
-    repo_path = resolve_project_path(request.repo_path)
+    repo_path = resolve_project_path(request.project_path)
     ensure_git_repository(repo_path)
     target_path = ensure_safe_write_path(repo_path, request.relative_path)
     original_content = _read_existing_text(target_path)
-    repo_context = build_minimal_repo_context(request.repo_path)
+    repo_context = build_minimal_repo_context(request.project_path)
     client = OpenAICompatibleModelClient()
 
     system_prompt = (
@@ -43,7 +43,7 @@ def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileRespo
     ).strip()
 
     return AgentProposeFileResponse(
-        repo_path=request.repo_path,
+        project_path=request.project_path,
         relative_path=request.relative_path,
         model=client.model_name,
         context_summary=repo_context.summary,

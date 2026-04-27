@@ -34,7 +34,7 @@ The onboarding flow will:
 2. create a config file
 3. prompt for a model provider first
 4. ask only for the model fields that match that provider
-5. prompt for git provider selection and provider base URL
+5. prompt for git provider selection, provider base URL, and provider token when needed
 6. prompt for a local repo base directory
 7. detect whether a local worker installation is already present
 8. prepare local runtime directories under `~/.openpatch`
@@ -175,6 +175,7 @@ openpatch onboard
 - base URL: `http://127.0.0.1:11434/v1`
 - model name: `llama3.2` or another local Ollama model
 - git provider: your choice, or `None for now`
+- if you choose GitLab or GitHub, provide the provider base URL and token so the worker can reuse the same config later
 - local repo base directory: accept the default or choose your own
 
 4. Start the worker if you skipped it during onboarding:

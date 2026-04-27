@@ -99,7 +99,7 @@ export function OpenPatchConsole() {
 
     try {
       const payload = await runAgentTask({
-        repo_path: projectPath.trim(),
+        project_path: projectPath.trim(),
         task: task.trim(),
       });
       setTaskResult(payload);

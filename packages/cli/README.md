@@ -49,6 +49,7 @@ At a high level, success means:
 Creates the local OpenPatch config directory under `~/.openpatch`, writes a config file, starts with a model provider choice, asks only for the fields relevant to that provider, collects git provider settings, prepares local runtime directories, and can optionally start the local worker.
 
 For a beginner-friendly local setup, choose `Ollama` during onboarding and accept the default base URL `http://127.0.0.1:11434/v1`.
+For GitLab or GitHub repository flows, onboarding now stores the provider base URL and token in `~/.openpatch/config.json` so the local worker can use them without extra manual exports.
 
 ### `openpatch config show`
 

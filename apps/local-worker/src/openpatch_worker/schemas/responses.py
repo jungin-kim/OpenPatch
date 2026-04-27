@@ -78,7 +78,7 @@ class GitMergeRequestCreateResponse(BaseModel):
 
 
 class AgentRunResponse(BaseModel):
-    repo_path: str
+    project_path: str
     task: str
     model: str
     branch: str
@@ -91,7 +91,7 @@ class AgentRunResponse(BaseModel):
 
 
 class AgentProposeFileResponse(BaseModel):
-    repo_path: str
+    project_path: str
     relative_path: str
     model: str
     context_summary: str

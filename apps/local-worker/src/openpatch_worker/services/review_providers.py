@@ -28,13 +28,18 @@ def _create_gitlab_merge_request(
     context: MergeRequestProviderContext,
 ) -> GitMergeRequestCreateResponse:
     settings = context.settings
-    if not settings.gitlab_base_url:
-        raise ValueError("GITLAB_BASE_URL is required when git_provider is 'gitlab'.")
-    if not settings.gitlab_token:
-        raise ValueError("GITLAB_TOKEN is required when git_provider is 'gitlab'.")
+    provider_settings = settings.get_provider_settings("gitlab")
+    if not provider_settings.base_url:
+        raise ValueError(
+            "gitlab base URL is not configured. Update ~/.openpatch/config.json with gitProvider.baseUrl or set an environment override."
+        )
+    if not provider_settings.token:
+        raise ValueError(
+            "gitlab token is not configured. Update ~/.openpatch/config.json with gitProvider.token or set an environment override."
+        )
 
     encoded_project = parse.quote(request_payload.project_path, safe="")
-    url = f"{settings.gitlab_base_url}/api/v4/projects/{encoded_project}/merge_requests"
+    url = f"{provider_settings.base_url}/api/v4/projects/{encoded_project}/merge_requests"
     payload = {
         "source_branch": request_payload.source_branch,
         "target_branch": request_payload.target_branch,
@@ -47,7 +52,7 @@ def _create_gitlab_merge_request(
         url=url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
-            "PRIVATE-TOKEN": settings.gitlab_token,
+            "PRIVATE-TOKEN": provider_settings.token,
             "Content-Type": "application/json",
         },
         method="POST",

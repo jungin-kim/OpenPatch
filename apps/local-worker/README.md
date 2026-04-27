@@ -73,16 +73,16 @@ curl -X POST http://127.0.0.1:8000/repo/open \
 GitLab setup:
 
 ```bash
-export LOCAL_REPO_BASE_DIR="$HOME/.openpatch/repos"
-export GITLAB_BASE_URL="https://gitlab.example.com"
-export GITLAB_TOKEN="your-gitlab-token"
+cat ~/.openpatch/config.json
 uvicorn openpatch_worker.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-When `git_provider` is set to `"gitlab"`, the worker builds the clone URL as:
+In the product flow, git provider settings come from `~/.openpatch/config.json` first, with environment variables remaining available as advanced overrides.
+
+When `git_provider` is set to `"gitlab"` or `"github"`, the worker builds the clone URL as:
 
 ```text
-{GITLAB_BASE_URL}/{project_path}.git
+{provider_base_url}/{project_path}.git
 ```
 
 The token stays server-side and is passed to git through temporary command configuration rather than being embedded in the request payload.
@@ -116,7 +116,7 @@ Run a task through the centralized model backend using minimal local context:
 curl -X POST http://127.0.0.1:8000/agent/run \
   -H "Content-Type: application/json" \
   -d '{
-    "repo_path": "examples/demo-repo",
+    "project_path": "examples/demo-repo",
     "task": "Summarize the repository and identify the most likely starting point for changes."
   }'
 ```
@@ -131,7 +131,7 @@ This first read-only task flow gathers a small local context set before calling 
 
 The response is structured for the web UI and includes:
 
-- `repo_path`
+- `project_path`
 - `task`
 - `model`
 - `branch`
@@ -157,7 +157,7 @@ curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/agent/run \
   -H "Content-Type: application/json" \
   -d '{
-    "repo_path": "examples/demo-repo",
+    "project_path": "examples/demo-repo",
     "task": "Summarize the repository and recommend the best starting point for understanding the codebase."
   }'
 ```
@@ -175,7 +175,7 @@ Ask the model for a full replacement file proposal:
 curl -X POST http://127.0.0.1:8000/agent/propose-file \
   -H "Content-Type: application/json" \
   -d '{
-    "repo_path": "examples/demo-repo",
+    "project_path": "examples/demo-repo",
     "relative_path": "README.md",
     "instruction": "Rewrite the README introduction to explain the local worker architecture more clearly."
   }'
@@ -259,7 +259,8 @@ curl -X POST http://127.0.0.1:8000/git/merge-request \
 
 - The worker is intended to bind to `localhost` during early development.
 - All repositories are scoped under `LOCAL_REPO_BASE_DIR`.
-- GitLab clone and fetch support uses `GITLAB_BASE_URL` and `GITLAB_TOKEN` from the server environment.
+- Git provider settings are resolved from `~/.openpatch/config.json` first, with environment variables available as advanced overrides.
+- GitLab and GitHub clone and fetch support use the same provider resolution path.
 - Centralized model calls use `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL`.
 - `/agent/run` gathers a small, explicit repo summary locally before sending it upstream.
 - `/agent/run` is intentionally read-only in this first version and is designed for repository understanding tasks.

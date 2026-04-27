@@ -35,6 +35,11 @@ Optional, for GitLab workflows:
 - a GitLab base URL
 - a GitLab token with the permissions needed for clone, push, and merge request creation
 
+Optional, for GitHub workflows:
+
+- a GitHub base URL
+- a GitHub token with the permissions needed for clone and push
+
 ## Setup Steps
 
 1. Create a virtual environment.
@@ -62,10 +67,14 @@ Required variables for the basic worker flow:
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 
-Optional variables:
+Git provider settings normally come from `~/.openpatch/config.json`, which is written by `openpatch onboard`.
+
+Optional advanced override variables:
 
 - `GITLAB_BASE_URL`
 - `GITLAB_TOKEN`
+- `GITHUB_BASE_URL`
+- `GITHUB_TOKEN`
 - `OPENPATCH_COMMAND_TIMEOUT_SECONDS`
 - `OPENPATCH_GIT_CLONE_TIMEOUT_SECONDS`
 - `OPENPATCH_GIT_FETCH_TIMEOUT_SECONDS`
@@ -94,6 +103,8 @@ You should receive a JSON response indicating:
 - `status: ok`
 - `service: openpatch-local-worker`
 - the configured `repo_base_dir`
+
+For a normal onboarded product flow, the worker should also be able to resolve git provider settings from `~/.openpatch/config.json` without requiring manual provider exports.
 
 ## Common User Flows
 

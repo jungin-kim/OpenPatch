@@ -447,6 +447,18 @@ async function startWorker({ interactive }) {
     if (config.gitProvider.baseUrl) {
       env.GITLAB_BASE_URL = config.gitProvider.baseUrl;
     }
+    if (config.gitProvider.token) {
+      env.GITLAB_TOKEN = config.gitProvider.token;
+    }
+  }
+
+  if (config.gitProvider?.provider === "github") {
+    if (config.gitProvider.baseUrl) {
+      env.GITHUB_BASE_URL = config.gitProvider.baseUrl;
+    }
+    if (config.gitProvider.token) {
+      env.GITHUB_TOKEN = config.gitProvider.token;
+    }
   }
 
   console.log("Launching OpenPatch local worker");
@@ -822,7 +834,8 @@ async function promptGitProviderConfig(rl, provider) {
       "GitLab base URL",
       "https://gitlab.com",
     );
-    return { provider: "gitlab", baseUrl };
+    const token = await promptWithDefault(rl, "GitLab token", "");
+    return { provider: "gitlab", baseUrl, token };
   }
 
   if (provider === "github") {
@@ -831,7 +844,8 @@ async function promptGitProviderConfig(rl, provider) {
       "GitHub base URL",
       "https://github.com",
     );
-    return { provider: "github", baseUrl };
+    const token = await promptWithDefault(rl, "GitHub token", "");
+    return { provider: "github", baseUrl, token };
   }
 
   return { provider: "none" };
@@ -1339,6 +1353,14 @@ function redactConfig(config) {
       ...normalized.model,
       apiKey: normalized.model?.apiKey ? redactSecret(normalized.model.apiKey) : "",
     },
+    gitProvider: normalized.gitProvider
+      ? {
+          ...normalized.gitProvider,
+          token: normalized.gitProvider.token
+            ? redactSecret(normalized.gitProvider.token)
+            : "",
+        }
+      : normalized.gitProvider,
   };
   delete redacted.modelBackend;
   return redacted;

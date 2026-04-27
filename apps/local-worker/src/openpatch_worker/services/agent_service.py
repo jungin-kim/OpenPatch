@@ -7,7 +7,7 @@ from openpatch_worker.services.model_client import (
 
 
 def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
-    repo_context = build_minimal_repo_context(request.repo_path)
+    repo_context = build_minimal_repo_context(request.project_path)
     client = OpenAICompatibleModelClient()
 
     system_prompt = (
@@ -29,7 +29,7 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
     )
 
     return AgentRunResponse(
-        repo_path=request.repo_path,
+        project_path=request.project_path,
         task=request.task,
         model=client.model_name,
         branch=repo_context.branch,

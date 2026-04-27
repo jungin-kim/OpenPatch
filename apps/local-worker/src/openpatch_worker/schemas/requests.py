@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 
 class GitProviderMetadata(BaseModel):
@@ -57,8 +57,8 @@ class RepoOpenRequest(BaseModel):
         normalized = value.strip().lower()
         if not normalized:
             return None
-        if normalized not in {"gitlab"}:
-            raise ValueError("git_provider must be one of: gitlab")
+        if normalized not in {"gitlab", "github"}:
+            raise ValueError("git_provider must be one of: gitlab, github")
         return normalized
 
 
@@ -239,8 +239,8 @@ class GitPushRequest(BaseModel):
         normalized = value.strip().lower()
         if not normalized:
             return None
-        if normalized not in {"gitlab"}:
-            raise ValueError("git_provider must be one of: gitlab")
+        if normalized not in {"gitlab", "github"}:
+            raise ValueError("git_provider must be one of: gitlab, github")
         return normalized
 
 
@@ -289,22 +289,23 @@ class GitMergeRequestCreateRequest(BaseModel):
 
 
 class AgentRunRequest(BaseModel):
-    repo_path: str = Field(
+    project_path: str = Field(
         ...,
         description="Repository path relative to the configured local repo base directory.",
+        validation_alias=AliasChoices("project_path", "repo_path"),
     )
     task: str = Field(..., description="User task sent to the centralized model backend.")
 
-    @field_validator("repo_path")
+    @field_validator("project_path")
     @classmethod
-    def validate_repo_path(cls, value: str) -> str:
+    def validate_project_path(cls, value: str) -> str:
         path = Path(value)
         if not value.strip():
-            raise ValueError("repo_path must not be empty")
+            raise ValueError("project_path must not be empty")
         if path.is_absolute():
-            raise ValueError("repo_path must be relative")
+            raise ValueError("project_path must be relative")
         if ".." in path.parts:
-            raise ValueError("repo_path must not escape the repo base directory")
+            raise ValueError("project_path must not escape the repo base directory")
         return value.strip("/")
 
     @field_validator("task")
@@ -316,9 +317,10 @@ class AgentRunRequest(BaseModel):
 
 
 class AgentProposeFileRequest(BaseModel):
-    repo_path: str = Field(
+    project_path: str = Field(
         ...,
         description="Repository path relative to the configured local repo base directory.",
+        validation_alias=AliasChoices("project_path", "repo_path"),
     )
     relative_path: str = Field(
         ...,
@@ -329,7 +331,7 @@ class AgentProposeFileRequest(BaseModel):
         description="Requested change instruction for the target file.",
     )
 
-    @field_validator("repo_path", "relative_path")
+    @field_validator("project_path", "relative_path")
     @classmethod
     def validate_relative_values(cls, value: str, info) -> str:
         path = Path(value)

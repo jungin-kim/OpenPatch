@@ -112,6 +112,7 @@ curl http://127.0.0.1:8000/health
 All real runtime config lives under `~/.openpatch`, not inside the repository.
 
 During onboarding, OpenPatch now starts with a model provider choice so setup feels product-oriented instead of infrastructure-heavy. Current provider options include OpenAI, Anthropic, Gemini, Ollama, and OpenAI-compatible backends.
+Onboarded GitLab and GitHub settings are also stored under `~/.openpatch/config.json` so the local worker can reuse the same provider configuration without extra manual exports.
 
 ### Example Ollama Flow
 

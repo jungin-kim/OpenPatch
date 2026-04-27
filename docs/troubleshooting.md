@@ -50,8 +50,9 @@ Checks:
 
 1. Confirm `LOCAL_REPO_BASE_DIR` exists or can be created.
 2. Confirm `project_path` is relative, not absolute.
-3. For GitLab flows, confirm `GITLAB_BASE_URL` and `GITLAB_TOKEN` are set.
-4. Confirm the branch exists on the remote or locally.
+3. Confirm the git provider configuration in `~/.openpatch/config.json` matches the selected provider.
+4. For advanced override flows, confirm provider environment overrides are correct.
+5. Confirm the branch exists on the remote or locally.
 
 ## GitLab Authentication Fails
 
@@ -62,10 +63,22 @@ Symptoms:
 
 Checks:
 
-1. Confirm `GITLAB_BASE_URL` matches the actual GitLab host.
-2. Confirm `GITLAB_TOKEN` is valid and not expired.
+1. Confirm `~/.openpatch/config.json` contains the correct GitLab base URL and token.
+2. Confirm the token is valid and not expired.
 3. Confirm the token has sufficient repository and API permissions.
 4. Confirm the `project_path` matches the GitLab project path.
+
+## GitHub Authentication Fails
+
+Symptoms:
+
+- clone or push fails for GitHub-backed repositories
+
+Checks:
+
+1. Confirm `~/.openpatch/config.json` contains the correct GitHub base URL and token.
+2. Confirm the token is valid and has repository access.
+3. Confirm the `project_path` matches the GitHub owner and repository path.
 
 ## Model API Request Fails
 

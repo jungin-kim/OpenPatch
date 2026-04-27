@@ -77,7 +77,8 @@ def _get_clone_url(
     if request.git and request.git.clone_url:
         return request.git.clone_url
     raise ValueError(
-        "Repository is missing locally and no clone source was provided. Set git_provider='gitlab' or provide git.clone_url."
+        "Repository is missing locally and no clone source was provided. "
+        "Set git_provider to a configured provider such as 'gitlab' or 'github', or provide git.clone_url."
     )
 
 
