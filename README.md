@@ -90,23 +90,54 @@ See [the roadmap](docs/roadmap.md) for the fuller phase breakdown.
 
 ## Getting Started
 
-The standard user flow is:
+The first successful local onboarding flow looks like this:
 
 1. Install the CLI.
 2. Run `openpatch onboard`.
-3. Run `openpatch worker start`.
-4. Run `openpatch doctor`.
+3. Choose a model provider such as Ollama.
+4. Run `openpatch worker start`.
+5. Run `openpatch doctor`.
+6. Run `openpatch status`.
+7. Verify the local worker health endpoint.
 
 ```bash
 npm install -g openpatch
 openpatch onboard
 openpatch worker start
 openpatch doctor
+openpatch status
+curl http://127.0.0.1:8000/health
 ```
 
 All real runtime config lives under `~/.openpatch`, not inside the repository.
 
 During onboarding, OpenPatch now starts with a model provider choice so setup feels product-oriented instead of infrastructure-heavy. Current provider options include OpenAI, Anthropic, Gemini, Ollama, and OpenAI-compatible backends.
+
+### Example Ollama Flow
+
+If you want a simple local-first setup, choose `Ollama` during onboarding and accept the default base URL:
+
+- provider: `ollama`
+- base URL: `http://127.0.0.1:11434/v1`
+- model name: for example `llama3.2`
+
+High-level success looks like this:
+
+- `openpatch worker start` reports that the local worker started
+- `openpatch doctor` shows the worker process as running and the worker as reachable
+- `openpatch status` shows the configured worker URL, model provider, and worker health details
+- `curl http://127.0.0.1:8000/health` returns a small JSON response with `status: ok`
+
+### Quick Troubleshooting
+
+- Worker import or startup failure:
+  Run `openpatch worker logs`. The CLI now prints the absolute worker `src` path and `PYTHONPATH` during startup, which helps confirm the repo-source worker layout is being launched correctly.
+- Port already in use:
+  If `127.0.0.1:8000` is occupied, `openpatch worker start` fails fast with a clear error instead of retrying indefinitely. Stop the other process or choose a different worker URL and port.
+- Ollama not running:
+  `openpatch doctor` or `openpatch status` will report model connectivity failure. Start Ollama and confirm the configured models endpoint is reachable.
+- Missing model:
+  If Ollama is running but the selected model is unavailable, pull the model locally and rerun `openpatch doctor`.
 
 Helpful onboarding docs:
 
@@ -154,7 +185,7 @@ OpenPatch now includes a real local worker lifecycle flow through the CLI:
 The current implementation manages a development-friendly background worker process with runtime state and logs under `~/.openpatch`, plus a provider-first model onboarding flow that clearly shows which model backend is configured.
 
 The CLI now uses bounded startup and health-check timeouts so `openpatch onboard`, `openpatch doctor`, and `openpatch status` fail fast instead of waiting indefinitely. You can inspect the runtime directly with `openpatch worker status` and `openpatch worker logs`.
-For the repo-source worker, the CLI also handles the Python `src` layout automatically during startup, so users do not need to set `PYTHONPATH` by hand.
+For the repo-source worker, the CLI also handles the Python `src` layout automatically during startup with an absolute `PYTHONPATH`, so users do not need to set `PYTHONPATH` by hand.
 
 ## License
 

@@ -3,6 +3,7 @@ const fsp = require("node:fs/promises");
 const path = require("node:path");
 const os = require("node:os");
 const readline = require("node:readline/promises");
+const net = require("node:net");
 const { spawn } = require("node:child_process");
 const { stdin, stdout } = require("node:process");
 
@@ -19,6 +20,7 @@ const DEFAULT_REPO_BASE_DIR = path.join(os.homedir(), ".openpatch", "repos");
 const DEFAULT_WORKER_HEALTH_TIMEOUT_MS = 1500;
 const DEFAULT_WORKER_START_TIMEOUT_MS = 8000;
 const DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS = 2000;
+const DEFAULT_PORT_CHECK_TIMEOUT_MS = 1000;
 const DEFAULT_LOG_TAIL_LINES = 40;
 const MODEL_PROVIDER_OPTIONS = [
   "openai",
@@ -226,9 +228,12 @@ async function runDoctor() {
   const config = await readConfig();
   const workerDetection = await resolveWorkerInstallation(config, process.cwd());
   const runtimeState = await readState();
+  const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
+  const workerBinding = parseWorkerBinding(workerUrl);
   const workerRunning = await isWorkerProcessRunning(runtimeState);
+  const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
   const workerHealth = await checkWorkerHealth(
-    config.worker?.baseUrl || DEFAULT_WORKER_URL,
+    workerUrl,
     DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
   );
   const modelConnectivity = await checkModelConnectivity(
@@ -250,14 +255,21 @@ async function runDoctor() {
     makeCheck(
       "Worker process is running",
       workerRunning.running,
-      workerRunning.message,
+      describeWorkerProcessState(workerRunning, runtimeState),
     ),
   );
   checks.push(
     makeCheck(
       "Local worker reachable",
       workerHealth.reachable,
-      workerHealth.message,
+      describeWorkerHealthState(workerHealth, runtimeState, portState),
+    ),
+  );
+  checks.push(
+    makeCheck(
+      "Worker port availability",
+      !portState.inUse || workerHealth.reachable,
+      describePortState(portState, workerUrl, workerHealth.reachable),
     ),
   );
   checks.push(
@@ -292,9 +304,11 @@ async function runDoctor() {
   );
   checks.push(
     makeCheck(
-      "Git provider config present",
+      "Git provider configured",
       Boolean(config.gitProvider?.provider && config.gitProvider.provider !== "none"),
-      "Expected a selected git provider in the local config.",
+      config.gitProvider?.provider && config.gitProvider.provider !== "none"
+        ? `Configured git provider: ${formatProviderSummary(config.gitProvider)}`
+        : "No git provider is configured yet.",
     ),
   );
 
@@ -315,9 +329,12 @@ async function runStatus() {
 
   const config = await readConfig();
   const runtimeState = await readState();
+  const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
+  const workerBinding = parseWorkerBinding(workerUrl);
   const workerRunning = await isWorkerProcessRunning(runtimeState);
+  const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
   const workerHealth = await checkWorkerHealth(
-    config.worker?.baseUrl || DEFAULT_WORKER_URL,
+    workerUrl,
     DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
   );
   const modelConnectivity = await checkModelConnectivity(
@@ -328,13 +345,21 @@ async function runStatus() {
   console.log("OpenPatch status");
   console.log("");
   console.log(`Config file: ${CONFIG_PATH}`);
-  console.log(`Configured worker URL: ${config.worker?.baseUrl || DEFAULT_WORKER_URL}`);
+  console.log(`Configured worker URL: ${workerUrl}`);
   console.log(`Worker install mode: ${config.worker?.installMode || "unknown"}`);
   console.log(`Worker detected path: ${config.worker?.detectedPath || "not detected"}`);
   console.log(`Worker process running: ${workerRunning.running ? "yes" : "no"}`);
-  console.log(`Worker process detail: ${workerRunning.message}`);
+  console.log(`Worker process detail: ${describeWorkerProcessState(workerRunning, runtimeState)}`);
+  console.log(`Worker port in use: ${portState.inUse ? "yes" : "no"}`);
+  console.log(`Worker port detail: ${describePortState(portState, workerUrl, workerHealth.reachable)}`);
   console.log(`Worker reachable: ${workerHealth.reachable ? "yes" : "no"}`);
-  console.log(`Worker health detail: ${workerHealth.message}`);
+  console.log(`Worker health detail: ${describeWorkerHealthState(workerHealth, runtimeState, portState)}`);
+  if (runtimeState?.failureType) {
+    console.log(`Last startup failure: ${runtimeState.failureType}`);
+  }
+  if (runtimeState?.lastError) {
+    console.log(`Last startup detail: ${runtimeState.lastError}`);
+  }
   console.log(`Worker pid file: ${runtimeState?.pidFile || PID_PATH}`);
   console.log(`Worker log file: ${runtimeState?.logPath || WORKER_LOG_PATH}`);
   console.log(`Model provider: ${config.model?.provider || "not configured"}`);
@@ -350,7 +375,7 @@ async function startWorker({ interactive }) {
   await ensureBaseDirectories();
   const config = await requireConfig();
   const workerInstallation = await resolveWorkerInstallation(config, process.cwd());
-  const runtimeState = await readState();
+  let runtimeState = await readState();
   const running = await isWorkerProcessRunning(runtimeState);
   const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
   const workerBinding = parseWorkerBinding(workerUrl);
@@ -362,6 +387,17 @@ async function startWorker({ interactive }) {
     return;
   }
 
+  if (runtimeState?.pid && !running.running) {
+    await removePidFile();
+    runtimeState = {
+      ...(runtimeState || {}),
+      status: "stopped",
+      stoppedAt: new Date().toISOString(),
+      pid: null,
+    };
+    await writeRuntimeState(runtimeState);
+  }
+
   if (!workerInstallation.installed || !workerInstallation.detectedPath) {
     throw new Error(
       "Local worker not installed. OpenPatch could not find apps/local-worker in the current repository tree.",
@@ -370,13 +406,26 @@ async function startWorker({ interactive }) {
 
   const workerRuntime = await resolveWorkerRuntime(workerInstallation.detectedPath);
   const workerLaunch = await resolveWorkerLaunchConfig(workerInstallation.detectedPath);
+  const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
+  if (portState.inUse) {
+    const occupiedMessage = `Configured worker URL ${workerUrl} is already in use. Stop the existing process or choose a different worker port.`;
+    await writeRuntimeState({
+      ...(runtimeState || {}),
+      status: "failed",
+      failedAt: new Date().toISOString(),
+      failureType: "port_in_use",
+      lastError: occupiedMessage,
+      workerUrl,
+      pidFile: PID_PATH,
+      logPath: WORKER_LOG_PATH,
+    });
+    throw new Error(occupiedMessage);
+  }
   await ensureLogFileExists(WORKER_LOG_PATH);
   const logStream = fs.openSync(WORKER_LOG_PATH, "a");
   const commandArgs = [
     "-m",
     "uvicorn",
-    "--app-dir",
-    workerLaunch.appDir,
     "openpatch_worker.main:app",
     "--host",
     workerBinding.host,
@@ -387,6 +436,7 @@ async function startWorker({ interactive }) {
 
   const env = {
     ...process.env,
+    PYTHONPATH: buildPythonPathEnv(workerLaunch.srcPath, process.env.PYTHONPATH),
     LOCAL_REPO_BASE_DIR: config.localRepoBaseDir || DEFAULT_REPO_BASE_DIR,
     OPENAI_BASE_URL: config.model?.baseUrl || "",
     OPENAI_API_KEY: config.model?.apiKey || "",
@@ -402,7 +452,8 @@ async function startWorker({ interactive }) {
   console.log("Launching OpenPatch local worker");
   console.log(`Command: ${launchedCommand}`);
   console.log(`Working directory: ${workerInstallation.detectedPath}`);
-  console.log(`App directory: ${workerLaunch.appDir}`);
+  console.log(`Worker src path: ${workerLaunch.srcPath}`);
+  console.log(`PYTHONPATH: ${env.PYTHONPATH}`);
   console.log(`Expected health URL: ${workerUrl}/health`);
   console.log(`Log file: ${WORKER_LOG_PATH}`);
   console.log(`PID file: ${PID_PATH}`);
@@ -445,9 +496,12 @@ async function startWorker({ interactive }) {
     logPath: WORKER_LOG_PATH,
     installMode: workerInstallation.installMode,
     workerPath: workerInstallation.detectedPath,
-    appDir: workerLaunch.appDir,
+    srcPath: workerLaunch.srcPath,
+    pythonPathEnv: env.PYTHONPATH,
     pythonPath: workerRuntime.pythonPath,
     command: launchedCommand,
+    failureType: null,
+    lastError: null,
   });
 
   const startupHealth = await waitForWorkerStartup({
@@ -464,6 +518,7 @@ async function startWorker({ interactive }) {
       ...(await readState()),
       status: "failed",
       failedAt: new Date().toISOString(),
+      failureType: classifyWorkerStartupFailure(startupHealth, logTail),
       lastError: startupHealth.message,
       lastLogTail: logTail,
       exitCode: startupHealth.exitCode ?? null,
@@ -506,6 +561,7 @@ async function stopWorker({ interactive }) {
       ...(runtimeState || {}),
       status: "stopped",
       stoppedAt: new Date().toISOString(),
+      pid: null,
     });
     await removePidFile();
     return;
@@ -516,6 +572,7 @@ async function stopWorker({ interactive }) {
     ...runtimeState,
     status: "stopped",
     stoppedAt: new Date().toISOString(),
+    pid: null,
   });
   await removePidFile();
 
@@ -556,7 +613,9 @@ async function showWorkerStatus() {
   const config = await readConfig();
   const runtimeState = await readState();
   const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
+  const workerBinding = parseWorkerBinding(workerUrl);
   const workerRunning = await isWorkerProcessRunning(runtimeState);
+  const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
   const workerHealth = await checkWorkerHealth(workerUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS);
 
   console.log("OpenPatch worker status");
@@ -565,9 +624,17 @@ async function showWorkerStatus() {
   console.log(`PID: ${runtimeState?.pid ?? "not recorded"}`);
   console.log(`PID file: ${runtimeState?.pidFile || PID_PATH}`);
   console.log(`Process appears alive: ${workerRunning.running ? "yes" : "no"}`);
-  console.log(`Process detail: ${workerRunning.message}`);
+  console.log(`Process detail: ${describeWorkerProcessState(workerRunning, runtimeState)}`);
+  console.log(`Port in use: ${portState.inUse ? "yes" : "no"}`);
+  console.log(`Port detail: ${describePortState(portState, workerUrl, workerHealth.reachable)}`);
   console.log(`Health responds: ${workerHealth.reachable ? "yes" : "no"}`);
-  console.log(`Health detail: ${workerHealth.message}`);
+  console.log(`Health detail: ${describeWorkerHealthState(workerHealth, runtimeState, portState)}`);
+  if (runtimeState?.failureType) {
+    console.log(`Last startup failure: ${runtimeState.failureType}`);
+  }
+  if (runtimeState?.lastError) {
+    console.log(`Last startup detail: ${runtimeState.lastError}`);
+  }
   console.log(`Log file: ${runtimeState?.logPath || WORKER_LOG_PATH}`);
 }
 
@@ -649,8 +716,8 @@ async function resolveWorkerRuntime(workerPath) {
 }
 
 async function resolveWorkerLaunchConfig(workerPath) {
-  const appDir = "src";
-  const moduleEntry = path.join(workerPath, appDir, "openpatch_worker", "main.py");
+  const srcPath = path.join(workerPath, "src");
+  const moduleEntry = path.join(srcPath, "openpatch_worker", "main.py");
 
   if (!(await fileExists(moduleEntry))) {
     throw new Error(
@@ -658,7 +725,7 @@ async function resolveWorkerLaunchConfig(workerPath) {
     );
   }
 
-  return { appDir };
+  return { srcPath, moduleEntry };
 }
 
 async function commandExists(command) {
@@ -987,6 +1054,34 @@ async function removePidFile() {
   }
 }
 
+async function checkPortInUse(host, port, timeoutMs) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+
+    const finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish({ inUse: true, detail: `Port ${port} on ${host} accepted a connection.` }));
+    socket.once("timeout", () => finish({ inUse: false, detail: `Port check to ${host}:${port} timed out.` }));
+    socket.once("error", (error) => {
+      if (error.code === "ECONNREFUSED") {
+        finish({ inUse: false, detail: `No process is listening on ${host}:${port}.` });
+        return;
+      }
+      finish({ inUse: false, detail: `Port check failed for ${host}:${port}: ${error.message}` });
+    });
+    socket.connect(port, host);
+  });
+}
+
 async function readLogTail(filePath, lineCount) {
   if (!(await fileExists(filePath))) {
     return "";
@@ -1092,6 +1187,17 @@ function getModelConnectivityRemediation(modelConfig, probe) {
   return "Confirm the model provider base URL and credentials are correct.";
 }
 
+function buildPythonPathEnv(srcPath, existingPythonPath) {
+  if (!existingPythonPath) {
+    return srcPath;
+  }
+  const segments = existingPythonPath.split(path.delimiter).filter(Boolean);
+  if (segments.includes(srcPath)) {
+    return existingPythonPath;
+  }
+  return [srcPath, ...segments].join(path.delimiter);
+}
+
 function buildModelConnectivityHeaders(modelConfig) {
   const headers = {
     "User-Agent": "OpenPatch CLI",
@@ -1154,6 +1260,71 @@ function parseWorkerBinding(workerUrl) {
     host: parsedUrl.hostname,
     port,
   };
+}
+
+function describeWorkerProcessState(workerRunning, runtimeState) {
+  if (workerRunning.running) {
+    return workerRunning.message;
+  }
+  if (runtimeState?.failureType === "import_failure") {
+    return `Worker is not running because startup failed to import the app. ${runtimeState.lastError || ""}`.trim();
+  }
+  if (runtimeState?.failureType === "port_in_use") {
+    return `Worker is not running because the configured port is already in use. ${runtimeState.lastError || ""}`.trim();
+  }
+  if (runtimeState?.failureType === "health_timeout") {
+    return `Worker process started but did not become healthy in time. ${runtimeState.lastError || ""}`.trim();
+  }
+  if (runtimeState?.failureType === "process_exited") {
+    return `Worker process exited during startup. ${runtimeState.lastError || ""}`.trim();
+  }
+  return workerRunning.message;
+}
+
+function describeWorkerHealthState(workerHealth, runtimeState, portState) {
+  if (workerHealth.reachable) {
+    return workerHealth.message;
+  }
+  if (runtimeState?.failureType === "port_in_use") {
+    return runtimeState.lastError || workerHealth.message;
+  }
+  if (runtimeState?.failureType === "import_failure") {
+    return runtimeState.lastError || workerHealth.message;
+  }
+  if (runtimeState?.failureType === "health_timeout") {
+    return runtimeState.lastError || workerHealth.message;
+  }
+  if (runtimeState?.failureType === "process_exited") {
+    return runtimeState.lastError || workerHealth.message;
+  }
+  if (portState?.inUse && !workerHealth.reachable) {
+    return `A process is listening on the configured port, but the OpenPatch health endpoint did not respond successfully. ${workerHealth.message}`;
+  }
+  return workerHealth.message;
+}
+
+function describePortState(portState, workerUrl, workerHealthy) {
+  if (portState.inUse && workerHealthy) {
+    return `The configured worker port for ${workerUrl} is in use by a responding worker, which is expected.`;
+  }
+  if (portState.inUse) {
+    return `The configured worker port for ${workerUrl} is already occupied by another process or a non-responsive worker.`;
+  }
+  return portState.detail;
+}
+
+function classifyWorkerStartupFailure(startupHealth, logTail) {
+  const tail = logTail || "";
+  if (tail.includes("ModuleNotFoundError") || tail.includes("No module named 'openpatch_worker'")) {
+    return "import_failure";
+  }
+  if (tail.includes("address already in use")) {
+    return "port_in_use";
+  }
+  if (startupHealth.message?.includes("timed out")) {
+    return "health_timeout";
+  }
+  return "process_exited";
 }
 
 function makeCheck(name, ok, detail) {
