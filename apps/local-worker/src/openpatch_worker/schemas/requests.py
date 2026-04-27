@@ -3,6 +3,20 @@ from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
 
 
+SUPPORTED_REPOSITORY_PROVIDERS = {"gitlab", "github", "local"}
+
+
+def _normalize_project_path(value: str) -> str:
+    path = Path(value)
+    if not value.strip():
+        raise ValueError("project_path must not be empty")
+    if path.is_absolute():
+        return str(path)
+    if ".." in path.parts:
+        raise ValueError("project_path must not escape its configured base")
+    return value.strip("/")
+
+
 class GitProviderMetadata(BaseModel):
     provider: str | None = Field(default=None, description="Git provider identifier.")
     clone_url: str | None = Field(
@@ -18,12 +32,18 @@ class GitProviderMetadata(BaseModel):
 class RepoOpenRequest(BaseModel):
     project_path: str = Field(
         ...,
-        description="Repository path relative to the configured local repo base directory.",
+        description=(
+            "Repository identifier. Use a provider path like 'group/project' for "
+            "gitlab or 'owner/repo' for github, or an absolute filesystem path for local projects."
+        ),
     )
-    branch: str = Field(..., description="Branch to fetch and check out.")
+    branch: str | None = Field(
+        default=None,
+        description="Branch to fetch and check out for provider-backed repositories or local git repositories.",
+    )
     git_provider: str | None = Field(
         default=None,
-        description="Git provider identifier such as 'gitlab' or 'github'.",
+        description="Repository source identifier such as 'gitlab', 'github', or 'local'.",
     )
     git: GitProviderMetadata | None = Field(
         default=None,
@@ -33,21 +53,15 @@ class RepoOpenRequest(BaseModel):
     @field_validator("project_path")
     @classmethod
     def validate_project_path(cls, value: str) -> str:
-        path = Path(value)
-        if not value.strip():
-            raise ValueError("project_path must not be empty")
-        if path.is_absolute():
-            raise ValueError("project_path must be relative")
-        if ".." in path.parts:
-            raise ValueError("project_path must not escape the repo base directory")
-        return value.strip("/")
+        return _normalize_project_path(value)
 
     @field_validator("branch")
     @classmethod
-    def validate_branch(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("branch must not be empty")
-        return value.strip()
+    def validate_branch(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
     @field_validator("git_provider")
     @classmethod
@@ -57,8 +71,8 @@ class RepoOpenRequest(BaseModel):
         normalized = value.strip().lower()
         if not normalized:
             return None
-        if normalized not in {"gitlab", "github"}:
-            raise ValueError("git_provider must be one of: gitlab, github")
+        if normalized not in SUPPORTED_REPOSITORY_PROVIDERS:
+            raise ValueError("git_provider must be one of: gitlab, github, local")
         return normalized
 
 
@@ -71,13 +85,15 @@ class FileReadRequest(BaseModel):
     @field_validator("project_path", "relative_path")
     @classmethod
     def validate_relative_values(cls, value: str, info) -> str:
+        if info.field_name == "project_path":
+            return _normalize_project_path(value)
         path = Path(value)
         if not value.strip():
-            raise ValueError(f"{info.field_name} must not be empty")
+            raise ValueError("relative_path must not be empty")
         if path.is_absolute():
-            raise ValueError(f"{info.field_name} must be relative")
+            raise ValueError("relative_path must be relative")
         if ".." in path.parts:
-            raise ValueError(f"{info.field_name} must not escape its base directory")
+            raise ValueError("relative_path must not escape its base directory")
         return value.strip("/")
 
 
@@ -90,13 +106,15 @@ class FileWriteRequest(BaseModel):
     @field_validator("project_path", "relative_path")
     @classmethod
     def validate_relative_values(cls, value: str, info) -> str:
+        if info.field_name == "project_path":
+            return _normalize_project_path(value)
         path = Path(value)
         if not value.strip():
-            raise ValueError(f"{info.field_name} must not be empty")
+            raise ValueError("relative_path must not be empty")
         if path.is_absolute():
-            raise ValueError(f"{info.field_name} must be relative")
+            raise ValueError("relative_path must be relative")
         if ".." in path.parts:
-            raise ValueError(f"{info.field_name} must not escape its base directory")
+            raise ValueError("relative_path must not escape its base directory")
         return value.strip("/")
 
 
@@ -108,14 +126,7 @@ class CommandRunRequest(BaseModel):
     @field_validator("project_path")
     @classmethod
     def validate_project_path(cls, value: str) -> str:
-        path = Path(value)
-        if not value.strip():
-            raise ValueError("project_path must not be empty")
-        if path.is_absolute():
-            raise ValueError("project_path must be relative")
-        if ".." in path.parts:
-            raise ValueError("project_path must not escape the repo base directory")
-        return value.strip("/")
+        return _normalize_project_path(value)
 
     @field_validator("command")
     @classmethod
@@ -133,14 +144,7 @@ class GitDiffRequest(BaseModel):
     @field_validator("project_path")
     @classmethod
     def validate_project_path(cls, value: str) -> str:
-        path = Path(value)
-        if not value.strip():
-            raise ValueError("project_path must not be empty")
-        if path.is_absolute():
-            raise ValueError("project_path must be relative")
-        if ".." in path.parts:
-            raise ValueError("project_path must not escape the repo base directory")
-        return value.strip("/")
+        return _normalize_project_path(value)
 
     @field_validator("relative_paths")
     @classmethod
@@ -170,14 +174,7 @@ class GitBranchCreateRequest(BaseModel):
     @classmethod
     def validate_values(cls, value: str, info) -> str:
         if info.field_name == "project_path":
-            path = Path(value)
-            if not value.strip():
-                raise ValueError("project_path must not be empty")
-            if path.is_absolute():
-                raise ValueError("project_path must be relative")
-            if ".." in path.parts:
-                raise ValueError("project_path must not escape the repo base directory")
-            return value.strip("/")
+            return _normalize_project_path(value)
         if not value.strip():
             raise ValueError(f"{info.field_name} must not be empty")
         return value.strip()
@@ -191,14 +188,7 @@ class GitCommitRequest(BaseModel):
     @field_validator("project_path")
     @classmethod
     def validate_project_path_for_commit(cls, value: str) -> str:
-        path = Path(value)
-        if not value.strip():
-            raise ValueError("project_path must not be empty")
-        if path.is_absolute():
-            raise ValueError("project_path must be relative")
-        if ".." in path.parts:
-            raise ValueError("project_path must not escape the repo base directory")
-        return value.strip("/")
+        return _normalize_project_path(value)
 
     @field_validator("message")
     @classmethod
@@ -219,14 +209,7 @@ class GitPushRequest(BaseModel):
     @classmethod
     def validate_push_values(cls, value: str, info) -> str:
         if info.field_name == "project_path":
-            path = Path(value)
-            if not value.strip():
-                raise ValueError("project_path must not be empty")
-            if path.is_absolute():
-                raise ValueError("project_path must be relative")
-            if ".." in path.parts:
-                raise ValueError("project_path must not escape the repo base directory")
-            return value.strip("/")
+            return _normalize_project_path(value)
         if not value.strip():
             raise ValueError(f"{info.field_name} must not be empty")
         return value.strip()
@@ -255,14 +238,7 @@ class GitMergeRequestCreateRequest(BaseModel):
     @field_validator("project_path")
     @classmethod
     def validate_project_path_for_mr(cls, value: str) -> str:
-        path = Path(value)
-        if not value.strip():
-            raise ValueError("project_path must not be empty")
-        if path.is_absolute():
-            raise ValueError("project_path must be relative")
-        if ".." in path.parts:
-            raise ValueError("project_path must not escape the repo base directory")
-        return value.strip("/")
+        return _normalize_project_path(value)
 
     @field_validator("git_provider")
     @classmethod
@@ -291,21 +267,14 @@ class GitMergeRequestCreateRequest(BaseModel):
 class AgentRunRequest(BaseModel):
     project_path: str = Field(
         ...,
-        description="Repository path relative to the configured local repo base directory.",
+        description="Repository identifier for the opened project. Local projects use an absolute filesystem path.",
     )
     task: str = Field(..., description="User task sent to the centralized model backend.")
 
     @field_validator("project_path")
     @classmethod
     def validate_project_path(cls, value: str) -> str:
-        path = Path(value)
-        if not value.strip():
-            raise ValueError("project_path must not be empty")
-        if path.is_absolute():
-            raise ValueError("project_path must be relative")
-        if ".." in path.parts:
-            raise ValueError("project_path must not escape the repo base directory")
-        return value.strip("/")
+        return _normalize_project_path(value)
 
     @field_validator("task")
     @classmethod
@@ -318,7 +287,7 @@ class AgentRunRequest(BaseModel):
 class AgentProposeFileRequest(BaseModel):
     project_path: str = Field(
         ...,
-        description="Repository path relative to the configured local repo base directory.",
+        description="Repository identifier for the opened project. Local projects use an absolute filesystem path.",
     )
     relative_path: str = Field(
         ...,
@@ -332,13 +301,15 @@ class AgentProposeFileRequest(BaseModel):
     @field_validator("project_path", "relative_path")
     @classmethod
     def validate_relative_values(cls, value: str, info) -> str:
+        if info.field_name == "project_path":
+            return _normalize_project_path(value)
         path = Path(value)
         if not value.strip():
-            raise ValueError(f"{info.field_name} must not be empty")
+            raise ValueError("relative_path must not be empty")
         if path.is_absolute():
-            raise ValueError(f"{info.field_name} must be relative")
+            raise ValueError("relative_path must be relative")
         if ".." in path.parts:
-            raise ValueError(f"{info.field_name} must not escape its base directory")
+            raise ValueError("relative_path must not escape its base directory")
         return value.strip("/")
 
     @field_validator("instruction")

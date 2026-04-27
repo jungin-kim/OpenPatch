@@ -15,6 +15,7 @@ class ProviderProjectSummary(BaseModel):
     display_name: str
     default_branch: str | None = None
     source: str
+    is_git_repository: bool = True
 
 
 class ProviderProjectsResponse(BaseModel):
@@ -39,9 +40,10 @@ class ProviderBranchesResponse(BaseModel):
 class RepoOpenResponse(BaseModel):
     project_path: str
     local_repo_path: str
-    branch: str
-    head_sha: str
+    branch: str | None = None
+    head_sha: str | None = None
     cloned: bool
+    is_git_repository: bool
     message: str
 
 
@@ -110,12 +112,13 @@ class AgentRunResponse(BaseModel):
     project_path: str
     task: str
     model: str
-    branch: str
+    branch: str | None = None
     repo_root_name: str
     context_summary: str
     top_level_entries: list[str]
     readme_included: bool
     diff_included: bool
+    is_git_repository: bool
     response: str
 
 

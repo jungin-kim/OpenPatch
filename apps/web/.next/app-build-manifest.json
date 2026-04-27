@@ -25,6 +25,11 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/api/worker/provider-projects/route.js"
+    ],
+    "/api/worker/agent-run/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/worker/agent-run/route.js"
     ]
   }
 }
