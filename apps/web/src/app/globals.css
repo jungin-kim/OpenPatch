@@ -237,6 +237,11 @@ select {
   line-height: 1.55;
 }
 
+.status-detail {
+  margin: 6px 0 0;
+  font-size: 0.92rem;
+}
+
 .status-list {
   margin: 0;
   padding-left: 18px;

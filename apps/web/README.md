@@ -5,6 +5,7 @@ The OpenPatch web UI is the first browser-based product surface for the project.
 The current alpha flow is intentionally small:
 
 - confirm local worker connectivity
+- view the configured repository source and model connection mode
 - choose a repository source, project, and branch through guided lists
 - open a repository through the local worker
 - ask a read-only repository question
@@ -39,6 +40,8 @@ Then open [http://localhost:3000](http://localhost:3000).
 ## What Works
 
 - worker health check from the UI
+- repository source status for GitLab, GitHub, or local project
+- model connection status for local model runtime or remote model API
 - provider-aware project list loading
 - provider-aware branch list loading
 - recent project shortcuts

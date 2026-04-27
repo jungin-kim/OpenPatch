@@ -57,6 +57,10 @@ def health() -> HealthResponse:
         service="openpatch-local-worker",
         repo_base_dir=str(settings.repo_base_dir),
         configured_git_provider=settings.configured_git_provider,
+        configured_repository_source=settings.configured_git_provider,
+        configured_model_connection_mode=settings.configured_model_connection_mode,
+        configured_model_provider=settings.configured_model_provider,
+        configured_model_name=settings.configured_model_name,
         recent_projects=list_recent_project_paths(),
     )
 

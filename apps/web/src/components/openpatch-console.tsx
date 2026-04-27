@@ -27,6 +27,10 @@ export function OpenPatchConsole() {
     "Checking for a reachable local worker.",
   );
   const [repoBaseDir, setRepoBaseDir] = useState("");
+  const [configuredRepositorySource, setConfiguredRepositorySource] = useState("");
+  const [configuredModelConnectionMode, setConfiguredModelConnectionMode] = useState("");
+  const [configuredModelProvider, setConfiguredModelProvider] = useState("");
+  const [configuredModelName, setConfiguredModelName] = useState("");
 
   const [gitProvider, setGitProvider] = useState("gitlab");
   const [projectSearch, setProjectSearch] = useState("");
@@ -65,8 +69,16 @@ export function OpenPatchConsole() {
       setConnectionState("connected");
       setHealthDetail(`Worker is available and reporting status '${payload.status}'.`);
       setRepoBaseDir(payload.repo_base_dir);
-      if (payload.configured_git_provider) {
-        setGitProvider(payload.configured_git_provider);
+      const nextRepositorySource =
+        payload.configured_repository_source || payload.configured_git_provider || "";
+      setConfiguredRepositorySource(nextRepositorySource);
+      setConfiguredModelConnectionMode(
+        payload.configured_model_connection_mode || "",
+      );
+      setConfiguredModelProvider(payload.configured_model_provider || "");
+      setConfiguredModelName(payload.configured_model_name || "");
+      if (nextRepositorySource) {
+        setGitProvider(nextRepositorySource);
       }
       if (payload.recent_projects?.length) {
         setManualProjectPath((current) => current || payload.recent_projects?.[0] || "");
@@ -74,6 +86,10 @@ export function OpenPatchConsole() {
     } catch (error) {
       setConnectionState("unavailable");
       setRepoBaseDir("");
+      setConfiguredRepositorySource("");
+      setConfiguredModelConnectionMode("");
+      setConfiguredModelProvider("");
+      setConfiguredModelName("");
       setHealthDetail(
         error instanceof Error
           ? error.message
@@ -215,6 +231,27 @@ export function OpenPatchConsole() {
   const branchRequired = gitProvider !== "local";
   const providerLabel =
     gitProvider === "local" ? "Local project" : gitProvider;
+  const selectedSourceLabel =
+    gitProvider === "local" ? "Local project" : gitProvider === "gitlab" ? "GitLab" : "GitHub";
+  const configuredSourceLabel =
+    configuredRepositorySource === "local"
+      ? "Local project"
+      : configuredRepositorySource === "gitlab"
+        ? "GitLab"
+        : configuredRepositorySource === "github"
+          ? "GitHub"
+          : "Not configured";
+  const modelConnectionLabel =
+    configuredModelConnectionMode === "local-runtime"
+      ? "Local model runtime"
+      : configuredModelConnectionMode === "remote-api"
+        ? "Remote model API"
+        : "Not configured";
+  const modelProviderLabel =
+    configuredModelProvider || "Not configured";
+  const modelRuntimeDetail = configuredModelName
+    ? `${modelProviderLabel} · ${configuredModelName}`
+    : modelProviderLabel;
   const branchSelectionDisabled =
     branchesPending ||
     connectionState !== "connected" ||
@@ -294,10 +331,10 @@ export function OpenPatchConsole() {
       <section className="hero">
         <div className="panel hero-panel">
           <span className="hero-kicker">Guided repository selection</span>
-          <h2>Choose a provider-backed repository or a local project without dropping to raw worker calls.</h2>
+          <h2>Choose a repository source and use the configured model connection without dropping to raw worker calls.</h2>
           <p>
-            OpenPatch can load hosted repositories from GitLab or GitHub, remember recent
-            local projects, and keep manual entry tucked away unless you actually need it.
+            OpenPatch can load hosted repositories from GitLab or GitHub, remember recent local
+            projects, and route read-only questions through either a local model runtime or a remote model API.
           </p>
 
           <div className="hero-grid">
@@ -307,11 +344,11 @@ export function OpenPatchConsole() {
             </div>
             <div className="mini-card">
               <strong>2. Select</strong>
-              <span>Choose a provider, project, and branch from guided lists.</span>
+              <span>Choose a repository source, project, and branch from guided lists.</span>
             </div>
             <div className="mini-card">
               <strong>3. Ask</strong>
-              <span>Open the repository locally and run a read-only question.</span>
+              <span>Open the project locally and run a read-only question.</span>
             </div>
           </div>
         </div>
@@ -328,6 +365,18 @@ export function OpenPatchConsole() {
           <div className="status-card">
             <strong>Configured worker URL</strong>
             <p className="mono">{workerBaseUrl}</p>
+          </div>
+          <div className="status-card">
+            <strong>Repository source</strong>
+            <p>{configuredSourceLabel}</p>
+            <p className="status-detail">
+              Choose between GitLab, GitHub, or a local project for repository access.
+            </p>
+          </div>
+          <div className="status-card">
+            <strong>Model connection</strong>
+            <p>{modelConnectionLabel}</p>
+            <p className="status-detail">{modelRuntimeDetail}</p>
           </div>
           <div className="status-card">
             <strong>Reported repo base directory</strong>
@@ -357,7 +406,7 @@ export function OpenPatchConsole() {
             <div className="inline-fields inline-fields-two">
               <div className="field-group">
                 <label className="field-label" htmlFor="git-provider">
-                  Git provider
+                  Repository source
                 </label>
                 <select
                   id="git-provider"
@@ -378,6 +427,9 @@ export function OpenPatchConsole() {
                   <option value="github">github</option>
                   <option value="local">local project</option>
                 </select>
+                <p className="field-help">
+                  Current source: {selectedSourceLabel}
+                </p>
               </div>
 
               <div className="field-group">
@@ -646,7 +698,7 @@ export function OpenPatchConsole() {
 
             <div className="task-actions">
               <span className="task-hint">
-                This flow stays read-only. It does not modify files, branches, or commits.
+                This flow stays read-only. It uses the configured {configuredModelConnectionMode === "local-runtime" ? "local model runtime" : configuredModelConnectionMode === "remote-api" ? "remote model API" : "model connection"} and does not modify files, branches, or commits.
               </span>
               <button
                 className="primary-button"

@@ -28,6 +28,9 @@ class Settings:
     model_request_timeout_seconds: int
     openpatch_config_path: Path
     configured_git_provider: str | None
+    configured_model_connection_mode: str | None
+    configured_model_provider: str | None
+    configured_model_name: str | None
 
     def get_provider_settings(self, provider: str) -> ProviderSettings:
         normalized = provider.strip().lower()
@@ -97,6 +100,9 @@ def get_settings() -> Settings:
         ),
         openpatch_config_path=openpatch_config_path,
         configured_git_provider=_resolve_configured_git_provider(runtime_config),
+        configured_model_connection_mode=_resolve_configured_model_connection_mode(runtime_config),
+        configured_model_provider=_resolve_configured_model_provider(runtime_config),
+        configured_model_name=_resolve_configured_model_name(runtime_config),
     )
 
 
@@ -157,3 +163,32 @@ def _resolve_configured_git_provider(runtime_config: dict) -> str | None:
     if provider in {"gitlab", "github", "local"}:
         return provider
     return None
+
+
+def _resolve_configured_model_connection_mode(runtime_config: dict) -> str | None:
+    model_config = runtime_config.get("model")
+    if not isinstance(model_config, dict):
+        return None
+    connection_mode = _normalize_optional_value(model_config.get("connectionMode"))
+    if connection_mode in {"local-runtime", "remote-api"}:
+        return connection_mode
+    provider = _normalize_optional_value(model_config.get("provider"))
+    if provider == "ollama":
+        return "local-runtime"
+    if provider:
+        return "remote-api"
+    return None
+
+
+def _resolve_configured_model_provider(runtime_config: dict) -> str | None:
+    model_config = runtime_config.get("model")
+    if not isinstance(model_config, dict):
+        return None
+    return _normalize_optional_value(model_config.get("provider"))
+
+
+def _resolve_configured_model_name(runtime_config: dict) -> str | None:
+    model_config = runtime_config.get("model")
+    if not isinstance(model_config, dict):
+        return None
+    return _normalize_optional_value(model_config.get("model"))

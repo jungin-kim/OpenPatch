@@ -5,6 +5,10 @@ export type WorkerHealthPayload = {
   service: string;
   repo_base_dir: string;
   configured_git_provider?: string | null;
+  configured_repository_source?: string | null;
+  configured_model_connection_mode?: string | null;
+  configured_model_provider?: string | null;
+  configured_model_name?: string | null;
   recent_projects?: string[];
 };
 
