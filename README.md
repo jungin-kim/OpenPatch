@@ -90,7 +90,7 @@ See [the roadmap](docs/roadmap.md) for the fuller phase breakdown.
 
 ## Getting Started
 
-The first successful local onboarding flow looks like this:
+The first successful end-to-end read-only workflow looks like this:
 
 1. Install the CLI.
 2. Run `openpatch onboard`.
@@ -98,7 +98,9 @@ The first successful local onboarding flow looks like this:
 4. Run `openpatch worker start`.
 5. Run `openpatch doctor`.
 6. Run `openpatch status`.
-7. Verify the local worker health endpoint.
+7. Open a private repository through the local worker.
+8. Read a file through the worker.
+9. Run a read-only repository summarization task.
 
 ```bash
 npm install -g openpatch
@@ -107,6 +109,25 @@ openpatch worker start
 openpatch doctor
 openpatch status
 curl http://127.0.0.1:8000/health
+curl -X POST http://127.0.0.1:8000/repo/open \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "group/private-repo",
+    "branch": "main",
+    "git_provider": "gitlab"
+  }'
+curl -X POST http://127.0.0.1:8000/fs/read \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "group/private-repo",
+    "relative_path": "README.md"
+  }'
+curl -X POST http://127.0.0.1:8000/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "group/private-repo",
+    "task": "Summarize the repository and recommend the best starting point for understanding the codebase."
+  }'
 ```
 
 All real runtime config lives under `~/.openpatch`, not inside the repository.
@@ -120,7 +141,7 @@ If you want a simple local-first setup, choose `Ollama` during onboarding and ac
 
 - provider: `ollama`
 - base URL: `http://127.0.0.1:11434/v1`
-- model name: for example `llama3.2`
+- model name: `qwen2.5-coder:7b`
 
 High-level success looks like this:
 
@@ -128,22 +149,32 @@ High-level success looks like this:
 - `openpatch doctor` shows the worker process as running and the worker as reachable
 - `openpatch status` shows the configured worker URL, model provider, and worker health details
 - `curl http://127.0.0.1:8000/health` returns a small JSON response with `status: ok`
+- `repo/open` returns a resolved local repository path and checked-out branch
+- `fs/read` returns file content from the local repository
+- `/agent/run` returns a structured read-only summary response
 
 ### Quick Troubleshooting
 
+- Worker not running:
+  Run `openpatch worker start`, then verify with `openpatch doctor`, `openpatch status`, and `curl http://127.0.0.1:8000/health`.
 - Worker import or startup failure:
   Run `openpatch worker logs`. The CLI now prints the absolute worker `src` path and `PYTHONPATH` during startup, which helps confirm the repo-source worker layout is being launched correctly.
 - Port already in use:
   If `127.0.0.1:8000` is occupied, `openpatch worker start` fails fast with a clear error instead of retrying indefinitely. Stop the other process or choose a different worker URL and port.
+- Wrong repo path:
+  If `repo/open` fails, confirm `project_path` matches the provider path exactly and is relative, not absolute.
+- Missing GitLab permissions:
+  If `repo/open` reports repository not found or permission denied, confirm the stored GitLab token can read the private repository.
 - Ollama not running:
   `openpatch doctor` or `openpatch status` will report model connectivity failure. Start Ollama and confirm the configured models endpoint is reachable.
 - Missing model:
-  If Ollama is running but the selected model is unavailable, pull the model locally and rerun `openpatch doctor`.
+  If Ollama is running but `qwen2.5-coder:7b` is unavailable, pull it locally and rerun `openpatch doctor`.
 
 Helpful onboarding docs:
 
 - [Deployment guide](DEPLOYMENT.md)
 - [Onboarding guide](docs/onboarding.md)
+- [Read-only demo](docs/demo.md)
 - [Local worker setup](docs/local-worker-setup.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Architecture diagram](docs/architecture-diagram.md)

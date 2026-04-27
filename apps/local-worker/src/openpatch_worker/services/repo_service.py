@@ -1,5 +1,6 @@
 from pathlib import Path
 import logging
+import os
 
 from openpatch_worker.config import get_settings
 from openpatch_worker.schemas import RepoOpenRequest, RepoOpenResponse
@@ -95,16 +96,20 @@ def _clone_repository(
         ),
         cwd=repo_path.parent,
         timeout_seconds=settings.git_clone_timeout_seconds,
+        env=_build_git_env(provider_options),
     )
     if result.returncode != 0:
+        message = _classify_remote_git_failure(
+            stderr=result.stderr,
+            stdout=result.stdout,
+            provider=provider_options.provider if provider_options else None,
+        )
         logger.error(
             "git clone failed for project_path='%s': %s",
             repo_path,
-            _summarize_git_failure(result.stderr, result.stdout),
+            message,
         )
-        raise RuntimeError(
-            result.stderr.strip() or f"git clone failed for repository at {repo_path}"
-        )
+        raise RuntimeError(message)
 
 
 def _fetch_repository(
@@ -116,14 +121,20 @@ def _fetch_repository(
         command=_build_git_command(["fetch", "--all", "--prune"], provider_options),
         cwd=repo_path,
         timeout_seconds=settings.git_fetch_timeout_seconds,
+        env=_build_git_env(provider_options),
     )
     if result.returncode != 0:
+        message = _classify_remote_git_failure(
+            stderr=result.stderr,
+            stdout=result.stdout,
+            provider=provider_options.provider if provider_options else None,
+        )
         logger.error(
             "git fetch failed for repo='%s': %s",
             repo_path,
-            _summarize_git_failure(result.stderr, result.stdout),
+            message,
         )
-        raise RuntimeError(result.stderr.strip() or "git fetch failed")
+        raise RuntimeError(message)
 
 
 def _ensure_git_repository(repo_path: Path) -> None:
@@ -202,6 +213,7 @@ def _verify_remote_branch_exists(
         ),
         cwd=repo_path,
         timeout_seconds=60,
+        env=_build_git_env(provider_options),
     )
     if result.returncode == 0:
         return
@@ -213,9 +225,19 @@ def _verify_remote_branch_exists(
         "git ls-remote failed for repo='%s' branch='%s': %s",
         repo_path,
         branch,
-        _summarize_git_failure(result.stderr, result.stdout),
+        _classify_remote_git_failure(
+            stderr=result.stderr,
+            stdout=result.stdout,
+            provider=provider_options.provider if provider_options else None,
+        ),
     )
-    raise RuntimeError(result.stderr.strip() or f"Unable to verify branch '{branch}' on origin")
+    raise RuntimeError(
+        _classify_remote_git_failure(
+            stderr=result.stderr,
+            stdout=result.stdout,
+            provider=provider_options.provider if provider_options else None,
+        )
+    )
 
 
 def _build_git_command(
@@ -229,9 +251,49 @@ def _build_git_command(
     return command
 
 
+def _build_git_env(provider_options: ProviderGitOptions | None) -> dict[str, str] | None:
+    if provider_options is None:
+        return None
+    return {
+        **os.environ,
+        **provider_options.env,
+    }
+
+
 def _summarize_git_failure(stderr: str, stdout: str) -> str:
     summary = stderr.strip() or stdout.strip() or "no command output"
     return summary.splitlines()[0]
+
+
+def _classify_remote_git_failure(
+    stderr: str,
+    stdout: str,
+    provider: str | None,
+) -> str:
+    summary = _summarize_git_failure(stderr, stdout)
+    combined = f"{stderr}\n{stdout}".lower()
+    provider_label = provider or "git provider"
+
+    if "could not read username" in combined or "terminal prompts disabled" in combined:
+        return (
+            f"{provider_label} authentication failed because no usable token was applied for this repository operation. "
+            "Confirm the provider token is stored in ~/.openpatch/config.json or provided as an override."
+        )
+    if "http basic: access denied" in combined or "authentication failed" in combined or "invalid credentials" in combined:
+        return (
+            f"{provider_label} authentication failed. Confirm the configured token is valid and has access to this repository."
+        )
+    if "repository not found" in combined or "project not found" in combined:
+        return (
+            f"{provider_label} repository was not found or the token does not have permission to access it. "
+            "Confirm project_path, provider base URL, and repository permissions."
+        )
+    if "access denied" in combined or "permission denied" in combined or "not allowed" in combined:
+        return (
+            f"{provider_label} access was denied for this repository. "
+            "Confirm the token has permission to clone or fetch the repository."
+        )
+    return summary
 
 
 def _git_stdout(command: list[str], repo_path: Path) -> str:

@@ -27,6 +27,7 @@ openpatch onboard
 ```
 
 This is the first complete local onboarding path for OpenPatch. A new user can now install the CLI, choose a model provider, start the local worker, run diagnostics, and verify the local health endpoint end to end.
+It also supports the first real read-only repository workflow: open a private repository through the local worker, read a file locally, and ask for a repository summary through `/agent/run`.
 
 The onboarding flow will:
 
@@ -67,7 +68,7 @@ The resulting config stores model settings under a nested `model` object in `~/.
     "provider": "ollama",
     "baseUrl": "http://127.0.0.1:11434/v1",
     "apiKey": "ollama",
-    "model": "llama3.2"
+    "model": "qwen2.5-coder:7b"
   }
 }
 ```
@@ -173,7 +174,7 @@ openpatch onboard
 
 - model provider: `Ollama`
 - base URL: `http://127.0.0.1:11434/v1`
-- model name: `llama3.2` or another local Ollama model
+- model name: `qwen2.5-coder:7b`
 - git provider: your choice, or `None for now`
 - if you choose GitLab or GitHub, provide the provider base URL and token so the worker can reuse the same config later
 - local repo base directory: accept the default or choose your own
@@ -199,6 +200,63 @@ Expected success output at a high level:
 - `openpatch status` shows the configured worker URL, model provider `ollama`, and healthy worker details
 - `curl http://127.0.0.1:8000/health` returns JSON with `status: ok`
 
+## First Read-Only Workflow
+
+Once onboarding and worker startup are complete, this is the first real read-only flow:
+
+1. Open a private repository through the local worker:
+
+```bash
+curl -X POST http://127.0.0.1:8000/repo/open \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "group/private-repo",
+    "branch": "main",
+    "git_provider": "gitlab"
+  }'
+```
+
+2. Read a file from the repository:
+
+```bash
+curl -X POST http://127.0.0.1:8000/fs/read \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "group/private-repo",
+    "relative_path": "README.md"
+  }'
+```
+
+3. Ask the worker for a read-only repository summary:
+
+```bash
+curl -X POST http://127.0.0.1:8000/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_path": "group/private-repo",
+    "task": "Summarize the repository and recommend the best starting point for understanding the codebase."
+  }'
+```
+
+Expected success output at a high level:
+
+- `repo/open` returns the resolved local repo path, branch, head SHA, and a success message
+- `fs/read` returns the requested file content from the local checkout
+- `/agent/run` returns structured JSON with:
+  `project_path`, `task`, `model`, `branch`, `repo_root_name`, `context_summary`, and `response`
+
+## Private GitLab Example
+
+For a private GitLab repository, normal product usage is:
+
+1. Run `openpatch onboard`.
+2. Choose `gitlab` as the git provider.
+3. Provide the GitLab base URL and a token with repository read access.
+4. Start the worker with `openpatch worker start`.
+5. Run `repo/open` with `git_provider: "gitlab"`.
+
+The worker will use the stored provider config from `~/.openpatch/config.json` and perform clone and fetch non-interactively.
+
 ## Troubleshooting Notes
 
 ### Worker Import Or Startup Failures
@@ -213,6 +271,16 @@ Expected success output at a high level:
 - If port `8000` is already occupied, the CLI reports that clearly and does not keep retrying.
 - Stop the existing process or reconfigure the worker URL to use another port.
 
+### Wrong Repo Path
+
+- If `repo/open` fails, confirm `project_path` matches the GitLab project path exactly.
+- Keep `project_path` relative, for example `group/private-repo`.
+
+### Missing GitLab Permissions
+
+- If `repo/open` reports repository not found or permission denied, confirm the stored GitLab token can read that private repository.
+- If onboarding was completed without a token, rerun `openpatch onboard` and update the git provider settings.
+
 ### Ollama Not Running
 
 - `openpatch doctor` and `openpatch status` report model connectivity failures with actionable guidance.
@@ -220,11 +288,11 @@ Expected success output at a high level:
 
 ### Missing Model
 
-- If Ollama is running but your chosen model is not available, pull it locally and rerun the checks.
+- If Ollama is running but `qwen2.5-coder:7b` is not available, pull it locally and rerun the checks.
 - Example:
 
 ```bash
-ollama pull llama3.2
+ollama pull qwen2.5-coder:7b
 openpatch doctor
 ```
 
@@ -266,6 +334,7 @@ Those are the next product steps after the first onboarding surface is stable.
 ## Related Docs
 
 - [README](../README.md)
+- [Read-only demo](demo.md)
 - [Deployment guide](../DEPLOYMENT.md)
 - [Local worker setup](local-worker-setup.md)
 - [Troubleshooting](troubleshooting.md)

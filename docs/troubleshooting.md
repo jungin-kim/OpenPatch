@@ -60,6 +60,7 @@ Symptoms:
 
 - clone or push fails
 - merge request creation returns an API error
+- git reports it could not read a username or that terminal prompts are disabled
 
 Checks:
 
@@ -67,6 +68,7 @@ Checks:
 2. Confirm the token is valid and not expired.
 3. Confirm the token has sufficient repository and API permissions.
 4. Confirm the `project_path` matches the GitLab project path.
+5. If the error says the repository was not found, confirm the token can access that private repository.
 
 ## GitHub Authentication Fails
 

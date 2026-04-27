@@ -105,6 +105,7 @@ You should receive a JSON response indicating:
 - the configured `repo_base_dir`
 
 For a normal onboarded product flow, the worker should also be able to resolve git provider settings from `~/.openpatch/config.json` without requiring manual provider exports.
+That includes the provider token needed for non-interactive private clone and fetch operations.
 
 ## Common User Flows
 

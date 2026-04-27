@@ -437,6 +437,7 @@ async function startWorker({ interactive }) {
   const env = {
     ...process.env,
     PYTHONPATH: buildPythonPathEnv(workerLaunch.srcPath, process.env.PYTHONPATH),
+    OPENPATCH_CONFIG_PATH: CONFIG_PATH,
     LOCAL_REPO_BASE_DIR: config.localRepoBaseDir || DEFAULT_REPO_BASE_DIR,
     OPENAI_BASE_URL: config.model?.baseUrl || "",
     OPENAI_API_KEY: config.model?.apiKey || "",

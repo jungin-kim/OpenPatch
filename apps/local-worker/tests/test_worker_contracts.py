@@ -64,7 +64,10 @@ class WorkerContractTests(unittest.TestCase):
                 provider_options.clone_url,
                 "https://gitlab.example.com/group/demo-repo.git",
             )
-            self.assertIn("Authorization: Bearer gitlab-test-token", " ".join(provider_options.git_config_args))
+            joined_args = " ".join(provider_options.git_config_args)
+            self.assertIn("Authorization: Basic", joined_args)
+            self.assertEqual(provider_options.env["GIT_TERMINAL_PROMPT"], "0")
+            self.assertEqual(provider_options.env["GIT_ASKPASS"], "true")
 
     def test_runtime_config_resolves_github_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
@@ -98,6 +101,46 @@ class WorkerContractTests(unittest.TestCase):
                 "https://github.example.com/octo/demo-repo.git",
             )
             self.assertIn("Authorization: Basic", " ".join(provider_options.git_config_args))
+
+    def test_runtime_config_prefers_environment_override_for_gitlab(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".openpatch"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "config.json").write_text(
+                """
+                {
+                  "gitProvider": {
+                    "provider": "gitlab",
+                    "baseUrl": "https://gitlab.example.com",
+                    "token": "stored-token"
+                  }
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "GITLAB_BASE_URL": "https://gitlab.override.example.com",
+                    "GITLAB_TOKEN": "override-token",
+                },
+                clear=False,
+            ):
+                settings = get_settings()
+                provider_options = resolve_provider_git_options(
+                    git_provider="gitlab",
+                    project_path="group/demo-repo",
+                    settings=settings,
+                )
+
+            self.assertIsNotNone(provider_options)
+            assert provider_options is not None
+            self.assertEqual(
+                provider_options.clone_url,
+                "https://gitlab.override.example.com/group/demo-repo.git",
+            )
 
 
 if __name__ == "__main__":

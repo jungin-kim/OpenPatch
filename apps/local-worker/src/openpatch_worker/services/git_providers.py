@@ -15,6 +15,7 @@ class ProviderGitOptions:
     provider: str
     clone_url: str
     git_config_args: list[str]
+    env: dict[str, str]
 
 
 def resolve_provider_git_options(
@@ -67,6 +68,7 @@ def build_provider_git_options(
         provider=provider_settings.provider,
         clone_url=clone_url,
         git_config_args=git_config_args,
+        env=build_provider_git_env(),
     )
 
 
@@ -77,9 +79,12 @@ def build_provider_clone_url(base_url: str, project_path: str) -> str:
 
 def build_provider_git_config_args(provider_settings: ProviderSettings) -> list[str]:
     if provider_settings.provider == "gitlab":
+        encoded = base64.b64encode(
+            f"oauth2:{provider_settings.token}".encode("utf-8")
+        ).decode("ascii")
         return [
             "-c",
-            f"http.{provider_settings.base_url}/.extraheader=Authorization: Bearer {provider_settings.token}",
+            f"http.{provider_settings.base_url}/.extraheader=Authorization: Basic {encoded}",
         ]
 
     if provider_settings.provider == "github":
@@ -92,3 +97,10 @@ def build_provider_git_config_args(provider_settings: ProviderSettings) -> list[
         ]
 
     raise ValueError(f"Unsupported git provider: {provider_settings.provider}")
+
+
+def build_provider_git_env() -> dict[str, str]:
+    return {
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS": "true",
+    }

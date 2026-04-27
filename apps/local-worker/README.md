@@ -86,6 +86,7 @@ When `git_provider` is set to `"gitlab"` or `"github"`, the worker builds the cl
 ```
 
 The token stays server-side and is passed to git through temporary command configuration rather than being embedded in the request payload.
+For GitLab, the worker uses a non-interactive token-based HTTP auth flow so private clone and fetch operations do not depend on terminal credential prompts.
 
 Read a file relative to the repository root:
 
@@ -261,6 +262,7 @@ curl -X POST http://127.0.0.1:8000/git/merge-request \
 - All repositories are scoped under `LOCAL_REPO_BASE_DIR`.
 - Git provider settings are resolved from `~/.openpatch/config.json` first, with environment variables available as advanced overrides.
 - GitLab and GitHub clone and fetch support use the same provider resolution path.
+- Authenticated GitLab clone and fetch operations are designed to work non-interactively for private repositories when the onboarded token is present.
 - Centralized model calls use `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL`.
 - `/agent/run` gathers a small, explicit repo summary locally before sending it upstream.
 - `/agent/run` is intentionally read-only in this first version and is designed for repository understanding tasks.
