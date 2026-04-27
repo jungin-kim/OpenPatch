@@ -18,6 +18,7 @@ export type ProviderProjectSummary = {
   display_name: string;
   default_branch?: string | null;
   source: string;
+  is_git_repository?: boolean;
 };
 
 export type ProviderProjectsPayload = {
@@ -110,7 +111,7 @@ export async function getProviderProjects(input: {
     query.set("search", input.search.trim());
   }
 
-  const response = await fetch(`/api/worker/provider-projects?${query.toString()}`, {
+  const response = await fetch(`/api/worker/provider/projects?${query.toString()}`, {
     cache: "no-store",
   });
   return parseWorkerResponse<ProviderProjectsPayload>(response);
@@ -125,7 +126,7 @@ export async function getProviderBranches(input: {
     project_path: input.project_path,
   });
 
-  const response = await fetch(`/api/worker/provider-branches?${query.toString()}`, {
+  const response = await fetch(`/api/worker/provider/branches?${query.toString()}`, {
     cache: "no-store",
   });
   return parseWorkerResponse<ProviderBranchesPayload>(response);

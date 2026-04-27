@@ -72,6 +72,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 ## Notes
 
 - The UI uses local Next.js route handlers under `src/app/api/worker/*` as a simple proxy to the configured worker base URL.
+- Guided repository selection uses structured provider listing endpoints under `/api/worker/provider/projects` and `/api/worker/provider/branches`.
 - This keeps local development easy while avoiding direct browser-to-worker CORS setup in the first version.
 - The current interface assumes the worker runs on the local machine, typically at `http://127.0.0.1:8000`.
 - Health-style worker requests keep a short timeout, while `/agent/run` now uses a longer inference timeout that is suitable for local Ollama usage by default.
