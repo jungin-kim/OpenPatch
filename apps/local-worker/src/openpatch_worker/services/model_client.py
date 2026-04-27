@@ -1,4 +1,5 @@
 import json
+import socket
 from dataclasses import dataclass
 from urllib import error, request
 
@@ -40,7 +41,19 @@ class OpenAICompatibleModelClient:
             raise RuntimeError(
                 f"Model API request failed with status {exc.code}: {error_body}"
             ) from exc
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "Model API request timed out. The local worker reached the model backend, but the model did not respond in time."
+            ) from exc
+        except socket.timeout as exc:
+            raise RuntimeError(
+                "Model API request timed out. The local worker reached the model backend, but the model did not respond in time."
+            ) from exc
         except error.URLError as exc:
+            if "timed out" in str(exc.reason).lower():
+                raise RuntimeError(
+                    "Model API request timed out. The local worker reached the model backend, but the model did not respond in time."
+                ) from exc
             raise RuntimeError(f"Model API connection failed: {exc.reason}") from exc
 
         response_text = _extract_response_text(response_payload).strip()

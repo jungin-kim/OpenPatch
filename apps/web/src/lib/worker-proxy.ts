@@ -1,6 +1,13 @@
 import { getLocalWorkerBaseUrl } from "@/lib/worker-config";
 
-const DEFAULT_WORKER_PROXY_TIMEOUT_MS = 3000;
+const DEFAULT_WORKER_PROXY_TIMEOUT_MS = Number.parseInt(
+  process.env.OPENPATCH_WORKER_PROXY_TIMEOUT_MS || "5000",
+  10,
+);
+const DEFAULT_AGENT_WORKER_PROXY_TIMEOUT_MS = Number.parseInt(
+  process.env.OPENPATCH_WORKER_PROXY_AGENT_TIMEOUT_MS || "60000",
+  10,
+);
 
 export class WorkerProxyError extends Error {
   status: number;
@@ -12,16 +19,27 @@ export class WorkerProxyError extends Error {
   }
 }
 
+type WorkerProxyFetchOptions = RequestInit & {
+  timeoutMs?: number;
+  operationName?: string;
+  timeoutHint?: string;
+};
+
 export async function workerProxyFetch(
   path: string,
-  init?: RequestInit,
+  init?: WorkerProxyFetchOptions,
 ): Promise<Response> {
   const workerBaseUrl = getLocalWorkerBaseUrl();
   const workerUrl = `${workerBaseUrl}${path}`;
   const controller = new AbortController();
+  const timeoutMs = init?.timeoutMs ?? DEFAULT_WORKER_PROXY_TIMEOUT_MS;
+  const operationName = init?.operationName || "request";
+  const timeoutHint =
+    init?.timeoutHint ||
+    "Make sure the local worker is running and reachable from this app.";
   const timeout = setTimeout(
     () => controller.abort(),
-    DEFAULT_WORKER_PROXY_TIMEOUT_MS,
+    timeoutMs,
   );
 
   try {
@@ -37,16 +55,20 @@ export async function workerProxyFetch(
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw new WorkerProxyError(
-        `The local worker at ${workerBaseUrl} did not respond in time. Make sure it is running and healthy.`,
+        `The local worker at ${workerBaseUrl} timed out while handling ${operationName}. Wait a bit longer or retry. ${timeoutHint}`,
         504,
       );
     }
 
     throw new WorkerProxyError(
-      `Unable to reach the local worker at ${workerBaseUrl}. Make sure it is running and reachable from this app.`,
+      `Unable to reach the local worker at ${workerBaseUrl}. Make sure it is running, healthy, and reachable from this app.`,
       503,
     );
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function getDefaultAgentWorkerProxyTimeoutMs(): number {
+  return DEFAULT_AGENT_WORKER_PROXY_TIMEOUT_MS;
 }

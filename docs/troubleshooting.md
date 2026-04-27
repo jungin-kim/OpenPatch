@@ -33,11 +33,19 @@ Checks:
 1. Confirm `NEXT_PUBLIC_LOCAL_WORKER_BASE_URL` is set correctly.
 2. Confirm the worker is listening on the same URL.
 3. Restart the web app after changing environment variables.
+4. For slow local inference, increase `OPENPATCH_WORKER_PROXY_AGENT_TIMEOUT_MS` instead of keeping the default short health-check timeout.
 
 Default local value:
 
 ```text
 http://127.0.0.1:8000
+```
+
+Recommended local inference proxy values:
+
+```text
+OPENPATCH_WORKER_PROXY_TIMEOUT_MS=5000
+OPENPATCH_WORKER_PROXY_AGENT_TIMEOUT_MS=60000
 ```
 
 ## Repository Open Fails
