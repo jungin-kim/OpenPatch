@@ -31,7 +31,7 @@ def ensure_relative_to_repo(repo_path: Path, relative_path: str) -> Path:
     try:
         target_path.relative_to(repo_path)
     except ValueError as exc:
-        raise ValueError("Target path must stay within repo_path") from exc
+        raise ValueError("Target path must stay within the repository root") from exc
     return target_path
 
 
