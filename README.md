@@ -47,18 +47,18 @@ The first public alpha flow is:
 1. Install the CLI.
 2. Run `openpatch onboard`.
 3. Choose a model provider such as Ollama.
-4. Run `openpatch worker start`.
-5. Run `openpatch doctor`.
-6. Run `openpatch status`.
-7. Start the web UI.
-8. Open a private GitLab repository through the UI.
-9. Ask a read-only repository question.
-10. Review the response in the browser.
+4. Let OpenPatch detect or guide the Ollama setup.
+5. Let OpenPatch start the local worker and verify health.
+6. Run `openpatch doctor`.
+7. Run `openpatch status`.
+8. Start the web UI.
+9. Open a private GitLab repository through the UI.
+10. Ask a read-only repository question.
+11. Review the response in the browser.
 
 ```bash
 npm install -g openpatch
 openpatch onboard
-openpatch worker start
 openpatch doctor
 openpatch status
 curl http://127.0.0.1:8000/health
@@ -73,10 +73,12 @@ For a simple local-first setup during onboarding, choose:
 
 High-level success looks like this:
 
-- `openpatch worker start` reports that the local worker started
-- `openpatch doctor` shows the worker process as running and the worker as reachable
+- `openpatch onboard` detects or guides the local Ollama setup
+- `openpatch onboard` starts the local worker and verifies worker and model connectivity
+- `openpatch doctor` confirms the worker and model are healthy after onboarding
 - `openpatch status` shows the configured worker URL, model provider, and worker health details
 - `curl http://127.0.0.1:8000/health` returns JSON with `status: ok`
+- the web UI can load provider-backed project and branch lists
 - the web UI can open a private repository through `/repo/open`
 - the web UI can send a read-only repository question through `/agent/run`
 - the response appears in the browser without modifying local files
@@ -91,6 +93,7 @@ OpenPatch currently supports these alpha-stage capabilities:
 - local worker lifecycle management through `openpatch worker start`, `stop`, `restart`, `status`, and `logs`
 - bounded `doctor` and `status` checks for worker and model connectivity
 - provider-backed repository open flows for GitLab and GitHub
+- provider-backed project and branch discovery for guided repository selection
 - non-interactive private repository clone and fetch through the local worker
 - read-only repository questions through the local worker and centralized model backend
 - a simple hosted web UI flow for repository open, question submission, and response display
@@ -120,9 +123,9 @@ The current public contract is intentionally small and explicit:
 The current end-to-end read-only path is:
 
 1. `openpatch onboard`
-2. `openpatch worker start`
-3. `openpatch doctor`
-4. `openpatch status`
+2. `openpatch doctor`
+3. `openpatch status`
+4. choose a provider, project, and branch in the web UI
 5. open a private GitLab repository through the worker
 6. ask a read-only repository question from the web UI
 7. receive a response in the browser

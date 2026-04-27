@@ -23,6 +23,8 @@ from openpatch_worker.schemas import (
     GitPushRequest,
     GitPushResponse,
     HealthResponse,
+    ProviderBranchesResponse,
+    ProviderProjectsResponse,
     RepoOpenRequest,
     RepoOpenResponse,
 )
@@ -30,6 +32,11 @@ from openpatch_worker.services.edit_service import propose_file_edit
 from openpatch_worker.services.agent_service import run_agent_task
 from openpatch_worker.services.command_runner import run_command
 from openpatch_worker.services.file_service import read_text_file, write_text_file
+from openpatch_worker.services.provider_service import (
+    list_provider_branches,
+    list_provider_projects,
+    list_recent_project_paths,
+)
 from openpatch_worker.services.git_service import (
     commit_changes,
     create_branch,
@@ -49,7 +56,44 @@ def health() -> HealthResponse:
         status="ok",
         service="openpatch-local-worker",
         repo_base_dir=str(settings.repo_base_dir),
+        configured_git_provider=(
+            "gitlab"
+            if settings.gitlab_base_url and settings.gitlab_token
+            else "github"
+            if settings.github_base_url and settings.github_token
+            else None
+        ),
+        recent_projects=list_recent_project_paths(),
     )
+
+
+@router.get("/provider/projects", response_model=ProviderProjectsResponse)
+def provider_projects(
+    git_provider: str,
+    search: str | None = None,
+) -> ProviderProjectsResponse:
+    try:
+        return list_provider_projects(git_provider=git_provider, search=search)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/provider/branches", response_model=ProviderBranchesResponse)
+def provider_branches(
+    git_provider: str,
+    project_path: str,
+) -> ProviderBranchesResponse:
+    try:
+        return list_provider_branches(
+            git_provider=git_provider,
+            project_path=project_path,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/repo/open", response_model=RepoOpenResponse)

@@ -327,6 +327,10 @@ select {
   gap: 12px;
 }
 
+.inline-fields-two {
+  grid-template-columns: 1fr 1fr;
+}
+
 .inline-fields-three {
   grid-template-columns: 0.8fr 1.6fr 0.8fr;
 }
@@ -339,6 +343,13 @@ select {
 
 .field-group-wide {
   min-width: 0;
+}
+
+.field-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
 }
 
 .task-actions {
@@ -387,6 +398,53 @@ select {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.recent-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.recent-projects strong {
+  font-size: 0.94rem;
+}
+
+.recent-project-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.recent-project-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.recent-project-chip-active {
+  border-color: rgba(31, 106, 83, 0.32);
+  background: rgba(31, 106, 83, 0.1);
+  color: var(--accent);
+}
+
+.advanced-toggle-row {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.advanced-panel {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.64);
+}
+
+.text-select-list {
+  min-height: 168px;
 }
 
 .code-review-grid {

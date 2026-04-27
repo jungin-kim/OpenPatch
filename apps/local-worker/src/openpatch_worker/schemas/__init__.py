@@ -23,6 +23,10 @@ from openpatch_worker.schemas.responses import (
     GitMergeRequestCreateResponse,
     GitPushResponse,
     HealthResponse,
+    ProviderBranchSummary,
+    ProviderBranchesResponse,
+    ProviderProjectSummary,
+    ProviderProjectsResponse,
     RepoOpenResponse,
 )
 
@@ -48,6 +52,10 @@ __all__ = [
     "GitPushRequest",
     "GitPushResponse",
     "HealthResponse",
+    "ProviderBranchSummary",
+    "ProviderBranchesResponse",
+    "ProviderProjectSummary",
+    "ProviderProjectsResponse",
     "RepoOpenRequest",
     "RepoOpenResponse",
 ]

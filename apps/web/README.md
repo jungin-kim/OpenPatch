@@ -5,6 +5,7 @@ The OpenPatch web UI is the first browser-based product surface for the project.
 The current alpha flow is intentionally small:
 
 - confirm local worker connectivity
+- choose a provider, project, and branch through guided lists
 - open a repository through the local worker
 - ask a read-only repository question
 - review the model response in the browser
@@ -38,11 +39,15 @@ Then open [http://localhost:3000](http://localhost:3000).
 ## What Works
 
 - worker health check from the UI
+- provider-aware project list loading
+- provider-aware branch list loading
+- recent project shortcuts
 - repository open flow through `/repo/open`
 - read-only repository question flow through `/agent/run`
 - clear loading, success, and error states
 - response display for the generated model answer
 - graceful unavailable-worker errors in the UI
+- advanced manual project and branch overrides when discovery is not enough
 
 ## Expected Product Flow
 
@@ -51,16 +56,20 @@ Then open [http://localhost:3000](http://localhost:3000).
 3. Run `openpatch doctor`
 4. Run `openpatch status`
 5. Start the web UI
-6. Open a private GitLab repository
-7. Ask a read-only repository question
-8. Review the response in the browser
+6. Choose `gitlab` or `github`
+7. Select a project from the provider-backed list
+8. Select a branch from the provider-backed list
+9. Open the repository locally
+10. Ask a read-only repository question
+11. Review the response in the browser
 
 ## Notes
 
 - The UI uses local Next.js route handlers under `src/app/api/worker/*` as a simple proxy to the configured worker base URL.
 - This keeps local development easy while avoiding direct browser-to-worker CORS setup in the first version.
 - The current interface assumes the worker runs on the local machine, typically at `http://127.0.0.1:8000`.
-- The alpha UI stays focused on repository open and read-only Q&A so the main product flow is easy to understand.
+- The alpha UI now defaults to guided provider selection instead of manual `project_path` and branch entry.
+- Manual repository and branch entry remain available only under an Advanced toggle.
 
 ## Next Steps
 

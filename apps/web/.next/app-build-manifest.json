@@ -20,6 +20,11 @@
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/api/worker/repo-open/route.js"
+    ],
+    "/api/worker/provider-projects/route": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/api/worker/provider-projects/route.js"
     ]
   }
 }

@@ -5,6 +5,35 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     repo_base_dir: str
+    configured_git_provider: str | None = None
+    recent_projects: list[str] = []
+
+
+class ProviderProjectSummary(BaseModel):
+    git_provider: str
+    project_path: str
+    display_name: str
+    default_branch: str | None = None
+    source: str
+
+
+class ProviderProjectsResponse(BaseModel):
+    git_provider: str
+    configured_git_provider: str | None = None
+    projects: list[ProviderProjectSummary]
+    recent_projects: list[ProviderProjectSummary]
+
+
+class ProviderBranchSummary(BaseModel):
+    name: str
+    is_default: bool = False
+
+
+class ProviderBranchesResponse(BaseModel):
+    git_provider: str
+    project_path: str
+    default_branch: str | None = None
+    branches: list[ProviderBranchSummary]
 
 
 class RepoOpenResponse(BaseModel):

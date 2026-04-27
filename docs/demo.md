@@ -5,11 +5,10 @@ This guide shows the first successful end-to-end read-only OpenPatch workflow.
 It covers:
 
 - `openpatch onboard`
-- `openpatch worker start`
 - `openpatch doctor`
 - `openpatch status`
+- provider-aware project and branch selection in the web UI
 - `repo/open` against a private GitLab repository
-- `fs/read`
 - `/agent/run` repository summarization
 
 ## Overview
@@ -18,8 +17,8 @@ OpenPatch now supports a working product flow where:
 
 1. the CLI prepares local runtime config
 2. the local worker starts on the developer machine
-3. a private repository is opened locally through the worker
-4. a file is read locally through the worker
+3. the web UI loads projects and branches from the configured git provider
+4. a private repository is opened locally through the worker
 5. a read-only repository understanding task is sent to the configured model backend
 
 Repository operations stay local. The model backend only receives the minimal repository context needed for the task.
@@ -64,18 +63,7 @@ High-level success:
 - model and GitLab settings are stored for the worker to reuse
 - local runtime directories are prepared under `~/.openpatch`
 
-## Step 2: Start The Worker
-
-```bash
-openpatch worker start
-```
-
-High-level success:
-
-- the worker starts in the background
-- the CLI prints the worker command, worker `src` path, `PYTHONPATH`, health URL, log file, and pid file
-
-## Step 3: Verify Worker Health
+## Step 2: Verify Worker Health
 
 ```bash
 openpatch doctor
@@ -85,9 +73,27 @@ curl http://127.0.0.1:8000/health
 
 High-level success:
 
+- `openpatch onboard` has already started the worker
 - `doctor` shows the worker process as running and the worker as reachable
 - `status` shows the configured worker URL, model provider, and worker health detail
 - the health endpoint returns JSON with `status: ok`
+
+## Step 3: Choose A Repository In The Web UI
+
+In the web UI:
+
+1. choose `gitlab` as the provider
+2. wait for the project list to load
+3. choose a project from the searchable list
+4. wait for the branch list to load
+5. choose a branch, with the provider default selected automatically when available
+6. use the Advanced toggle only if you need a manual override
+
+High-level success:
+
+- the UI loads provider-backed projects instead of asking for a manual path first
+- recent local projects appear as shortcuts when available
+- the default branch is selected automatically when the provider returns one
 
 ## Step 4: Open A Private GitLab Repository
 
@@ -113,23 +119,7 @@ High-level success:
   - `cloned`
   - `message`
 
-## Step 5: Read A File
-
-```bash
-curl -X POST http://127.0.0.1:8000/fs/read \
-  -H "Content-Type: application/json" \
-  -d '{
-    "project_path": "group/private-repo",
-    "relative_path": "README.md"
-  }'
-```
-
-High-level success:
-
-- the worker returns file content from the local checkout
-- no remote repository call is needed for the file read itself
-
-## Step 6: Run A Read-Only Repository Summary
+## Step 5: Run A Read-Only Repository Summary
 
 ```bash
 curl -X POST http://127.0.0.1:8000/agent/run \

@@ -4,6 +4,35 @@ export type WorkerHealthPayload = {
   status: string;
   service: string;
   repo_base_dir: string;
+  configured_git_provider?: string | null;
+  recent_projects?: string[];
+};
+
+export type ProviderProjectSummary = {
+  git_provider: string;
+  project_path: string;
+  display_name: string;
+  default_branch?: string | null;
+  source: string;
+};
+
+export type ProviderProjectsPayload = {
+  git_provider: string;
+  configured_git_provider?: string | null;
+  projects: ProviderProjectSummary[];
+  recent_projects: ProviderProjectSummary[];
+};
+
+export type ProviderBranchSummary = {
+  name: string;
+  is_default: boolean;
+};
+
+export type ProviderBranchesPayload = {
+  git_provider: string;
+  project_path: string;
+  default_branch?: string | null;
+  branches: ProviderBranchSummary[];
 };
 
 export type RepoOpenPayload = {
@@ -62,6 +91,38 @@ async function parseWorkerResponse<T>(response: Response): Promise<T> {
 export async function getWorkerHealth(): Promise<WorkerHealthPayload> {
   const response = await fetch("/api/worker/health", { cache: "no-store" });
   return parseWorkerResponse<WorkerHealthPayload>(response);
+}
+
+export async function getProviderProjects(input: {
+  git_provider: string;
+  search?: string;
+}): Promise<ProviderProjectsPayload> {
+  const query = new URLSearchParams({
+    git_provider: input.git_provider,
+  });
+  if (input.search?.trim()) {
+    query.set("search", input.search.trim());
+  }
+
+  const response = await fetch(`/api/worker/provider-projects?${query.toString()}`, {
+    cache: "no-store",
+  });
+  return parseWorkerResponse<ProviderProjectsPayload>(response);
+}
+
+export async function getProviderBranches(input: {
+  git_provider: string;
+  project_path: string;
+}): Promise<ProviderBranchesPayload> {
+  const query = new URLSearchParams({
+    git_provider: input.git_provider,
+    project_path: input.project_path,
+  });
+
+  const response = await fetch(`/api/worker/provider-branches?${query.toString()}`, {
+    cache: "no-store",
+  });
+  return parseWorkerResponse<ProviderBranchesPayload>(response);
 }
 
 export async function openRepository(input: {

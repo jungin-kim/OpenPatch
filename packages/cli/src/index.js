@@ -15,13 +15,18 @@ const STATE_PATH = path.join(RUN_DIR, "worker-state.json");
 const LEGACY_STATE_PATH = path.join(CONFIG_DIR, "daemon", "state.json");
 const PID_PATH = path.join(RUN_DIR, "worker.pid");
 const WORKER_LOG_PATH = path.join(LOG_DIR, "worker.log");
+const OLLAMA_LOG_PATH = path.join(LOG_DIR, "ollama.log");
 const DEFAULT_WORKER_URL = "http://127.0.0.1:8000";
 const DEFAULT_REPO_BASE_DIR = path.join(os.homedir(), ".openpatch", "repos");
 const DEFAULT_WORKER_HEALTH_TIMEOUT_MS = 1500;
 const DEFAULT_WORKER_START_TIMEOUT_MS = 8000;
 const DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS = 2000;
 const DEFAULT_PORT_CHECK_TIMEOUT_MS = 1000;
+const DEFAULT_OLLAMA_TIMEOUT_MS = 1500;
+const DEFAULT_OLLAMA_START_TIMEOUT_MS = 10000;
 const DEFAULT_LOG_TAIL_LINES = 40;
+const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
+const OLLAMA_RECOMMENDED_MODEL = "qwen2.5-coder:7b";
 const MODEL_PROVIDER_OPTIONS = [
   "openai",
   "anthropic",
@@ -50,9 +55,9 @@ const MODEL_PROVIDER_CONFIG = {
   },
   ollama: {
     label: "Ollama",
-    defaultBaseUrl: "http://127.0.0.1:11434/v1",
+    defaultBaseUrl: OLLAMA_DEFAULT_BASE_URL,
     defaultApiKey: "ollama",
-    defaultModel: "llama3.2",
+    defaultModel: OLLAMA_RECOMMENDED_MODEL,
     prompts: ["baseUrl", "model"],
   },
   "openai-compatible": {
@@ -182,27 +187,54 @@ async function runOnboard() {
     console.log("OpenPatch is now configured.");
     console.log(`Config file: ${CONFIG_PATH}`);
     console.log(`Worker detection: ${workerDetection.summary}`);
+    console.log("");
+    console.log("Starting the local worker...");
 
-    const startAnswer = (
-      await rl.question("Start the local worker now? [Y/n]: ")
-    ).trim().toLowerCase();
-    if (startAnswer === "" || startAnswer === "y" || startAnswer === "yes") {
-      try {
-        await startWorker({ interactive: false });
-        console.log("The local worker has been started.");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.log(`Worker start failed: ${message}`);
-        console.log("You can try again with `openpatch worker start` after fixing the issue.");
-      }
-    } else {
-      console.log("Skipping worker start.");
+    let workerStarted = false;
+    try {
+      await startWorker({ interactive: false });
+      workerStarted = true;
+      console.log("The local worker has been started.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(`Worker start failed: ${message}`);
+      console.log("You can inspect the worker with `openpatch worker logs` and retry with `openpatch worker start`.");
     }
 
-    console.log("Next steps:");
-    console.log("  1. Run `openpatch doctor`");
-    console.log("  2. Run `openpatch status`");
-    console.log("  3. Use `openpatch worker logs` if the worker does not come up cleanly");
+    const workerHealth = await checkWorkerHealth(
+      config.worker.baseUrl,
+      DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+    );
+    const modelConnectivity = await checkModelConnectivity(
+      config.model,
+      DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
+    );
+
+    console.log("");
+    console.log("OpenPatch onboarding summary");
+    console.log(`Worker URL: ${config.worker.baseUrl}`);
+    console.log(`Model provider: ${formatModelSummary(config.model)}`);
+    console.log(`Worker health: ${workerHealth.reachable ? "ok" : "needs attention"}`);
+    console.log(`Model connectivity: ${modelConnectivity.reachable ? "ok" : "needs attention"}`);
+
+    if (workerStarted && workerHealth.reachable && modelConnectivity.reachable) {
+      console.log("");
+      console.log("OpenPatch is ready for read-only repository Q&A.");
+      console.log("Next steps:");
+      console.log("  1. Run `openpatch status`");
+      console.log("  2. Open the web UI");
+      console.log("  3. Open a repository and ask a read-only question");
+      return;
+    }
+
+    if (!workerHealth.reachable) {
+      console.log(`Worker detail: ${workerHealth.message}`);
+    }
+    if (!modelConnectivity.reachable) {
+      console.log(`Model detail: ${modelConnectivity.message}`);
+    }
+
+    process.exitCode = 1;
   } finally {
     rl.close();
   }
@@ -752,6 +784,112 @@ async function commandExists(command) {
   return false;
 }
 
+async function runInteractiveCommand(command, args, options = {}) {
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || process.cwd(),
+      env: options.env || process.env,
+      stdio: "inherit",
+    });
+
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${command} ${args.join(" ")} exited with code ${code ?? "unknown"}.`));
+    });
+  });
+}
+
+async function startOllamaServer(baseUrl) {
+  await ensureLogFileExists(OLLAMA_LOG_PATH);
+  const logStream = fs.openSync(OLLAMA_LOG_PATH, "a");
+  const rootUrl = getOllamaRootUrl(baseUrl);
+  const parsedUrl = new URL(rootUrl);
+
+  try {
+    const child = spawn("ollama", ["serve"], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: ["ignore", logStream, logStream],
+      env: {
+        ...process.env,
+        OLLAMA_HOST: `${parsedUrl.hostname}:${parsedUrl.port || "11434"}`,
+      },
+    });
+
+    if (!child.pid) {
+      throw new Error("No process id was returned while starting Ollama.");
+    }
+    child.unref();
+  } finally {
+    fs.closeSync(logStream);
+  }
+}
+
+async function pullOllamaModel(modelName) {
+  console.log(`Pulling Ollama model: ${modelName}`);
+  await runInteractiveCommand("ollama", ["pull", modelName]);
+}
+
+async function checkOllamaServer(baseUrl, timeoutMs) {
+  const rootUrl = getOllamaRootUrl(baseUrl);
+  const tagsUrl = `${rootUrl}/api/tags`;
+
+  try {
+    const response = await fetchWithTimeout(tagsUrl, {
+      method: "GET",
+      timeoutMs,
+    });
+
+    if (!response.ok) {
+      return {
+        reachable: false,
+        models: [],
+        message: `Ollama responded with status ${response.status} at ${tagsUrl}.`,
+      };
+    }
+
+    const payload = await response.json();
+    const models = Array.isArray(payload.models)
+      ? payload.models
+          .map((entry) => entry?.name)
+          .filter((name) => typeof name === "string" && name.trim())
+      : [];
+
+    return {
+      reachable: true,
+      models,
+      message: `Ollama is reachable at ${tagsUrl}.`,
+    };
+  } catch (error) {
+    return {
+      reachable: false,
+      models: [],
+      message: `OpenPatch could not reach Ollama at ${tagsUrl}: ${formatTimeoutAwareError(error, `Ollama check timed out after ${Math.round(timeoutMs / 1000)} seconds.`)}`,
+    };
+  }
+}
+
+async function waitForOllamaServer(baseUrl, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = await checkOllamaServer(baseUrl, DEFAULT_OLLAMA_TIMEOUT_MS);
+    if (status.reachable) {
+      return status;
+    }
+    await sleep(500);
+  }
+
+  return {
+    reachable: false,
+    models: [],
+    message: `Ollama did not become reachable within ${Math.round(timeoutMs / 1000)} seconds.`,
+  };
+}
+
 async function checkWorkerHealth(baseUrl, timeoutMs) {
   try {
     const response = await fetchWithTimeout(`${baseUrl}/health`, {
@@ -854,6 +992,10 @@ async function promptGitProviderConfig(rl, provider) {
 
 async function promptModelConfig(rl) {
   const provider = await promptModelProvider(rl);
+  if (provider === "ollama") {
+    return promptOllamaModelConfig(rl);
+  }
+
   const providerConfig = MODEL_PROVIDER_CONFIG[provider];
 
   console.log("");
@@ -889,6 +1031,31 @@ async function promptModelConfig(rl) {
     baseUrl,
     apiKey,
     model,
+  };
+}
+
+async function promptOllamaModelConfig(rl) {
+  console.log("");
+  console.log("Model provider: Ollama");
+  console.log("OpenPatch will look for a local Ollama installation, help you start it if needed, and guide model selection.");
+
+  const commandInstalled = await commandExists("ollama");
+  if (!commandInstalled) {
+    const installedNow = await ensureOllamaInstalled(rl);
+    if (!installedNow) {
+      throw new Error("Ollama is required for the guided local Ollama setup. Install it, then rerun `openpatch onboard`.");
+    }
+  }
+
+  const baseUrl = await promptWithDefault(rl, "Ollama base URL", OLLAMA_DEFAULT_BASE_URL);
+  const serverState = await ensureOllamaServerReady(rl, baseUrl);
+  const selectedModel = await chooseOllamaModel(rl, baseUrl, serverState.models || []);
+
+  return {
+    provider: "ollama",
+    baseUrl,
+    apiKey: "ollama",
+    model: selectedModel,
   };
 }
 
@@ -947,6 +1114,134 @@ async function promptWithDefault(rl, label, defaultValue) {
   const answer = await rl.question(`${label}${suffix}: `);
   const trimmed = answer.trim();
   return trimmed || defaultValue;
+}
+
+async function promptYesNo(rl, prompt, defaultYes) {
+  const suffix = defaultYes ? " [Y/n]: " : " [y/N]: ";
+  const answer = (await rl.question(`${prompt}${suffix}`)).trim().toLowerCase();
+  if (!answer) {
+    return defaultYes;
+  }
+  return answer === "y" || answer === "yes";
+}
+
+async function ensureOllamaInstalled(rl) {
+  console.log("");
+  console.log("Ollama was not found on this machine.");
+
+  if (process.platform === "darwin") {
+    const brewInstalled = await commandExists("brew");
+    if (brewInstalled) {
+      const installNow = await promptYesNo(
+        rl,
+        "Homebrew is available. Install Ollama now with `brew install ollama`?",
+        true,
+      );
+      if (installNow) {
+        console.log("Installing Ollama with Homebrew...");
+        await runInteractiveCommand("brew", ["install", "ollama"]);
+        return commandExists("ollama");
+      }
+    }
+
+    console.log("Install Ollama on macOS, then rerun `openpatch onboard`.");
+    console.log("Suggested options:");
+    console.log("  - install Homebrew and run `brew install ollama`");
+    console.log("  - or install Ollama from the official macOS installer");
+    return false;
+  }
+
+  console.log("Install Ollama on this machine, then rerun `openpatch onboard`.");
+  console.log("Suggested options:");
+  console.log("  - use your system package manager if available");
+  console.log("  - or install Ollama from the official installer for your platform");
+  return false;
+}
+
+async function ensureOllamaServerReady(rl, baseUrl) {
+  const initialState = await checkOllamaServer(baseUrl, DEFAULT_OLLAMA_TIMEOUT_MS);
+  if (initialState.reachable) {
+    console.log(`Ollama is reachable at ${baseUrl}.`);
+    return initialState;
+  }
+
+  console.log("");
+  console.log("Ollama is installed, but the local server is not reachable yet.");
+  console.log(initialState.message);
+
+  const startNow = await promptYesNo(
+    rl,
+    "Start the Ollama server now?",
+    true,
+  );
+  if (!startNow) {
+    throw new Error(
+      "Ollama is not running. Start it with `ollama serve`, then rerun `openpatch onboard`.",
+    );
+  }
+
+  console.log("Starting the Ollama server...");
+  await startOllamaServer(baseUrl);
+  const startedState = await waitForOllamaServer(baseUrl, DEFAULT_OLLAMA_START_TIMEOUT_MS);
+  if (!startedState.reachable) {
+    throw new Error(
+      `Ollama did not become reachable in time. ${startedState.message} Check ${OLLAMA_LOG_PATH} or run \`ollama serve\` manually.`,
+    );
+  }
+
+  console.log(`Ollama is now reachable at ${baseUrl}.`);
+  return startedState;
+}
+
+async function chooseOllamaModel(rl, baseUrl, initialModels) {
+  let models = initialModels;
+
+  if (models.length === 0) {
+    console.log("");
+    console.log("No local Ollama models were detected.");
+    const pullNow = await promptYesNo(
+      rl,
+      `Pull the recommended model now (${OLLAMA_RECOMMENDED_MODEL})?`,
+      true,
+    );
+
+    if (pullNow) {
+      await pullOllamaModel(OLLAMA_RECOMMENDED_MODEL);
+      const refreshed = await checkOllamaServer(baseUrl, DEFAULT_OLLAMA_TIMEOUT_MS);
+      models = refreshed.models || [];
+    }
+  }
+
+  if (models.length === 0) {
+    console.log("");
+    console.log("OpenPatch could not detect any local Ollama models.");
+    return promptWithDefault(rl, "Model name", OLLAMA_RECOMMENDED_MODEL);
+  }
+
+  console.log("");
+  console.log("Detected local Ollama models:");
+  for (const [index, modelName] of models.entries()) {
+    console.log(`  ${index + 1}. ${modelName}`);
+  }
+  console.log(`  ${models.length + 1}. Pull recommended model (${OLLAMA_RECOMMENDED_MODEL})`);
+  console.log(`  ${models.length + 2}. Enter a model name manually`);
+
+  while (true) {
+    const answer = (await rl.question("Choice [1]: ")).trim() || "1";
+    const choice = Number(answer);
+
+    if (Number.isInteger(choice) && choice >= 1 && choice <= models.length) {
+      return models[choice - 1];
+    }
+    if (choice === models.length + 1) {
+      await pullOllamaModel(OLLAMA_RECOMMENDED_MODEL);
+      return OLLAMA_RECOMMENDED_MODEL;
+    }
+    if (choice === models.length + 2) {
+      return promptWithDefault(rl, "Model name", OLLAMA_RECOMMENDED_MODEL);
+    }
+    console.log(`Please choose a number from 1 to ${models.length + 2}.`);
+  }
 }
 
 async function showConfig() {
@@ -1200,6 +1495,10 @@ function getModelConnectivityRemediation(modelConfig, probe) {
     return "Confirm the base URL points at the Gemini-compatible API root and that the API key is valid.";
   }
   return "Confirm the model provider base URL and credentials are correct.";
+}
+
+function getOllamaRootUrl(baseUrl) {
+  return baseUrl.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
 }
 
 function buildPythonPathEnv(srcPath, existingPythonPath) {

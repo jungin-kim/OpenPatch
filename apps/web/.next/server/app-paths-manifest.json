@@ -1,5 +1,6 @@
 {
   "/api/worker/health/route": "app/api/worker/health/route.js",
+  "/api/worker/provider-projects/route": "app/api/worker/provider-projects/route.js",
   "/api/worker/repo-open/route": "app/api/worker/repo-open/route.js",
   "/page": "app/page.js"
 }

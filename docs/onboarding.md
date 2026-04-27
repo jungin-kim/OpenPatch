@@ -42,13 +42,15 @@ The onboarding flow will:
 2. create a config file
 3. prompt for a model provider first
 4. ask only for the model fields that match that provider
-5. prompt for git provider selection, provider base URL, and provider token when needed
-6. prompt for a local repo base directory
-7. detect whether a local worker installation is already present
-8. prepare local runtime directories under `~/.openpatch`
-9. optionally start the local worker immediately
+5. guide the Ollama setup automatically when `Ollama` is selected
+6. prompt for git provider selection, provider base URL, and provider token when needed
+7. prompt for a local repo base directory
+8. detect whether a local worker installation is already present
+9. prepare local runtime directories under `~/.openpatch`
+10. start the local worker automatically
+11. verify worker health and model connectivity before finishing
 
-If you choose to start the worker during onboarding, OpenPatch launches it as a background process, waits for health for a short bounded timeout, prints success or failure, and exits cleanly.
+OpenPatch now finishes onboarding by launching the worker as a background process, waiting for health for a short bounded timeout, checking model connectivity, and printing a concise success summary.
 For the repo-source local worker, the CLI handles the Python src-layout automatically with an absolute `PYTHONPATH`, so users do not need to export `PYTHONPATH` during normal CLI startup.
 
 Current model provider choices:
@@ -64,7 +66,7 @@ Examples of the provider-aware prompts:
 - OpenAI: API key and model name, with the default base URL set to `https://api.openai.com/v1`
 - Anthropic: API key and model name, with the default base URL set to `https://api.anthropic.com`
 - Gemini: API key and model name, with the default base URL set to `https://generativelanguage.googleapis.com/v1beta/openai`
-- Ollama: base URL and model name, with defaults of `http://127.0.0.1:11434/v1` and `ollama`
+- Ollama: guided local detection, server reachability checks, model discovery, and a default base URL of `http://127.0.0.1:11434/v1`
 - OpenAI-compatible: base URL, API key, and model name
 
 The resulting config stores model settings under a nested `model` object in `~/.openpatch/config.json`:
@@ -155,7 +157,6 @@ The log command prints a tail-style view of the current worker log file so start
 ```bash
 npm install -g openpatch
 openpatch onboard
-openpatch worker start
 openpatch doctor
 openpatch status
 curl http://127.0.0.1:8000/health
@@ -177,7 +178,16 @@ npm install -g openpatch
 openpatch onboard
 ```
 
-3. Choose these onboarding values at a high level:
+3. OpenPatch will guide these Ollama-specific steps:
+
+- detect whether the `ollama` command is installed
+- on macOS, offer a Homebrew install when available
+- detect whether the Ollama server is running
+- offer to start the server if needed
+- list available local models
+- offer to pull `qwen2.5-coder:7b` if no suitable model is available
+
+4. Choose these onboarding values at a high level:
 
 - model provider: `Ollama`
 - base URL: `http://127.0.0.1:11434/v1`
@@ -185,12 +195,6 @@ openpatch onboard
 - git provider: your choice, or `None for now`
 - if you choose GitLab or GitHub, provide the provider base URL and token so the worker can reuse the same config later
 - local repo base directory: accept the default or choose your own
-
-4. Start the worker if you skipped it during onboarding:
-
-```bash
-openpatch worker start
-```
 
 5. Verify the setup:
 
@@ -202,8 +206,9 @@ curl http://127.0.0.1:8000/health
 
 Expected success output at a high level:
 
-- `openpatch worker start` prints the worker command, worker src path, expected health URL, log path, and a success message
-- `openpatch doctor` reports the worker process as running and the worker as reachable
+- `openpatch onboard` prints a concise onboarding summary
+- the worker starts during onboarding
+- worker health and model connectivity are verified before onboarding finishes
 - `openpatch status` shows the configured worker URL, model provider `ollama`, and healthy worker details
 - `curl http://127.0.0.1:8000/health` returns JSON with `status: ok`
 
