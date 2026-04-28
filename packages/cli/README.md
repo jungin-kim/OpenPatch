@@ -6,6 +6,8 @@ It currently provides:
 
 - `repooperator config show`
 - `repooperator onboard`
+- `repooperator up`
+- `repooperator down`
 - `repooperator doctor`
 - `repooperator status`
 - `repooperator worker start`
@@ -29,10 +31,9 @@ The first public alpha CLI flow is:
 ```bash
 npm install -g repooperator
 repooperator onboard
-repooperator worker start
+repooperator up
 repooperator doctor
 repooperator status
-curl http://127.0.0.1:8000/health
 ```
 
 At a high level, success means:
@@ -40,6 +41,7 @@ At a high level, success means:
 - Ollama is detected locally or RepoOperator guides the installation path
 - local Ollama models are detected or RepoOperator offers to pull a recommended model
 - the worker starts in the background during onboarding
+- `repooperator up` starts the worker and web UI together and prints the local web URL
 - onboarding verifies worker health and model connectivity
 - `status` shows the configured worker URL, model connection mode, and model provider clearly
 - the local health endpoint returns JSON with `status: ok`
@@ -56,6 +58,14 @@ The Ollama path is now guided: RepoOperator detects whether `ollama` is installe
 For GitLab or GitHub repository flows, onboarding now stores the provider base URL and token in `~/.repooperator/config.json` so the local worker can use them without extra manual exports.
 Across the product, the repository identifier is `project_path`, and the supported onboarding provider choices for repository access are `gitlab`, `github`, `local`, or `none`.
 
+### `repooperator up`
+
+Starts the local product runtime. This starts the managed local worker, starts the web UI, verifies both are reachable, and prints the local web URL. This is the recommended command for the normal local product experience after onboarding.
+
+### `repooperator down`
+
+Stops the managed web UI and local worker processes started by RepoOperator.
+
 ### `repooperator config show`
 
 Prints the current local RepoOperator configuration with secrets redacted.
@@ -70,7 +80,7 @@ Prints the current RepoOperator configuration summary and worker status, includi
 
 ### `repooperator worker start`
 
-Starts the local worker as a managed background process for development. The CLI launches the repo-source worker with an absolute `PYTHONPATH` that points at the worker `src` directory, so users do not need to export `PYTHONPATH` manually for the src-layout package.
+Starts only the local worker as a managed background process for maintenance and development. For the common product path, use `repooperator up` so the worker and web UI start together. The CLI launches the repo-source worker with an absolute `PYTHONPATH` that points at the worker `src` directory, so users do not need to export `PYTHONPATH` manually for the src-layout package.
 
 ### `repooperator worker stop`
 
@@ -124,6 +134,7 @@ Ollama is treated as the first-class local self-served option with product-frien
 ```bash
 npm install -g repooperator
 repooperator onboard
+repooperator up
 repooperator doctor
 repooperator status
 ```
@@ -140,9 +151,9 @@ Example choices during onboarding:
 Then run:
 
 ```bash
+repooperator up
 repooperator doctor
 repooperator status
-curl http://127.0.0.1:8000/health
 ```
 
 ## Troubleshooting

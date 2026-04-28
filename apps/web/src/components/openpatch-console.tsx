@@ -115,7 +115,6 @@ export function RepoOperatorConsole() {
       try {
         const payload = await getProviderProjects({
           git_provider: gitProvider,
-          search: projectSearch.trim() || undefined,
         });
         if (cancelled) {
           return;
@@ -135,7 +134,10 @@ export function RepoOperatorConsole() {
             payload.projects[0]?.project_path ||
             "";
           setSelectedProjectPath(preferred);
-          setManualProjectPath((current) => current || preferred);
+          setSelectedBranch("");
+          setBranches([]);
+          setManualBranch("");
+          setManualProjectPath(preferred);
         }
       } catch (error) {
         if (cancelled) {
@@ -143,6 +145,10 @@ export function RepoOperatorConsole() {
         }
         setProjects([]);
         setRecentProjects([]);
+        setSelectedProjectPath("");
+        setSelectedBranch("");
+        setBranches([]);
+        setManualBranch("");
         setProjectsError(
           error instanceof LocalWorkerClientError || error instanceof Error
             ? error.message
@@ -159,7 +165,7 @@ export function RepoOperatorConsole() {
     return () => {
       cancelled = true;
     };
-  }, [connectionState, gitProvider, projectSearch]);
+  }, [connectionState, gitProvider]);
 
   useEffect(() => {
     if (connectionState !== "connected" || !selectedProjectPath || useAdvanced) {
@@ -212,17 +218,68 @@ export function RepoOperatorConsole() {
     };
   }, [connectionState, gitProvider, selectedProjectPath, useAdvanced]);
 
+  const loadedProjects = useMemo(() => {
+    const seen = new Set<string>();
+    return [...recentProjects, ...projects].filter((project) => {
+      if (seen.has(project.project_path)) {
+        return false;
+      }
+      seen.add(project.project_path);
+      return true;
+    });
+  }, [projects, recentProjects]);
+
   const filteredProjects = useMemo(() => {
     if (!projectSearch.trim()) {
-      return projects;
+      return loadedProjects;
     }
     const query = projectSearch.trim().toLowerCase();
-    return projects.filter(
+    return loadedProjects.filter(
       (project) =>
         project.project_path.toLowerCase().includes(query) ||
         project.display_name.toLowerCase().includes(query),
     );
-  }, [projectSearch, projects]);
+  }, [projectSearch, loadedProjects]);
+
+  const projectListHelp = useMemo(() => {
+    if (connectionState !== "connected") {
+      return "Connect the local runtime before choosing a repository.";
+    }
+    if (projectsPending) {
+      return gitProvider === "local"
+        ? "Loading recent local projects..."
+        : "Loading projects from the configured provider...";
+    }
+    if (projectsError) {
+      return projectsError;
+    }
+    if (!loadedProjects.length) {
+      return gitProvider === "local"
+        ? "No recent local projects yet. Use the local path field below to open one."
+        : "No accessible projects were returned for this provider.";
+    }
+    if (!filteredProjects.length) {
+      return "No projects match the current filter.";
+    }
+    return gitProvider === "local"
+      ? "Choose a recent local project or enter a path manually below."
+      : "Choose a project from the loaded provider list. Search narrows this list.";
+  }, [
+    connectionState,
+    filteredProjects.length,
+    gitProvider,
+    loadedProjects.length,
+    projectsError,
+    projectsPending,
+  ]);
+
+  const projectListEmptyLabel = projectsPending
+    ? "Loading projects..."
+    : loadedProjects.length
+      ? "No projects match the current filter"
+      : gitProvider === "local"
+        ? "No recent local projects"
+        : "No accessible projects";
 
   const effectiveProjectPath = useAdvanced
     ? manualProjectPath.trim()
@@ -255,7 +312,8 @@ export function RepoOperatorConsole() {
   const branchSelectionDisabled =
     branchesPending ||
     connectionState !== "connected" ||
-    (gitProvider !== "local" && (!selectedProjectPath || branches.length === 0));
+    !selectedProjectPath ||
+    branches.length === 0;
 
   async function handleRepoOpen(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -331,10 +389,10 @@ export function RepoOperatorConsole() {
       <section className="hero">
         <div className="panel hero-panel">
           <span className="hero-kicker">Guided repository selection</span>
-          <h2>Choose a repository source and use the configured model connection without dropping to raw worker calls.</h2>
+          <h2>Start locally, choose from visible projects, and ask useful repository questions.</h2>
           <p>
-            RepoOperator can load hosted repositories from GitLab or GitHub, remember recent local
-            projects, and route read-only questions through either a local model runtime or a remote model API.
+            RepoOperator loads your configured repository source, opens projects through the
+            local worker, and routes read-only questions through the model connection you set up.
           </p>
 
           <div className="hero-grid">
@@ -344,7 +402,7 @@ export function RepoOperatorConsole() {
             </div>
             <div className="mini-card">
               <strong>2. Select</strong>
-              <span>Choose a repository source, project, and branch from guided lists.</span>
+              <span>Pick a project from the visible list, then use search only to filter.</span>
             </div>
             <div className="mini-card">
               <strong>3. Ask</strong>
@@ -396,10 +454,10 @@ export function RepoOperatorConsole() {
       <section className="workspace">
         <section className="panel composer-panel" aria-labelledby="repo-open-title">
           <p className="section-label">Repository</p>
-          <h3 id="repo-open-title">Select a repository through the local worker</h3>
+          <h3 id="repo-open-title">Choose a project to open locally</h3>
           <p>
-            Choose a repository source first. Hosted providers load guided project and
-            branch lists, while local projects support recent suggestions plus direct path entry.
+            Hosted providers load available projects automatically. Select a project, confirm the
+            branch, and the local worker will prepare it on this machine.
           </p>
 
           <form className="task-form" onSubmit={handleRepoOpen}>
@@ -415,8 +473,10 @@ export function RepoOperatorConsole() {
                   onChange={(event) => {
                     const nextProvider = event.target.value;
                     setGitProvider(nextProvider);
+                    setProjectSearch("");
                     setSelectedProjectPath("");
                     setSelectedBranch("");
+                    setBranchesError(null);
                     setUseAdvanced(nextProvider === "local");
                     setProjects([]);
                     setBranches([]);
@@ -434,7 +494,7 @@ export function RepoOperatorConsole() {
 
               <div className="field-group">
                 <label className="field-label" htmlFor="project-search">
-                  {gitProvider === "local" ? "Search recent local projects" : "Search projects"}
+                  {gitProvider === "local" ? "Filter recent local projects" : "Filter loaded projects"}
                 </label>
                 <input
                   id="project-search"
@@ -444,7 +504,7 @@ export function RepoOperatorConsole() {
                   placeholder={
                     gitProvider === "local"
                       ? "/Users/you/my-project"
-                      : "Search by project name or path"
+                      : "Type to narrow by project name or path"
                   }
                 />
               </div>
@@ -462,8 +522,10 @@ export function RepoOperatorConsole() {
                       onClick={() => {
                         setUseAdvanced(false);
                         setSelectedProjectPath(project.project_path);
+                        setSelectedBranch("");
+                        setBranches([]);
+                        setBranchesError(null);
                         setManualProjectPath(project.project_path);
-                        setProjectSearch(project.project_path);
                         setRepoResult(null);
                       }}
                     >
@@ -478,37 +540,40 @@ export function RepoOperatorConsole() {
               <label className="field-label" htmlFor="project-select">
                 {gitProvider === "local" ? "Recent local project" : "Project"}
               </label>
-              <select
-                id="project-select"
-                className="text-input text-select-list mono"
-                size={Math.min(Math.max(filteredProjects.length, 4), 8)}
-                value={selectedProjectPath}
-                onChange={(event) => {
-                  setUseAdvanced(false);
-                  setSelectedProjectPath(event.target.value);
-                  setManualProjectPath(event.target.value);
-                  setRepoResult(null);
-                }}
-                disabled={projectsPending || connectionState !== "connected" || filteredProjects.length === 0}
-              >
-                {filteredProjects.map((project) => (
-                  <option key={project.project_path} value={project.project_path}>
-                    {project.display_name}
-                  </option>
-                ))}
-              </select>
+              <div className="project-list-shell">
+                {projectsPending ? (
+                  <div className="project-list-loading" role="status">
+                    Loading projects...
+                  </div>
+                ) : null}
+                <select
+                  id="project-select"
+                  className="text-input text-select-list mono"
+                  size={Math.min(Math.max(filteredProjects.length, 4), 8)}
+                  value={selectedProjectPath}
+                  onChange={(event) => {
+                    setUseAdvanced(false);
+                    setSelectedProjectPath(event.target.value);
+                    setSelectedBranch("");
+                    setBranches([]);
+                    setBranchesError(null);
+                    setManualProjectPath(event.target.value);
+                    setRepoResult(null);
+                  }}
+                  disabled={projectsPending || connectionState !== "connected" || filteredProjects.length === 0}
+                >
+                  {!filteredProjects.length ? (
+                    <option value="">{projectListEmptyLabel}</option>
+                  ) : null}
+                  {filteredProjects.map((project) => (
+                    <option key={project.project_path} value={project.project_path}>
+                      {project.display_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <p className="field-help">
-                {projectsPending
-                  ? gitProvider === "local"
-                    ? "Loading recent local projects..."
-                    : "Loading projects from the configured provider..."
-                  : filteredProjects.length
-                    ? gitProvider === "local"
-                      ? "Choose a recent local project or enter a path manually below."
-                      : "Choose a project from the provider response."
-                    : gitProvider === "local"
-                      ? "No recent local projects match the current search yet."
-                      : "No projects are available for the current search or provider."}
+                {projectListHelp}
               </p>
             </div>
 

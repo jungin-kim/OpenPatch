@@ -32,8 +32,8 @@ RepoOperator is preparing for its first public alpha release.
 The current working milestone is a real end-to-end read-only flow:
 
 - onboard a machine with the CLI
-- start the local worker
-- verify worker and model connectivity
+- start the local product runtime with one command
+- verify worker, web UI, and model connectivity
 - open a private GitLab or GitHub repository locally through the worker, or attach a local project path
 - ask a read-only repository question from the web UI
 - receive a response in the browser
@@ -48,22 +48,18 @@ The first public alpha flow is:
 2. Run `repooperator onboard`.
 3. Choose a model connection mode: local model runtime or remote model API.
 4. If you choose a local runtime, let RepoOperator detect or guide the Ollama setup.
-5. Let RepoOperator start the local worker and verify health.
-6. Run `repooperator worker start` if you want to restart the worker explicitly or start it again later.
-7. Run `repooperator doctor`.
-8. Run `repooperator status`.
-9. Start the web UI.
-10. Open a private GitLab or GitHub repository, or choose a local project in the UI.
-11. Ask a read-only repository question.
-12. Review the response in the browser.
+5. Run `repooperator up` to start the local worker and web UI together.
+6. Open the printed local web URL.
+7. Choose a private GitLab or GitHub repository, or choose a local project in the UI.
+8. Ask a read-only repository question.
+9. Review the response in the browser.
 
 ```bash
 npm install -g repooperator
 repooperator onboard
-repooperator worker start
+repooperator up
 repooperator doctor
 repooperator status
-curl http://127.0.0.1:8000/health
 ```
 
 For a simple local-first setup during onboarding, choose:
@@ -77,11 +73,11 @@ For a simple local-first setup during onboarding, choose:
 High-level success looks like this:
 
 - `repooperator onboard` detects or guides the local Ollama setup
-- `repooperator onboard` starts the local worker and verifies worker and model connectivity
+- `repooperator up` starts the local worker and web UI, verifies both are reachable, and prints the local web URL
 - `repooperator doctor` confirms the worker and model are healthy after onboarding
 - `repooperator status` shows the configured worker URL, model connection mode, model provider, and worker health details
 - `curl http://127.0.0.1:8000/health` returns JSON with `status: ok`
-- the web UI can load provider-backed project and branch lists
+- the web UI automatically loads provider-backed project and branch lists
 - the web UI can open a private repository through `/repo/open`
 - the web UI can send a read-only repository question through `/agent/run`
 - the response appears in the browser without modifying local files
@@ -94,6 +90,7 @@ If `~/.repooperator` does not exist yet but `~/.openpatch` does, the CLI reuses 
 RepoOperator currently supports these alpha-stage capabilities:
 
 - CLI onboarding with a model-connection-first setup
+- one-command local product startup through `repooperator up`
 - local worker lifecycle management through `repooperator worker start`, `stop`, `restart`, `status`, and `logs`
 - bounded `doctor` and `status` checks for worker and model connectivity
 - provider-backed repository open flows for GitLab and GitHub
@@ -129,8 +126,8 @@ The current public contract is intentionally small and explicit:
 The current end-to-end read-only path is:
 
 1. `repooperator onboard`
-2. `repooperator doctor`
-3. `repooperator status`
+2. `repooperator up`
+3. open the printed local web URL
 4. choose a provider, project, and branch in the web UI
 5. open a private GitLab repository, GitHub repository, or local project through the worker
 6. ask a read-only repository question from the web UI
@@ -173,7 +170,7 @@ curl -X POST http://127.0.0.1:8000/agent/run \
 ## Troubleshooting
 
 - Worker not running:
-  Run `repooperator worker start`, then verify with `repooperator doctor`, `repooperator status`, and `curl http://127.0.0.1:8000/health`.
+  Run `repooperator up`, then verify with `repooperator doctor`, `repooperator status`, and `curl http://127.0.0.1:8000/health`.
 - Worker import or startup failure:
   Run `repooperator worker logs`. The CLI prints the absolute worker `src` path and `PYTHONPATH` during startup.
 - Port already in use:

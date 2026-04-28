@@ -452,6 +452,22 @@ select {
   min-height: 168px;
 }
 
+.project-list-shell {
+  position: relative;
+}
+
+.project-list-loading {
+  position: absolute;
+  inset: 1px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--muted);
+  font-weight: 600;
+}
+
 .code-review-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

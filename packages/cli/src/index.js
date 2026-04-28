@@ -18,15 +18,21 @@ const LEGACY_RUN_DIR = path.join(LEGACY_CONFIG_DIR, "run");
 const LOG_DIR = path.join(CONFIG_DIR, "logs");
 const LEGACY_LOG_DIR = path.join(LEGACY_CONFIG_DIR, "logs");
 const STATE_PATH = path.join(RUN_DIR, "worker-state.json");
+const WEB_STATE_PATH = path.join(RUN_DIR, "web-state.json");
 const LEGACY_STATE_PATH = path.join(LEGACY_CONFIG_DIR, "daemon", "state.json");
 const LEGACY_RUN_STATE_PATH = path.join(LEGACY_RUN_DIR, "worker-state.json");
 const PID_PATH = path.join(RUN_DIR, "worker.pid");
+const WEB_PID_PATH = path.join(RUN_DIR, "web.pid");
 const WORKER_LOG_PATH = path.join(LOG_DIR, "worker.log");
+const WEB_LOG_PATH = path.join(LOG_DIR, "web.log");
 const OLLAMA_LOG_PATH = path.join(LOG_DIR, "ollama.log");
 const DEFAULT_WORKER_URL = "http://127.0.0.1:8000";
+const DEFAULT_WEB_URL = "http://127.0.0.1:3000";
 const DEFAULT_REPO_BASE_DIR = path.join(os.homedir(), ".repooperator", "repos");
 const DEFAULT_WORKER_HEALTH_TIMEOUT_MS = 1500;
 const DEFAULT_WORKER_START_TIMEOUT_MS = 8000;
+const DEFAULT_WEB_HEALTH_TIMEOUT_MS = 2000;
+const DEFAULT_WEB_START_TIMEOUT_MS = 15000;
 const DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS = 2000;
 const DEFAULT_PORT_CHECK_TIMEOUT_MS = 1000;
 const DEFAULT_OLLAMA_TIMEOUT_MS = 1500;
@@ -86,6 +92,12 @@ async function runCli() {
   switch (command) {
     case "onboard":
       await runOnboard();
+      return;
+    case "up":
+      await runUp();
+      return;
+    case "down":
+      await runDown();
       return;
     case "config":
       await runConfigCommand(subcommand);
@@ -232,9 +244,9 @@ async function runOnboard() {
       console.log("");
       console.log(`${PRODUCT_NAME} is ready for read-only repository Q&A.`);
       console.log("Next steps:");
-      console.log(`  1. Run \`${CLI_COMMAND} status\``);
-      console.log("  2. Open the web UI");
-      console.log("  3. Open a repository and ask a read-only question");
+      console.log(`  1. Run \`${CLI_COMMAND} up\``);
+      console.log("  2. Open the printed local web URL");
+      console.log("  3. Choose a repository and ask a read-only question");
       return;
     }
 
@@ -422,6 +434,47 @@ async function runStatus() {
   console.log(`Git provider: ${formatProviderSummary(config.gitProvider)}`);
   console.log(`Local repo base dir: ${config.localRepoBaseDir || "not configured"}`);
   console.log(`Worker runtime prepared: ${config.daemon?.prepared ? "yes" : "no"}`);
+}
+
+async function runUp() {
+  await ensureBaseDirectories();
+  const config = await requireConfig();
+  const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
+  const webUrl = config.web?.baseUrl || DEFAULT_WEB_URL;
+
+  console.log(`${PRODUCT_NAME} local product runtime`);
+  console.log("");
+  console.log("Starting local worker...");
+  await startWorker({ interactive: false });
+
+  const workerHealth = await checkWorkerHealth(
+    workerUrl,
+    DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+  );
+  if (!workerHealth.reachable) {
+    throw new Error(`Local worker did not become healthy. ${workerHealth.message}`);
+  }
+  console.log(`Worker ready: ${workerUrl}`);
+
+  console.log("Starting web UI...");
+  await startWeb({ interactive: false, workerUrl, webUrl });
+
+  const webHealth = await checkWebHealth(webUrl, DEFAULT_WEB_HEALTH_TIMEOUT_MS);
+  if (!webHealth.reachable) {
+    throw new Error(`Web UI did not become healthy. ${webHealth.message}`);
+  }
+
+  console.log(`Web UI ready: ${webUrl}`);
+  console.log("");
+  console.log(`${PRODUCT_NAME} is up.`);
+  console.log(`Open: ${webUrl}`);
+}
+
+async function runDown() {
+  await ensureMigratedRuntimeHome();
+  console.log(`Stopping ${PRODUCT_NAME} local product runtime...`);
+  await stopWeb({ interactive: true });
+  await stopWorker({ interactive: true });
 }
 
 async function startWorker({ interactive }) {
@@ -663,6 +716,208 @@ async function restartWorker() {
   console.log(`${PRODUCT_NAME} local worker restarted.`);
 }
 
+async function startWeb({ interactive, workerUrl, webUrl }) {
+  await ensureBaseDirectories();
+  const config = await requireConfig();
+  const webInstallation = await resolveWebInstallation(config, process.cwd());
+  let webState = await readWebState();
+  const running = await isProcessRunning(webState?.pid);
+  const webBinding = parseLocalHttpBinding(webUrl, "web UI URL");
+
+  if (running.running) {
+    if (interactive) {
+      console.log(`The web UI is already running. ${running.message}`);
+    }
+    return;
+  }
+
+  if (webState?.pid && !running.running) {
+    await clearWebRuntimeStateFiles();
+    webState = null;
+  }
+
+  if (!webInstallation.installed || !webInstallation.detectedPath) {
+    throw new Error(
+      `Web UI not installed. ${PRODUCT_NAME} could not find apps/web in the current repository tree.`,
+    );
+  }
+
+  if (!(await commandExists("npm"))) {
+    throw new Error("npm is missing. Install Node.js and npm before starting the web UI.");
+  }
+
+  const portState = await checkPortInUse(webBinding.host, webBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
+  if (portState.inUse) {
+    const webHealth = await checkWebHealth(webUrl, DEFAULT_WEB_HEALTH_TIMEOUT_MS);
+    if (webHealth.reachable) {
+      await writeWebRuntimeState({
+        ...(webState || {}),
+        status: "running",
+        webUrl,
+        workerUrl,
+        pidFile: WEB_PID_PATH,
+        logPath: WEB_LOG_PATH,
+        note: "Web UI was already reachable on the configured URL.",
+      });
+      if (interactive) {
+        console.log(`The web UI is already reachable at ${webUrl}.`);
+      }
+      return;
+    }
+    throw new Error(
+      `Configured web URL ${webUrl} is already in use, but the RepoOperator web UI did not respond successfully.`,
+    );
+  }
+
+  await ensureLogFileExists(WEB_LOG_PATH);
+  const logStream = fs.openSync(WEB_LOG_PATH, "a");
+  const commandArgs = [
+    "run",
+    "dev",
+    "--",
+    "--hostname",
+    webBinding.host,
+    "--port",
+    String(webBinding.port),
+  ];
+  const launchedCommand = `npm ${commandArgs.join(" ")}`;
+  const env = {
+    ...process.env,
+    NEXT_PUBLIC_LOCAL_WORKER_BASE_URL: workerUrl,
+  };
+
+  console.log(`Launching ${PRODUCT_NAME} web UI`);
+  console.log(`Command: ${launchedCommand}`);
+  console.log(`Working directory: ${webInstallation.detectedPath}`);
+  console.log(`Expected web URL: ${webUrl}`);
+  console.log(`Worker URL for web UI: ${workerUrl}`);
+  console.log(`Log file: ${WEB_LOG_PATH}`);
+  console.log(`PID file: ${WEB_PID_PATH}`);
+
+  let child;
+  try {
+    child = spawn("npm", commandArgs, {
+      cwd: webInstallation.detectedPath,
+      detached: true,
+      stdio: ["ignore", logStream, logStream],
+      env,
+    });
+  } finally {
+    fs.closeSync(logStream);
+  }
+
+  if (!child.pid) {
+    throw new Error("Web UI failed to start. No process id was returned by the launcher.");
+  }
+
+  let earlyExit = null;
+  let startupErrorMessage = null;
+  child.once("exit", (code, signal) => {
+    earlyExit = { code, signal };
+  });
+  child.once("error", (error) => {
+    startupErrorMessage = error instanceof Error ? error.message : String(error);
+  });
+
+  child.unref();
+
+  await writeWebRuntimeState({
+    ...(webState || {}),
+    startedAt: new Date().toISOString(),
+    status: "starting",
+    pid: child.pid,
+    webUrl,
+    workerUrl,
+    pidFile: WEB_PID_PATH,
+    logPath: WEB_LOG_PATH,
+    webPath: webInstallation.detectedPath,
+    command: launchedCommand,
+    failureType: null,
+    lastError: null,
+  });
+
+  const startupHealth = await waitForWebStartup({
+    baseUrl: webUrl,
+    pid: child.pid,
+    timeoutMs: DEFAULT_WEB_START_TIMEOUT_MS,
+    getEarlyExit: () => earlyExit,
+    getStartupError: () => startupErrorMessage,
+  });
+  if (!startupHealth.reachable) {
+    await safeStopWorkerProcess(child.pid);
+    const logTail = await readLogTail(WEB_LOG_PATH, DEFAULT_LOG_TAIL_LINES);
+    await writeWebRuntimeState({
+      ...(await readWebState()),
+      status: "failed",
+      failedAt: new Date().toISOString(),
+      failureType: startupHealth.exited ? "process_exited" : "health_timeout",
+      lastError: startupHealth.message,
+      lastLogTail: logTail,
+      exitCode: startupHealth.exitCode ?? null,
+      exitSignal: startupHealth.exitSignal ?? null,
+    });
+    console.log(`Web startup failure detail: ${startupHealth.message}`);
+    if (logTail) {
+      console.log("Recent web log output:");
+      console.log(logTail);
+    }
+    throw new Error(
+      `Web UI failed to start. ${startupHealth.message} Check logs at ${WEB_LOG_PATH}.`,
+    );
+  }
+
+  await writeWebRuntimeState({
+    ...(await readWebState()),
+    status: "running",
+    healthyAt: new Date().toISOString(),
+  });
+
+  if (interactive) {
+    console.log(`${PRODUCT_NAME} web UI started.`);
+    console.log(`Web URL: ${webUrl}`);
+    console.log(`Logs: ${WEB_LOG_PATH}`);
+  }
+}
+
+async function stopWeb({ interactive }) {
+  await ensureMigratedRuntimeHome();
+  const webState = await readWebState();
+  const config = await readConfig().catch(() => null);
+  const webUrl = config?.web?.baseUrl || webState?.webUrl || DEFAULT_WEB_URL;
+  const webBinding = parseLocalHttpBinding(webUrl, "web UI URL");
+  const running = await isProcessRunning(webState?.pid);
+  const stopResult = await stopWorkerProcess(webState?.pid || null);
+  const portState = await checkPortInUse(
+    webBinding.host,
+    webBinding.port,
+    DEFAULT_PORT_CHECK_TIMEOUT_MS,
+  );
+
+  if (!stopResult.exited) {
+    throw new Error(
+      `${PRODUCT_NAME} could not fully stop the recorded web UI process${webState?.pid ? ` ${webState.pid}` : ""}.`,
+    );
+  }
+
+  if (portState.inUse && stopResult.hadPid) {
+    throw new Error(
+      `${PRODUCT_NAME} stopped the recorded web UI process, but another process is still occupying ${webUrl}.`,
+    );
+  }
+
+  await clearWebRuntimeStateFiles();
+
+  if (interactive) {
+    if (!webState?.pid || !running.running) {
+      console.log(`${PRODUCT_NAME} web UI was already stopped. Cleaned up stale runtime state.`);
+    } else if (stopResult.forced) {
+      console.log(`${PRODUCT_NAME} web UI did not exit gracefully and was force-stopped.`);
+    } else {
+      console.log(`${PRODUCT_NAME} web UI stopped cleanly.`);
+    }
+  }
+}
+
 async function showWorkerLogs() {
   const state = await readState();
   const logPath = state?.logPath || WORKER_LOG_PATH;
@@ -798,11 +1053,64 @@ async function detectLocalWorkerInstallation(startDir) {
   };
 }
 
+async function resolveWebInstallation(config, startDir) {
+  if (config?.web?.detectedPath && (await fileExists(path.join(config.web.detectedPath, "package.json")))) {
+    return {
+      installed: true,
+      detectedPath: config.web.detectedPath,
+      summary: `Detected a repo-source web UI at ${config.web.detectedPath}`,
+    };
+  }
+
+  const repoRoot = await findRepoRootWithWeb(startDir);
+  if (repoRoot) {
+    return {
+      installed: true,
+      detectedPath: path.join(repoRoot, "apps", "web"),
+      summary: `Detected a repo-source web UI at ${path.join(repoRoot, "apps", "web")}`,
+    };
+  }
+
+  if (config?.worker?.detectedPath) {
+    const candidate = path.resolve(config.worker.detectedPath, "..", "web");
+    if (await fileExists(path.join(candidate, "package.json"))) {
+      return {
+        installed: true,
+        detectedPath: candidate,
+        summary: `Detected a repo-source web UI at ${candidate}`,
+      };
+    }
+  }
+
+  return {
+    installed: false,
+    detectedPath: null,
+    summary: "No web UI installation was detected in the current repository tree.",
+  };
+}
+
 async function findRepoRootWithWorker(startDir) {
   let current = path.resolve(startDir);
 
   while (true) {
     const candidate = path.join(current, "apps", "local-worker", "pyproject.toml");
+    if (await fileExists(candidate)) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+async function findRepoRootWithWeb(startDir) {
+  let current = path.resolve(startDir);
+
+  while (true) {
+    const candidate = path.join(current, "apps", "web", "package.json");
     if (await fileExists(candidate)) {
       return current;
     }
@@ -995,6 +1303,32 @@ async function checkWorkerHealth(baseUrl, timeoutMs) {
   }
 }
 
+async function checkWebHealth(baseUrl, timeoutMs) {
+  try {
+    const response = await fetchWithTimeout(baseUrl, {
+      method: "GET",
+      timeoutMs,
+    });
+    if (!response.ok) {
+      return {
+        reachable: false,
+        message: `Web UI responded with status ${response.status}.`,
+      };
+    }
+
+    return {
+      reachable: true,
+      message: `Web UI is reachable at ${baseUrl}.`,
+    };
+  } catch (error) {
+    const message = formatTimeoutAwareError(error, `Web UI health check timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+    return {
+      reachable: false,
+      message: `Web UI is not reachable at ${baseUrl}: ${message}`,
+    };
+  }
+}
+
 async function waitForWorkerStartup({ baseUrl, pid, timeoutMs, getEarlyExit, getStartupError }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -1037,6 +1371,51 @@ async function waitForWorkerStartup({ baseUrl, pid, timeoutMs, getEarlyExit, get
     reachable: false,
     exited: false,
     message: `Worker health check timed out after ${Math.round(timeoutMs / 1000)} seconds at ${baseUrl}.`,
+  };
+}
+
+async function waitForWebStartup({ baseUrl, pid, timeoutMs, getEarlyExit, getStartupError }) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const earlyExit = getEarlyExit();
+    if (earlyExit) {
+      return {
+        reachable: false,
+        exited: true,
+        exitCode: earlyExit.code,
+        exitSignal: earlyExit.signal,
+        message: `Web UI process exited immediately${earlyExit.code !== null ? ` with code ${earlyExit.code}` : ""}${earlyExit.signal ? ` and signal ${earlyExit.signal}` : ""}.`,
+      };
+    }
+
+    const startupError = getStartupError();
+    if (startupError) {
+      return {
+        reachable: false,
+        exited: false,
+        message: `Web UI failed to start: ${startupError}`,
+      };
+    }
+
+    const running = await isProcessRunning(pid);
+    if (!running.running) {
+      return {
+        reachable: false,
+        exited: true,
+        message: "Web UI process exited immediately after launch.",
+      };
+    }
+
+    const health = await checkWebHealth(baseUrl, DEFAULT_WEB_HEALTH_TIMEOUT_MS);
+    if (health.reachable) {
+      return health;
+    }
+    await sleep(500);
+  }
+  return {
+    reachable: false,
+    exited: false,
+    message: `Web UI health check timed out after ${Math.round(timeoutMs / 1000)} seconds at ${baseUrl}.`,
   };
 }
 
@@ -1411,10 +1790,26 @@ async function readState() {
   return null;
 }
 
+async function readWebState() {
+  await ensureMigratedRuntimeHome();
+  if (await fileExists(WEB_STATE_PATH)) {
+    const raw = await fsp.readFile(WEB_STATE_PATH, "utf-8");
+    return JSON.parse(raw);
+  }
+  return null;
+}
+
 async function writeRuntimeState(state) {
   await writeJson(STATE_PATH, state);
   if (state?.pid) {
     await fsp.writeFile(PID_PATH, `${state.pid}\n`, "utf-8");
+  }
+}
+
+async function writeWebRuntimeState(state) {
+  await writeJson(WEB_STATE_PATH, state);
+  if (state?.pid) {
+    await fsp.writeFile(WEB_PID_PATH, `${state.pid}\n`, "utf-8");
   }
 }
 
@@ -1424,6 +1819,11 @@ async function clearRuntimeStateFiles() {
   await removeFileIfExists(LEGACY_RUN_STATE_PATH);
   await removeFileIfExists(LEGACY_STATE_PATH);
   await removeFileIfExists(path.join(LEGACY_RUN_DIR, "worker.pid"));
+}
+
+async function clearWebRuntimeStateFiles() {
+  await removeFileIfExists(WEB_PID_PATH);
+  await removeFileIfExists(WEB_STATE_PATH);
 }
 
 async function writeJson(filePath, value) {
@@ -1466,6 +1866,28 @@ async function isWorkerProcessRunning(runtimeState) {
     return {
       running: false,
       message: `Worker process ${runtimeState.pid} is not running.`,
+    };
+  }
+}
+
+async function isProcessRunning(pid) {
+  if (!pid) {
+    return {
+      running: false,
+      message: "No process id is recorded.",
+    };
+  }
+
+  try {
+    process.kill(pid, 0);
+    return {
+      running: true,
+      message: `Process ${pid} is running.`,
+    };
+  } catch {
+    return {
+      running: false,
+      message: `Process ${pid} is not running.`,
     };
   }
 }
@@ -1549,6 +1971,14 @@ async function stopWorkerProcess(pid) {
     exited: false,
     forced: true,
   };
+}
+
+async function safeStopWorkerProcess(pid) {
+  try {
+    await stopWorkerProcess(pid);
+  } catch {
+    return;
+  }
 }
 
 async function removePidFile() {
@@ -1757,20 +2187,24 @@ function formatTimeoutAwareError(error, timeoutMessage) {
 }
 
 function parseWorkerBinding(workerUrl) {
+  return parseLocalHttpBinding(workerUrl, "worker URL");
+}
+
+function parseLocalHttpBinding(localUrl, label) {
   let parsedUrl;
   try {
-    parsedUrl = new URL(workerUrl);
+    parsedUrl = new URL(localUrl);
   } catch {
-    throw new Error(`Configured worker URL is invalid: ${workerUrl}`);
+    throw new Error(`Configured ${label} is invalid: ${localUrl}`);
   }
 
   if (parsedUrl.protocol !== "http:") {
-    throw new Error(`Configured worker URL must use http for local development: ${workerUrl}`);
+    throw new Error(`Configured ${label} must use http for local development: ${localUrl}`);
   }
 
   const port = parsedUrl.port ? Number(parsedUrl.port) : 80;
   if (!Number.isInteger(port) || port <= 0) {
-    throw new Error(`Configured worker URL has an invalid port: ${workerUrl}`);
+    throw new Error(`Configured ${label} has an invalid port: ${localUrl}`);
   }
 
   return {
@@ -2002,15 +2436,21 @@ function printHelp() {
   console.log(`${PRODUCT_NAME} CLI`);
   console.log("");
   console.log("Usage:");
-  console.log(`  ${CLI_COMMAND} config show`);
   console.log(`  ${CLI_COMMAND} onboard`);
+  console.log(`  ${CLI_COMMAND} up`);
+  console.log(`  ${CLI_COMMAND} down`);
   console.log(`  ${CLI_COMMAND} doctor`);
   console.log(`  ${CLI_COMMAND} status`);
+  console.log(`  ${CLI_COMMAND} config show`);
+  console.log("");
+  console.log("Worker maintenance:");
   console.log(`  ${CLI_COMMAND} worker start`);
   console.log(`  ${CLI_COMMAND} worker stop`);
   console.log(`  ${CLI_COMMAND} worker restart`);
   console.log(`  ${CLI_COMMAND} worker status`);
   console.log(`  ${CLI_COMMAND} worker logs`);
+  console.log("");
+  console.log(`Recommended local product flow: ${CLI_COMMAND} onboard && ${CLI_COMMAND} up`);
 }
 
 module.exports = {

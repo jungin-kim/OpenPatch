@@ -4,6 +4,7 @@ RepoOperator is moving toward a developer-product onboarding flow built around:
 
 - one-command install
 - one-command onboarding
+- one-command local product startup
 - a local worker on each developer machine
 - a centralized model backend
 - pluggable repository sources such as GitLab, GitHub, and local projects
@@ -55,6 +56,16 @@ The onboarding flow will:
 
 RepoOperator now finishes onboarding by launching the worker as a background process, waiting for health for a short bounded timeout, checking model connectivity, and printing a concise success summary.
 For the repo-source local worker, the CLI handles the Python src-layout automatically with an absolute `PYTHONPATH`, so users do not need to export `PYTHONPATH` during normal CLI startup.
+
+## Start The Local Product
+
+After onboarding, use the product command:
+
+```bash
+repooperator up
+```
+
+This starts the local worker and web UI, verifies that both are reachable, and prints the local web URL. Use `repooperator down` to stop the managed local runtime.
 
 Current model connection choices:
 
@@ -132,7 +143,7 @@ repooperator worker status
 
 ## Manage The Local Worker
 
-Start the worker:
+Start only the worker for maintenance or development:
 
 ```bash
 repooperator worker start
@@ -163,10 +174,9 @@ The log command prints a tail-style view of the current worker log file so start
 ```bash
 npm install -g repooperator
 repooperator onboard
-repooperator worker start
+repooperator up
 repooperator doctor
 repooperator status
-curl http://127.0.0.1:8000/health
 ```
 
 ## Example Ollama Setup
@@ -208,22 +218,27 @@ repooperator onboard
 5. Verify the setup:
 
 ```bash
+repooperator up
 repooperator doctor
 repooperator status
-curl http://127.0.0.1:8000/health
 ```
 
 Expected success output at a high level:
 
 - `repooperator onboard` prints a concise onboarding summary
 - the worker starts during onboarding
+- `repooperator up` starts the local worker and web UI together and prints the local web URL
 - worker health and model connectivity are verified before onboarding finishes
 - `repooperator status` shows the configured worker URL, model connection mode `local runtime`, model provider `ollama`, and healthy worker details
 - `curl http://127.0.0.1:8000/health` returns JSON with `status: ok`
 
 ## First Read-Only Workflow
 
-Once onboarding and worker startup are complete, this is the first real read-only flow:
+Once onboarding is complete, this is the first real read-only flow:
+
+```bash
+repooperator up
+```
 
 1. Open a private repository through the local worker:
 
@@ -273,8 +288,8 @@ For a private GitLab repository, normal product usage is:
 1. Run `repooperator onboard`.
 2. Choose `gitlab` as the git provider.
 3. Provide the GitLab base URL and a token with repository read access.
-4. Start the worker with `repooperator worker start`.
-5. Run `repo/open` with `git_provider: "gitlab"`.
+4. Start the local product with `repooperator up`.
+5. Open the printed web URL and choose the project from the visible list.
 
 The worker will use the stored provider config from `~/.repooperator/config.json` and perform clone and fetch non-interactively.
 GitHub follows the same repository-open flow with `git_provider: "github"` and matching provider settings from onboarding.

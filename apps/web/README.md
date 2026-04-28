@@ -45,6 +45,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 - repository source status for GitLab, GitHub, or local project
 - model connection status for local model runtime or remote model API
 - provider-aware project list loading
+- list-first project selection where search filters the loaded list
 - provider-aware branch list loading
 - recent project shortcuts
 - local project path entry for local-source workflows
@@ -58,12 +59,12 @@ Then open [http://localhost:3000](http://localhost:3000).
 ## Expected Product Flow
 
 1. Run `repooperator onboard`
-2. Run `repooperator worker start`
+2. Run `repooperator up`
 3. Run `repooperator doctor`
 4. Run `repooperator status`
-5. Start the web UI
+5. Open the local web URL printed by `repooperator up`
 6. Choose `gitlab`, `github`, or `local project`
-7. Select a project from the guided list, or enter a local project path
+7. Select a project from the visible list, or enter a local project path
 8. Select a branch when the chosen source is a git repository
 9. Open the repository locally
 10. Ask a read-only repository question
@@ -78,6 +79,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 - Health-style worker requests keep a short timeout, while `/agent/run` now uses a longer inference timeout that is suitable for local Ollama usage by default.
 - You can override proxy timeouts with `OPENPATCH_WORKER_PROXY_TIMEOUT_MS` and `OPENPATCH_WORKER_PROXY_AGENT_TIMEOUT_MS`.
 - The alpha UI now defaults to guided repository selection instead of manual `project_path` and branch entry.
+- Search filters loaded projects; it is not required before projects appear.
 - Local projects are a first-class source and support direct absolute-path entry plus recent-project suggestions.
 - Manual hosted-repository overrides remain available only under an Advanced toggle.
 

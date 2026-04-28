@@ -5,6 +5,7 @@ This guide shows the first successful end-to-end read-only RepoOperator workflow
 It covers:
 
 - `repooperator onboard`
+- `repooperator up`
 - `repooperator doctor`
 - `repooperator status`
 - provider-aware project and branch selection in the web UI
@@ -16,7 +17,7 @@ It covers:
 RepoOperator now supports a working product flow where:
 
 1. the CLI prepares local runtime config
-2. the local worker starts on the developer machine
+2. the local worker and web UI start on the developer machine with `repooperator up`
 3. the web UI loads projects and branches from the configured git provider
 4. a private repository is opened locally through the worker
 5. a read-only repository understanding task is sent to the configured model backend
@@ -63,7 +64,20 @@ High-level success:
 - model and GitLab settings are stored for the worker to reuse
 - local runtime directories are prepared under `~/.repooperator`
 
-## Step 2: Verify Worker Health
+## Step 2: Start The Local Product
+
+```bash
+repooperator up
+```
+
+High-level success:
+
+- the local worker starts
+- the web UI starts
+- both local URLs are verified
+- the local web URL is printed
+
+## Step 3: Verify Worker Health
 
 ```bash
 repooperator doctor
@@ -78,13 +92,13 @@ High-level success:
 - `status` shows the configured worker URL, model provider, and worker health detail
 - the health endpoint returns JSON with `status: ok`
 
-## Step 3: Choose A Repository In The Web UI
+## Step 4: Choose A Repository In The Web UI
 
 In the web UI:
 
 1. choose `gitlab` as the provider
 2. wait for the project list to load
-3. choose a project from the searchable list
+3. choose a project from the visible list, or type to filter it
 4. wait for the branch list to load
 5. choose a branch, with the provider default selected automatically when available
 6. use the Advanced toggle only if you need a manual override
@@ -92,11 +106,12 @@ In the web UI:
 High-level success:
 
 - the UI loads provider-backed projects instead of asking for a manual path first
+- search narrows the loaded project list instead of populating it
 - recent local projects appear as shortcuts when available
 - local projects can be entered directly as absolute filesystem paths
 - the default branch is selected automatically when the provider returns one
 
-## Step 4: Open A Private GitLab Repository
+## Step 5: Open A Private GitLab Repository
 
 ```bash
 curl -X POST http://127.0.0.1:8000/repo/open \
