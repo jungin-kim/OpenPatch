@@ -28,3 +28,10 @@ apps/web/node_modules/
 # Python cache
 __pycache__/
 *.pyc
+
+# Local tool state
+.claude/
+
+# Next.js
+apps/web/.next/
+.next/
