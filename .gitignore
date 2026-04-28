@@ -24,3 +24,7 @@ apps/local-worker/.env
 # Node
 node_modules/
 apps/web/node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
