@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { AgentRunPayload, RepoOpenPayload } from "@/lib/local-worker-client";
+import { MarkdownContent } from "./MarkdownContent";
 
 export type ChatMessage = {
   id: string;
@@ -154,7 +155,13 @@ export function ChatMessages({
               <span className="message-role-label">
                 {msg.role === "user" ? "You" : "RepoOperator"}
               </span>
-              <div className="message-bubble">{msg.content}</div>
+              {msg.role === "assistant" ? (
+                <div className="message-bubble message-bubble-md">
+                  <MarkdownContent content={msg.content} />
+                </div>
+              ) : (
+                <div className="message-bubble">{msg.content}</div>
+              )}
               {msg.metadata && <ToolCard metadata={msg.metadata} />}
               <span className="message-timestamp">{formatTime(msg.timestamp)}</span>
             </div>
