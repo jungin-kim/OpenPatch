@@ -267,38 +267,47 @@ async function runOnboard() {
     };
 
     await writeJson(CONFIG_PATH, config);
+    const previousRuntimeState = await readState();
     await writeJson(STATE_PATH, {
+      ...(previousRuntimeState || {}),
       preparedAt: new Date().toISOString(),
+      workerUrl: config.worker.baseUrl,
       expectedWorkerUrl: config.worker.baseUrl,
       installMode: workerDetection.installMode,
       workerDetected: workerDetection.installed,
-      status: "stopped",
+      status: previousRuntimeState?.status || "stopped",
       pidFile: PID_PATH,
       logPath: WORKER_LOG_PATH,
     });
 
     term.line("success", `${PRODUCT_NAME} configuration written`, CONFIG_PATH);
 
-    let workerStarted = false;
     const shouldRestartRuntime = existingConfig
       ? await promptYesNo(rl, "Restart or reload the local worker now?", true)
       : true;
+    let workerRuntimeState = shouldRestartRuntime ? "not started" : "restart skipped";
     if (shouldRestartRuntime) {
-      try {
-        await term.spinner(
-          existingConfig ? "Restart local worker" : "Start local worker",
-          async () => {
-            if (existingConfig) {
-              await stopWorker({ interactive: false });
-            }
-            await startWorker({ interactive: false, quiet: true });
-          },
+      if (existingConfig) {
+        const existingWorkerHealth = await term.spinner(
+          "Check existing worker",
+          () => checkWorkerHealth(config.worker.baseUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS),
         );
-        workerStarted = true;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        term.line("warning", "Worker start needs attention", message);
-        term.line("info", "Inspect logs", `${CLI_COMMAND} worker logs`);
+        if (existingWorkerHealth.reachable) {
+          workerRuntimeState = "reused existing healthy worker";
+          term.line("success", "A healthy worker is already running", "Reusing the existing worker.");
+        } else {
+          workerRuntimeState = await restartWorkerForOnboarding();
+        }
+      } else {
+        try {
+          await term.spinner("Start local worker", () => startWorker({ interactive: false, quiet: true }));
+          workerRuntimeState = "started";
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          workerRuntimeState = "start needs attention";
+          term.line("warning", "Worker start needs attention", message);
+          term.line("info", "Inspect logs", `${CLI_COMMAND} worker logs`);
+        }
       }
     } else {
       term.line("info", "Runtime restart skipped", `Run ${CLI_COMMAND} worker restart when you want the worker to reload config.`);
@@ -311,6 +320,19 @@ async function runOnboard() {
         DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
       ),
     );
+    if (workerHealth.reachable) {
+      const recordedPid = await readPidFile(PID_PATH);
+      await writeRuntimeState({
+        ...((await readState()) || {}),
+        status: "running",
+        ...(recordedPid ? { pid: recordedPid } : {}),
+        healthyAt: new Date().toISOString(),
+        workerUrl: config.worker.baseUrl,
+        expectedWorkerUrl: config.worker.baseUrl,
+        pidFile: PID_PATH,
+        logPath: WORKER_LOG_PATH,
+      });
+    }
     const modelConnectivity = await term.spinner(
       "Verify model connectivity",
       () => checkModelConnectivity(
@@ -327,11 +349,12 @@ async function runOnboard() {
       ["Repository source", formatProviderSummary(config.gitProvider)],
       ["Saved repository sources", formatRepositorySourcesSummary(config)],
       ["Model", formatModelSummary(config.model)],
+      ["Worker runtime", workerRuntimeState],
       ["Worker health", workerHealth.reachable ? "ok" : "needs attention"],
       ["Model connectivity", modelConnectivity.reachable ? "ok" : "needs attention"],
     ]);
 
-    if ((!shouldRestartRuntime || workerStarted) && workerHealth.reachable && modelConnectivity.reachable) {
+    if (workerHealth.reachable && modelConnectivity.reachable) {
       term.summaryBox("Next steps", [
         `Run ${CLI_COMMAND} up`,
         "Open the printed local web URL",
@@ -350,6 +373,21 @@ async function runOnboard() {
     process.exitCode = 1;
   } finally {
     rl.close();
+  }
+}
+
+async function restartWorkerForOnboarding() {
+  try {
+    await term.spinner("Restart local worker", async () => {
+      await stopWorker({ interactive: false });
+      await startWorker({ interactive: false, quiet: true });
+    });
+    return "restarted";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    term.line("warning", "Worker restart needs attention", message);
+    term.line("info", "Inspect logs", `${CLI_COMMAND} worker logs`);
+    return "restart needs attention";
   }
 }
 
@@ -388,8 +426,9 @@ async function runDoctor() {
     config.model,
     DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
   );
-  const urlMatches = runtimeState?.workerUrl
-    ? runtimeState.workerUrl === (config.worker?.baseUrl || DEFAULT_WORKER_URL)
+  const runtimeWorkerUrl = runtimeState?.workerUrl || runtimeState?.expectedWorkerUrl;
+  const urlMatches = runtimeWorkerUrl
+    ? runtimeWorkerUrl === (config.worker?.baseUrl || DEFAULT_WORKER_URL)
     : !workerRunning.running;
 
   checks.push(
@@ -432,10 +471,10 @@ async function runDoctor() {
       "Configured worker URL matches runtime state",
       urlMatches,
       urlMatches
-        ? runtimeState?.workerUrl
-          ? `Configured URL matches ${runtimeState.workerUrl}.`
+        ? runtimeWorkerUrl
+          ? `Configured URL matches ${runtimeWorkerUrl}.`
           : "No active runtime state is recorded because the worker is stopped."
-        : `Configured URL is '${config.worker?.baseUrl || DEFAULT_WORKER_URL}', runtime state is '${runtimeState?.workerUrl || "not available"}'.`,
+        : `Configured URL is '${config.worker?.baseUrl || DEFAULT_WORKER_URL}', runtime state is '${runtimeWorkerUrl || "not available"}'.`,
     ),
   );
   checks.push(
@@ -1767,6 +1806,27 @@ function formatRepositorySourcesSummary(config) {
   return sources.map(formatProviderSummary).join(", ");
 }
 
+function splitGitHubBaseUrlAndScope(value) {
+  const fallback = { baseUrl: "https://github.com", scopeFromPath: "" };
+  if (!value?.trim()) {
+    return fallback;
+  }
+
+  try {
+    const parsed = new URL(value.trim());
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+    parsed.pathname = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return {
+      baseUrl: parsed.toString().replace(/\/$/, ""),
+      scopeFromPath: pathParts[0] || "",
+    };
+  } catch {
+    return { baseUrl: value.trim().replace(/\/+$/, ""), scopeFromPath: "" };
+  }
+}
+
 async function promptGitProviderConfig(rl, provider, existingProviderConfig = null) {
   if (provider === "gitlab") {
     term.summaryBox("GitLab source", [
@@ -1785,15 +1845,35 @@ async function promptGitProviderConfig(rl, provider, existingProviderConfig = nu
   if (provider === "github") {
     term.summaryBox("GitHub source", [
       "Use a GitHub token that can read the repositories you want to open.",
-      "GitHub Enterprise URLs are supported through the base URL prompt.",
+      "Base URL is the GitHub host only. For normal GitHub, use https://github.com.",
+      "Do not include an owner, organization, or repository path in the base URL.",
+      "If you want to narrow discovery later, use the optional owner/org scope.",
     ]);
-    const baseUrl = await promptWithDefault(
+    const rawBaseUrl = await promptWithDefault(
       rl,
-      "GitHub base URL",
+      "GitHub base URL (host only)",
       existingProviderConfig?.baseUrl || "https://github.com",
     );
+    const splitBaseUrl = splitGitHubBaseUrlAndScope(rawBaseUrl);
+    if (splitBaseUrl.scopeFromPath) {
+      term.line(
+        "warning",
+        "GitHub base URL adjusted",
+        `Using ${splitBaseUrl.baseUrl} as the base URL and ${splitBaseUrl.scopeFromPath} as the owner/org scope.`,
+      );
+    }
+    const owner = await promptWithDefault(
+      rl,
+      "Optional GitHub owner/org scope",
+      existingProviderConfig?.owner || splitBaseUrl.scopeFromPath || "",
+    );
     const token = await promptWithDefault(rl, "GitHub token", existingProviderConfig?.token || "");
-    return { provider: "github", baseUrl, token };
+    return {
+      provider: "github",
+      baseUrl: splitBaseUrl.baseUrl,
+      owner: owner || undefined,
+      token,
+    };
   }
 
   if (provider === "local") {
@@ -2214,6 +2294,15 @@ async function writeRuntimeState(state) {
   if (state?.pid) {
     await fsp.writeFile(PID_PATH, `${state.pid}\n`, "utf-8");
   }
+}
+
+async function readPidFile(filePath) {
+  if (!(await fileExists(filePath))) {
+    return null;
+  }
+  const raw = await fsp.readFile(filePath, "utf-8");
+  const pid = Number(raw.trim());
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
 async function writeWebRuntimeState(state) {
@@ -2747,7 +2836,8 @@ function formatProviderSummary(gitProvider) {
     return "local project";
   }
   if (gitProvider.baseUrl) {
-    return `${gitProvider.provider} (${gitProvider.baseUrl})`;
+    const scope = gitProvider.owner ? `, owner/org: ${gitProvider.owner}` : "";
+    return `${gitProvider.provider} (${gitProvider.baseUrl}${scope})`;
   }
   return gitProvider.provider;
 }
@@ -2819,6 +2909,10 @@ function normalizeConfig(config) {
     return {
       ...config,
       model: normalizeModelConfig(config.model),
+      gitProvider: normalizeRepositorySourceConfig(config.gitProvider),
+      repositorySources: Array.isArray(config.repositorySources)
+        ? config.repositorySources.map(normalizeRepositorySourceConfig)
+        : config.repositorySources,
     };
   }
 
@@ -2831,12 +2925,37 @@ function normalizeConfig(config) {
         apiKey: config.modelBackend.apiKey || "",
         model: config.modelBackend.model || "",
       },
+      gitProvider: normalizeRepositorySourceConfig(config.gitProvider),
+      repositorySources: Array.isArray(config.repositorySources)
+        ? config.repositorySources.map(normalizeRepositorySourceConfig)
+        : config.repositorySources,
     };
     delete normalized.modelBackend;
     return normalized;
   }
 
   return config;
+}
+
+function normalizeRepositorySourceConfig(source) {
+  if (!source || typeof source !== "object") {
+    return source;
+  }
+  if (source.provider !== "github" || !source.baseUrl) {
+    return source;
+  }
+  const splitBaseUrl = splitGitHubBaseUrlAndScope(source.baseUrl);
+  if (!splitBaseUrl.scopeFromPath) {
+    return {
+      ...source,
+      baseUrl: splitBaseUrl.baseUrl,
+    };
+  }
+  return {
+    ...source,
+    baseUrl: splitBaseUrl.baseUrl,
+    owner: source.owner || splitBaseUrl.scopeFromPath,
+  };
 }
 
 function normalizeModelConfig(modelConfig) {
