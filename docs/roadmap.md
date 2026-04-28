@@ -1,4 +1,4 @@
-# OpenPatch Roadmap
+# RepoOperator Roadmap
 
 ## Principles
 
@@ -41,7 +41,7 @@ Target capabilities:
 
 Success criteria:
 
-- a developer can point OpenPatch at a local repository
+- a developer can point RepoOperator at a local repository
 - the worker can safely execute a constrained set of local operations
 - request and response schemas are stable enough for UI and backend integration
 

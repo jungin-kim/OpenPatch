@@ -1,25 +1,25 @@
-# OpenPatch CLI
+# RepoOperator CLI
 
-The OpenPatch CLI is the first product-oriented onboarding surface for the project.
+The RepoOperator CLI is the first product-oriented onboarding surface for the project.
 
 It currently provides:
 
-- `openpatch config show`
-- `openpatch onboard`
-- `openpatch doctor`
-- `openpatch status`
-- `openpatch worker start`
-- `openpatch worker stop`
-- `openpatch worker restart`
-- `openpatch worker status`
-- `openpatch worker logs`
+- `repooperator config show`
+- `repooperator onboard`
+- `repooperator doctor`
+- `repooperator status`
+- `repooperator worker start`
+- `repooperator worker stop`
+- `repooperator worker restart`
+- `repooperator worker status`
+- `repooperator worker logs`
 
 ## Install
 
 Standard user flow:
 
 ```bash
-npm install -g openpatch
+npm install -g repooperator
 ```
 
 ## First End-To-End Local Flow
@@ -27,17 +27,18 @@ npm install -g openpatch
 The first public alpha CLI flow is:
 
 ```bash
-npm install -g openpatch
-openpatch onboard
-openpatch doctor
-openpatch status
+npm install -g repooperator
+repooperator onboard
+repooperator worker start
+repooperator doctor
+repooperator status
 curl http://127.0.0.1:8000/health
 ```
 
 At a high level, success means:
 
-- Ollama is detected locally or OpenPatch guides the installation path
-- local Ollama models are detected or OpenPatch offers to pull a recommended model
+- Ollama is detected locally or RepoOperator guides the installation path
+- local Ollama models are detected or RepoOperator offers to pull a recommended model
 - the worker starts in the background during onboarding
 - onboarding verifies worker health and model connectivity
 - `status` shows the configured worker URL, model connection mode, and model provider clearly
@@ -46,44 +47,44 @@ At a high level, success means:
 
 ## Commands
 
-### `openpatch onboard`
+### `repooperator onboard`
 
-Creates the local OpenPatch config directory under `~/.openpatch`, writes a config file, starts with a model connection choice, asks only for the fields relevant to that runtime or API type, collects git provider settings, prepares local runtime directories, starts the local worker, and verifies the setup.
+Creates the local RepoOperator config directory under `~/.repooperator`, writes a config file, starts with a model connection choice, asks only for the fields relevant to that runtime or API type, collects git provider settings, prepares local runtime directories, starts the local worker, and verifies the setup.
 
 For a beginner-friendly local setup, choose `Local model runtime`, then `Ollama`, and accept the default base URL `http://127.0.0.1:11434/v1`.
-The Ollama path is now guided: OpenPatch detects whether `ollama` is installed, can offer a Homebrew install on macOS, checks whether the Ollama server is running, lists available local models, and can offer to pull `qwen2.5-coder:7b`.
-For GitLab or GitHub repository flows, onboarding now stores the provider base URL and token in `~/.openpatch/config.json` so the local worker can use them without extra manual exports.
+The Ollama path is now guided: RepoOperator detects whether `ollama` is installed, can offer a Homebrew install on macOS, checks whether the Ollama server is running, lists available local models, and can offer to pull `qwen2.5-coder:7b`.
+For GitLab or GitHub repository flows, onboarding now stores the provider base URL and token in `~/.repooperator/config.json` so the local worker can use them without extra manual exports.
 Across the product, the repository identifier is `project_path`, and the supported onboarding provider choices for repository access are `gitlab`, `github`, `local`, or `none`.
 
-### `openpatch config show`
+### `repooperator config show`
 
-Prints the current local OpenPatch configuration with secrets redacted.
+Prints the current local RepoOperator configuration with secrets redacted.
 
-### `openpatch doctor`
+### `repooperator doctor`
 
 Checks whether the local configuration, worker detection, worker process, worker reachability, worker URL, model connection config, model connectivity, and git provider configuration look healthy. All checks use short bounded timeouts and fail fast.
 
-### `openpatch status`
+### `repooperator status`
 
-Prints the current OpenPatch configuration summary and worker status, including worker URL, reachability, configured git provider, repo base directory, model connection mode, model provider, model summary, and model connectivity detail.
+Prints the current RepoOperator configuration summary and worker status, including worker URL, reachability, configured git provider, repo base directory, model connection mode, model provider, model summary, and model connectivity detail.
 
-### `openpatch worker start`
+### `repooperator worker start`
 
 Starts the local worker as a managed background process for development. The CLI launches the repo-source worker with an absolute `PYTHONPATH` that points at the worker `src` directory, so users do not need to export `PYTHONPATH` manually for the src-layout package.
 
-### `openpatch worker stop`
+### `repooperator worker stop`
 
 Stops the managed local worker process.
 
-### `openpatch worker restart`
+### `repooperator worker restart`
 
 Restarts the managed local worker process.
 
-### `openpatch worker status`
+### `repooperator worker status`
 
 Prints the configured worker URL, pid when known, whether the process appears alive, and whether the worker health endpoint responds.
 
-### `openpatch worker logs`
+### `repooperator worker logs`
 
 Prints the current local worker log file, using a tail-style view that is easier to scan during startup failures.
 
@@ -93,12 +94,13 @@ The current CLI uses a development-friendly runtime strategy:
 
 - launch the worker from `apps/local-worker`
 - use the worker virtual environment in `apps/local-worker/.venv`
-- store config under `~/.openpatch/config.json`
-- store runtime state and pid files under `~/.openpatch/run`
-- store logs under `~/.openpatch/logs`
+- store config under `~/.repooperator/config.json`
+- store runtime state and pid files under `~/.repooperator/run`
+- store logs under `~/.repooperator/logs`
 
 This is intentionally simple and inspectable. It is not yet an OS-level daemon installer. The worker runs as a background process, not an attached foreground process, and startup waits are short and bounded.
 The CLI also checks whether the configured worker port is already in use before starting, and surfaces clear startup diagnostics when import, bind, or health checks fail.
+If `~/.repooperator` does not exist yet but `~/.openpatch` does, the CLI will migrate the existing local config and runtime files automatically.
 
 ## Model Connection Choices
 
@@ -107,7 +109,7 @@ The onboarding flow starts with two first-class model connection modes:
 - `local-runtime`
 - `remote-api`
 
-Under those modes, OpenPatch currently supports:
+Under those modes, RepoOperator currently supports:
 
 - `ollama`
 - `openai-compatible`
@@ -120,10 +122,10 @@ Ollama is treated as the first-class local self-served option with product-frien
 ## Standard User Flow
 
 ```bash
-npm install -g openpatch
-openpatch onboard
-openpatch doctor
-openpatch status
+npm install -g repooperator
+repooperator onboard
+repooperator doctor
+repooperator status
 ```
 
 ## Example Ollama Flow
@@ -138,18 +140,18 @@ Example choices during onboarding:
 Then run:
 
 ```bash
-openpatch doctor
-openpatch status
+repooperator doctor
+repooperator status
 curl http://127.0.0.1:8000/health
 ```
 
 ## Troubleshooting
 
 - Worker import or startup failures:
-  Run `openpatch worker logs`. The startup output includes the exact worker command, absolute worker src path, and `PYTHONPATH`.
+  Run `repooperator worker logs`. The startup output includes the exact worker command, absolute worker src path, and `PYTHONPATH`.
 - Port already in use:
-  `openpatch worker start` checks the configured port before launch and fails fast with a clear message.
+  `repooperator worker start` checks the configured port before launch and fails fast with a clear message.
 - Ollama not running:
-  `openpatch onboard`, `openpatch doctor`, and `openpatch status` report model connectivity failures and point to the expected Ollama-compatible models endpoint.
+  `repooperator onboard`, `repooperator doctor`, and `repooperator status` report model connectivity failures and point to the expected Ollama-compatible models endpoint.
 - Missing model:
-  Pull the model locally, for example `ollama pull qwen2.5-coder:7b`, then rerun `openpatch doctor`.
+  Pull the model locally, for example `ollama pull qwen2.5-coder:7b`, then rerun `repooperator doctor`.

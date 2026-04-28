@@ -1,4 +1,4 @@
-import { OpenPatchConsole } from "@/components/openpatch-console";
+import { RepoOperatorConsole } from "@/components/openpatch-console";
 
 export default function HomePage() {
   return (
@@ -6,15 +6,15 @@ export default function HomePage() {
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark" aria-hidden="true" />
-        <div className="brand-copy">
-          <h1>OpenPatch</h1>
-          <p>Hosted interface for repository understanding through local sources and guided model connections.</p>
+          <div className="brand-copy">
+            <h1>RepoOperator</h1>
+            <p>Hosted interface for repository understanding through local sources and guided model connections.</p>
+          </div>
         </div>
-      </div>
-      <div className="topbar-note">Read-only product flow</div>
-    </header>
+        <div className="topbar-note">Read-only product flow</div>
+      </header>
 
-      <OpenPatchConsole />
+      <RepoOperatorConsole />
     </main>
   );
 }

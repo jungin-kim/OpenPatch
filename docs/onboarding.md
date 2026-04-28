@@ -1,6 +1,6 @@
-# OpenPatch Onboarding
+# RepoOperator Onboarding
 
-OpenPatch is moving toward a developer-product onboarding flow built around:
+RepoOperator is moving toward a developer-product onboarding flow built around:
 
 - one-command install
 - one-command onboarding
@@ -8,37 +8,39 @@ OpenPatch is moving toward a developer-product onboarding flow built around:
 - a centralized model backend
 - pluggable repository sources such as GitLab, GitHub, and local projects
 
-The first step in that direction is the new `openpatch` CLI.
+The first step in that direction is the new `repooperator` CLI.
 
 ## Install The CLI
 
 Standard install:
 
 ```bash
-npm install -g openpatch
+npm install -g repooperator
 ```
 
-This makes the `openpatch` command available on your machine.
+This makes the `repooperator` command available on your machine.
 
 ## Run Onboarding
 
 ```bash
-openpatch onboard
+repooperator onboard
 ```
 
-This is the first complete local onboarding path for OpenPatch. A new user can now install the CLI, choose a model connection mode, start the local worker, run diagnostics, and verify the local health endpoint end to end.
+This is the first complete local onboarding path for RepoOperator. A new user can now install the CLI, choose a model connection mode, start the local worker, run diagnostics, and verify the local health endpoint end to end.
 It also supports the first real read-only repository workflow: open a private hosted repository or a local project through the local worker, read a file locally, and ask for a repository summary through `/agent/run`.
 
 The normalized product contract for this flow is:
 
 - use `project_path` as the repository identifier across worker APIs
 - choose `gitlab`, `github`, `local`, or `none` during onboarding
-- keep canonical runtime configuration in `~/.openpatch/config.json`
+- keep canonical runtime configuration in `~/.repooperator/config.json`
 - treat environment variables as advanced overrides, not the standard setup path
+
+If `~/.repooperator` does not exist yet but `~/.openpatch` does, the CLI will migrate the existing local config and runtime files into the new RepoOperator home automatically.
 
 The onboarding flow will:
 
-1. create the local OpenPatch config directory
+1. create the local RepoOperator config directory
 2. create a config file
 3. prompt for a model connection mode first
 4. either guide a local model runtime setup or prompt for a remote model API type
@@ -47,11 +49,11 @@ The onboarding flow will:
 7. prompt for repository source selection, plus provider base URL and token when needed
 8. prompt for a local repo base directory
 9. detect whether a local worker installation is already present
-10. prepare local runtime directories under `~/.openpatch`
+10. prepare local runtime directories under `~/.repooperator`
 11. start the local worker automatically
 12. verify worker health and model connectivity before finishing
 
-OpenPatch now finishes onboarding by launching the worker as a background process, waiting for health for a short bounded timeout, checking model connectivity, and printing a concise success summary.
+RepoOperator now finishes onboarding by launching the worker as a background process, waiting for health for a short bounded timeout, checking model connectivity, and printing a concise success summary.
 For the repo-source local worker, the CLI handles the Python src-layout automatically with an absolute `PYTHONPATH`, so users do not need to export `PYTHONPATH` during normal CLI startup.
 
 Current model connection choices:
@@ -72,7 +74,7 @@ Examples of the provider-aware prompts:
 - Remote model API, Gemini: API key and model name, with the default base URL set to `https://generativelanguage.googleapis.com/v1beta/openai`
 - Remote model API, OpenAI-compatible: base URL, API key, and model name
 
-The resulting config stores model settings under a nested `model` object in `~/.openpatch/config.json`:
+The resulting config stores model settings under a nested `model` object in `~/.repooperator/config.json`:
 
 ```json
 {
@@ -91,7 +93,7 @@ The resulting config stores model settings under a nested `model` object in `~/.
 After onboarding:
 
 ```bash
-openpatch doctor
+repooperator doctor
 ```
 
 This validates:
@@ -108,15 +110,15 @@ This validates:
 ## Show The Current Config
 
 ```bash
-openpatch config show
+repooperator config show
 ```
 
-This prints the current local OpenPatch config with secrets redacted.
+This prints the current local RepoOperator config with secrets redacted.
 
 ## View Current Status
 
 ```bash
-openpatch status
+repooperator status
 ```
 
 This prints the current configuration summary and worker reachability.
@@ -125,7 +127,7 @@ It also shows the configured model connection mode and provider clearly.
 To inspect the worker runtime directly:
 
 ```bash
-openpatch worker status
+repooperator worker status
 ```
 
 ## Manage The Local Worker
@@ -133,25 +135,25 @@ openpatch worker status
 Start the worker:
 
 ```bash
-openpatch worker start
+repooperator worker start
 ```
 
 Stop the worker:
 
 ```bash
-openpatch worker stop
+repooperator worker stop
 ```
 
 Restart the worker:
 
 ```bash
-openpatch worker restart
+repooperator worker restart
 ```
 
 Show the worker logs:
 
 ```bash
-openpatch worker logs
+repooperator worker logs
 ```
 
 The log command prints a tail-style view of the current worker log file so startup failures are easy to inspect.
@@ -159,10 +161,11 @@ The log command prints a tail-style view of the current worker log file so start
 ## Standard Flow
 
 ```bash
-npm install -g openpatch
-openpatch onboard
-openpatch doctor
-openpatch status
+npm install -g repooperator
+repooperator onboard
+repooperator worker start
+repooperator doctor
+repooperator status
 curl http://127.0.0.1:8000/health
 ```
 
@@ -173,16 +176,16 @@ For a simple local-first setup:
 1. Install the CLI:
 
 ```bash
-npm install -g openpatch
+npm install -g repooperator
 ```
 
 2. Run onboarding:
 
 ```bash
-openpatch onboard
+repooperator onboard
 ```
 
-3. OpenPatch will guide these Ollama-specific steps:
+3. RepoOperator will guide these Ollama-specific steps:
 
 - detect whether the `ollama` command is installed
 - on macOS, offer a Homebrew install when available
@@ -199,23 +202,23 @@ openpatch onboard
 - model name: `qwen2.5-coder:7b`
 - repository source: `gitlab`, `github`, `local`, or `None for now`
 - if you choose GitLab or GitHub, provide the provider base URL and token so the worker can reuse the same config later
-- if you choose `local`, OpenPatch will treat absolute local filesystem paths as first-class project identifiers
+- if you choose `local`, RepoOperator will treat absolute local filesystem paths as first-class project identifiers
 - local repo base directory: accept the default or choose your own
 
 5. Verify the setup:
 
 ```bash
-openpatch doctor
-openpatch status
+repooperator doctor
+repooperator status
 curl http://127.0.0.1:8000/health
 ```
 
 Expected success output at a high level:
 
-- `openpatch onboard` prints a concise onboarding summary
+- `repooperator onboard` prints a concise onboarding summary
 - the worker starts during onboarding
 - worker health and model connectivity are verified before onboarding finishes
-- `openpatch status` shows the configured worker URL, model connection mode `local runtime`, model provider `ollama`, and healthy worker details
+- `repooperator status` shows the configured worker URL, model connection mode `local runtime`, model provider `ollama`, and healthy worker details
 - `curl http://127.0.0.1:8000/health` returns JSON with `status: ok`
 
 ## First Read-Only Workflow
@@ -267,26 +270,26 @@ Expected success output at a high level:
 
 For a private GitLab repository, normal product usage is:
 
-1. Run `openpatch onboard`.
+1. Run `repooperator onboard`.
 2. Choose `gitlab` as the git provider.
 3. Provide the GitLab base URL and a token with repository read access.
-4. Start the worker with `openpatch worker start`.
+4. Start the worker with `repooperator worker start`.
 5. Run `repo/open` with `git_provider: "gitlab"`.
 
-The worker will use the stored provider config from `~/.openpatch/config.json` and perform clone and fetch non-interactively.
+The worker will use the stored provider config from `~/.repooperator/config.json` and perform clone and fetch non-interactively.
 GitHub follows the same repository-open flow with `git_provider: "github"` and matching provider settings from onboarding.
 
 ## Troubleshooting Notes
 
 ### Worker Import Or Startup Failures
 
-- Run `openpatch worker logs` to inspect recent worker output.
+- Run `repooperator worker logs` to inspect recent worker output.
 - The CLI startup diagnostics print the absolute worker `src` path and `PYTHONPATH`.
 - If the worker app still cannot be imported, confirm the repo-source worker exists under `apps/local-worker/src/openpatch_worker`.
 
 ### Port Already In Use
 
-- `openpatch worker start` now checks the configured port before launch.
+- `repooperator worker start` now checks the configured port before launch.
 - If port `8000` is already occupied, the CLI reports that clearly and does not keep retrying.
 - Stop the existing process or reconfigure the worker URL to use another port.
 
@@ -298,11 +301,11 @@ GitHub follows the same repository-open flow with `git_provider: "github"` and m
 ### Missing GitLab Permissions
 
 - If `repo/open` reports repository not found or permission denied, confirm the stored GitLab token can read that private repository.
-- If onboarding was completed without a token, rerun `openpatch onboard` and update the git provider settings.
+- If onboarding was completed without a token, rerun `repooperator onboard` and update the git provider settings.
 
 ### Ollama Not Running
 
-- `openpatch doctor` and `openpatch status` report model connectivity failures with actionable guidance.
+- `repooperator doctor` and `repooperator status` report model connectivity failures with actionable guidance.
 - Start Ollama and make sure `http://127.0.0.1:11434/v1/models` responds.
 
 ### Missing Model
@@ -312,7 +315,7 @@ GitHub follows the same repository-open flow with `git_provider: "github"` and m
 
 ```bash
 ollama pull qwen2.5-coder:7b
-openpatch doctor
+repooperator doctor
 ```
 
 ## Development-Friendly Runtime
@@ -321,22 +324,22 @@ The current runtime model is intentionally simple:
 
 - the CLI launches the FastAPI worker from `apps/local-worker`
 - the worker runs as a managed background process
-- runtime state and pid files are stored under `~/.openpatch/run`
-- logs are written to `~/.openpatch/logs`
+- runtime state and pid files are stored under `~/.repooperator/run`
+- logs are written to `~/.repooperator/logs`
 - worker and model connectivity checks use short bounded timeouts so CLI commands fail fast instead of hanging
 
 This is a real local process flow, but it is not yet an OS daemon installer.
 
 ## Localhost Worker Expectation
 
-At the current phase, OpenPatch still assumes the worker runs on the local machine and binds to `127.0.0.1`.
+At the current phase, RepoOperator still assumes the worker runs on the local machine and binds to `127.0.0.1`.
 
 That means:
 
 - the worker remains the trusted local execution layer
 - repository reads, writes, diffs, commands, and git actions stay local
 - the CLI and current web flow assume a localhost worker URL
-- all real runtime config is stored under `~/.openpatch`, not inside the repository
+- all real runtime config is stored under `~/.repooperator`, not inside the repository
 
 ## Current Limits
 

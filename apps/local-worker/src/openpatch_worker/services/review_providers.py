@@ -31,11 +31,11 @@ def _create_gitlab_merge_request(
     provider_settings = settings.get_provider_settings("gitlab")
     if not provider_settings.base_url:
         raise ValueError(
-            "gitlab base URL is not configured. Update ~/.openpatch/config.json with gitProvider.baseUrl or set an environment override."
+            "gitlab base URL is not configured. Update ~/.repooperator/config.json with gitProvider.baseUrl or set an environment override."
         )
     if not provider_settings.token:
         raise ValueError(
-            "gitlab token is not configured. Update ~/.openpatch/config.json with gitProvider.token or set an environment override."
+            "gitlab token is not configured. Update ~/.repooperator/config.json with gitProvider.token or set an environment override."
         )
 
     encoded_project = parse.quote(request_payload.project_path, safe="")

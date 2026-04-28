@@ -1,6 +1,6 @@
-# OpenPatch Initial Issue Backlog
+# RepoOperator Initial Issue Backlog
 
-This document proposes an initial GitHub issue backlog for OpenPatch based on the current repository structure and the documented roadmap.
+This document proposes an initial GitHub issue backlog for RepoOperator based on the current repository structure and the documented roadmap.
 
 The backlog is organized around:
 

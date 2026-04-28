@@ -1,6 +1,6 @@
-# OpenPatch Local Worker
+# RepoOperator Local Worker
 
-The OpenPatch local worker is a FastAPI service that runs on a developer machine and performs local repository operations on behalf of the OpenPatch system.
+The RepoOperator local worker is a FastAPI service that runs on a developer machine and performs local repository operations on behalf of the RepoOperator system.
 
 This worker provides the first Phase 1 endpoints:
 
@@ -43,7 +43,7 @@ pip install -e .
 ### Run
 
 ```bash
-export LOCAL_REPO_BASE_DIR="$HOME/.openpatch/repos"
+export LOCAL_REPO_BASE_DIR="$HOME/.repooperator/repos"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 export OPENAI_API_KEY="your-api-key"
 export OPENAI_MODEL="gpt-4.1-mini"
@@ -84,11 +84,11 @@ curl -X POST http://127.0.0.1:8000/repo/open \
 GitLab setup:
 
 ```bash
-cat ~/.openpatch/config.json
+cat ~/.repooperator/config.json
 uvicorn openpatch_worker.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-In the product flow, git provider settings come from `~/.openpatch/config.json` first, with environment variables remaining available as advanced overrides.
+In the product flow, git provider settings come from `~/.repooperator/config.json` first, with environment variables remaining available as advanced overrides.
 
 When `git_provider` is set to `"gitlab"` or `"github"`, the worker builds the clone URL as:
 
@@ -224,7 +224,7 @@ curl -X POST http://127.0.0.1:8000/git/branch \
   -H "Content-Type: application/json" \
   -d '{
     "project_path": "examples/demo-repo",
-    "branch": "openpatch/readme-update",
+    "branch": "repooperator/readme-update",
     "from_ref": "main",
     "checkout": true
   }'
@@ -248,7 +248,7 @@ curl -X POST http://127.0.0.1:8000/git/push \
   -H "Content-Type: application/json" \
   -d '{
     "project_path": "examples/demo-repo",
-    "branch": "openpatch/readme-update",
+    "branch": "repooperator/readme-update",
     "git_provider": "gitlab"
   }'
 ```
@@ -261,7 +261,7 @@ curl -X POST http://127.0.0.1:8000/git/merge-request \
   -d '{
     "project_path": "group/demo-repo",
     "git_provider": "gitlab",
-    "source_branch": "openpatch/readme-update",
+    "source_branch": "repooperator/readme-update",
     "target_branch": "main",
     "title": "Update README introduction",
     "description": "Refines the README intro after local review and validation."
@@ -272,7 +272,7 @@ curl -X POST http://127.0.0.1:8000/git/merge-request \
 
 - The worker is intended to bind to `localhost` during early development.
 - All repositories are scoped under `LOCAL_REPO_BASE_DIR`.
-- Git provider settings are resolved from `~/.openpatch/config.json` first, with environment variables available as advanced overrides.
+- Git provider settings are resolved from `~/.repooperator/config.json` first, with environment variables available as advanced overrides.
 - GitLab and GitHub clone and fetch support use the same provider resolution path.
 - Authenticated GitLab clone and fetch operations are designed to work non-interactively for private repositories when the onboarded token is present.
 - Centralized model calls use `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODEL`.

@@ -11,7 +11,7 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
     client = OpenAICompatibleModelClient()
 
     system_prompt = (
-        "You are OpenPatch, a read-only repository assistant. "
+        "You are RepoOperator, a read-only repository assistant. "
         "Use only the provided repository context to answer the user's task. "
         "Do not claim to have inspected files that are not included in the provided context. "
         "If the task would require more context, say what is missing and what to inspect next."

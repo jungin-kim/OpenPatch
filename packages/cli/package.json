@@ -1,12 +1,13 @@
 {
-  "name": "openpatch",
+  "name": "repooperator",
   "version": "0.1.0",
   "private": false,
-  "description": "OpenPatch onboarding and local worker management CLI.",
+  "description": "RepoOperator onboarding and local worker management CLI.",
   "bin": {
-    "openpatch": "./bin/openpatch.js"
+    "repooperator": "bin/repooperator.js"
   },
   "engines": {
     "node": ">=20"
-  }
+  },
+  "license": "MIT"
 }

@@ -408,7 +408,7 @@ def _request_provider_json(
     request_object = request.Request(
         url,
         headers={
-            "User-Agent": "OpenPatch local worker",
+            "User-Agent": "RepoOperator local worker",
             **headers,
         },
     )

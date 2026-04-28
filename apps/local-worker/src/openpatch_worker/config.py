@@ -53,7 +53,7 @@ def get_settings() -> Settings:
     openpatch_config_path = _get_openpatch_config_path()
     runtime_config = _load_runtime_config(openpatch_config_path)
     repo_base_dir = Path(
-        os.getenv("LOCAL_REPO_BASE_DIR", Path.home() / ".openpatch" / "repos")
+        os.getenv("LOCAL_REPO_BASE_DIR", Path.home() / ".repooperator" / "repos")
     ).expanduser().resolve()
 
     return Settings(
@@ -110,7 +110,13 @@ def _get_openpatch_config_path() -> Path:
     configured = os.getenv("OPENPATCH_CONFIG_PATH")
     if configured:
         return Path(configured).expanduser().resolve()
-    return (Path.home() / ".openpatch" / "config.json").resolve()
+    repooperator_path = (Path.home() / ".repooperator" / "config.json").resolve()
+    legacy_path = (Path.home() / ".openpatch" / "config.json").resolve()
+    if repooperator_path.exists():
+        return repooperator_path
+    if legacy_path.exists():
+        return legacy_path
+    return repooperator_path
 
 
 def _load_runtime_config(config_path: Path) -> dict:

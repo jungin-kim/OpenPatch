@@ -1,8 +1,8 @@
-# OpenPatch Security Notes
+# RepoOperator Security Notes
 
 ## Overview
 
-OpenPatch is designed around a security-sensitive boundary: a local worker can read files and execute commands on a developer machine, while a central backend can perform model inference on selected context. The system should therefore be conservative by default and explicit about trust boundaries.
+RepoOperator is designed around a security-sensitive boundary: a local worker can read files and execute commands on a developer machine, while a central backend can perform model inference on selected context. The system should therefore be conservative by default and explicit about trust boundaries.
 
 This document captures the first-pass security posture for the project.
 
@@ -24,7 +24,7 @@ Early design guidance:
 
 ## Command Execution Risk
 
-Command execution is one of the highest-risk capabilities in OpenPatch.
+Command execution is one of the highest-risk capabilities in RepoOperator.
 
 Risks include:
 
@@ -46,7 +46,7 @@ Longer term, the project may also add policy hooks, command allowlists, or inter
 
 ## Secret Handling
 
-OpenPatch should avoid centralizing secrets wherever possible.
+RepoOperator should avoid centralizing secrets wherever possible.
 
 Guidelines:
 
@@ -76,7 +76,7 @@ Practical direction:
 
 ## Trust Boundaries
 
-OpenPatch has at least three trust zones:
+RepoOperator has at least three trust zones:
 
 1. Browser and hosted UI session
 2. Local worker with repository and command access

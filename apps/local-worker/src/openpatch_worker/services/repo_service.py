@@ -355,7 +355,7 @@ def _classify_remote_git_failure(
     if "could not read username" in combined or "terminal prompts disabled" in combined:
         return (
             f"{provider_label} authentication failed because no usable token was applied for this repository operation. "
-            "Confirm the provider token is stored in ~/.openpatch/config.json or provided as an override."
+            "Confirm the provider token is stored in ~/.repooperator/config.json or provided as an override."
         )
     if "http basic: access denied" in combined or "authentication failed" in combined or "invalid credentials" in combined:
         return (

@@ -1,1 +1,1 @@
-"""OpenPatch local worker package."""
+"""RepoOperator local worker package."""

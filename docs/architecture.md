@@ -1,8 +1,8 @@
-# OpenPatch Architecture
+# RepoOperator Architecture
 
 ## Overview
 
-OpenPatch separates the user interface, local repository execution, and model inference into distinct components:
+RepoOperator separates the user interface, local repository execution, and model inference into distinct components:
 
 - `apps/web`: hosted web application for task entry, status, review, and future collaboration features
 - `apps/local-worker`: local machine service that performs repository and command operations
@@ -98,7 +98,7 @@ This keeps local workers lightweight while allowing the project to evolve its or
 
 ## Why This Differs From A Central-Clone Architecture
 
-A central-clone architecture typically keeps a server-side copy of the repository and runs reads, writes, and commands in that central environment. OpenPatch intentionally differs in a few ways:
+A central-clone architecture typically keeps a server-side copy of the repository and runs reads, writes, and commands in that central environment. RepoOperator intentionally differs in a few ways:
 
 - the source of truth for repository state is the developer's local machine, not a server clone
 - command execution happens where dependencies, secrets, and toolchains already exist
@@ -133,13 +133,13 @@ The exact shape can evolve, but the architectural boundary should remain stable:
 
 ## Normalized Product Contract
 
-The current public-facing OpenPatch contract is intentionally small and explicit:
+The current public-facing RepoOperator contract is intentionally small and explicit:
 
 - The repository identifier is `project_path` across worker APIs.
 - For GitLab and GitHub, `project_path` uses the provider path such as `group/repo` or `owner/repo`.
 - For local projects, `project_path` is an absolute filesystem path on the user's machine.
 - Supported repository sources for repository open flows are `gitlab`, `github`, and `local`.
-- Canonical user configuration lives under `~/.openpatch/config.json`.
+- Canonical user configuration lives under `~/.repooperator/config.json`.
 - Environment variables remain available as advanced overrides, but they are not the primary product path.
 
 For the first read-only workflow, the main worker APIs are:

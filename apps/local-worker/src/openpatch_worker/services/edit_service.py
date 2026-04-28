@@ -24,7 +24,7 @@ def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileRespo
     client = OpenAICompatibleModelClient()
 
     system_prompt = (
-        "You are OpenPatch, a coding assistant preparing an explicit file edit proposal. "
+        "You are RepoOperator, a coding assistant preparing an explicit file edit proposal. "
         "Return only the full replacement file content for the target file. "
         "Do not include markdown fences, explanations, or commentary."
     )

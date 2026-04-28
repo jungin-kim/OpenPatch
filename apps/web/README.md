@@ -1,6 +1,6 @@
-# OpenPatch Web UI
+# RepoOperator Web UI
 
-The OpenPatch web UI is the first browser-based product surface for the project.
+The RepoOperator web UI is the first browser-based product surface for the project.
 
 The current alpha flow is intentionally small:
 
@@ -19,7 +19,7 @@ This UI is intentionally focused on the working read-only path. It does not pres
 
 - Node.js 20+
 - npm 10+
-- a running OpenPatch local worker on `http://127.0.0.1:8000` or another configured URL
+- a running RepoOperator local worker on `http://127.0.0.1:8000` or another configured URL
 
 ### Install
 
@@ -57,10 +57,10 @@ Then open [http://localhost:3000](http://localhost:3000).
 
 ## Expected Product Flow
 
-1. Run `openpatch onboard`
-2. Run `openpatch worker start`
-3. Run `openpatch doctor`
-4. Run `openpatch status`
+1. Run `repooperator onboard`
+2. Run `repooperator worker start`
+3. Run `repooperator doctor`
+4. Run `repooperator status`
 5. Start the web UI
 6. Choose `gitlab`, `github`, or `local project`
 7. Select a project from the guided list, or enter a local project path

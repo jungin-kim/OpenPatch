@@ -1,6 +1,6 @@
 # Local Worker Setup
 
-This guide is for end users who want to run the OpenPatch local worker on their machine.
+This guide is for end users who want to run the RepoOperator local worker on their machine.
 
 ## What The Local Worker Does
 
@@ -67,7 +67,7 @@ Required variables for the basic worker flow:
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 
-Git provider settings normally come from `~/.openpatch/config.json`, which is written by `openpatch onboard`.
+Git provider settings normally come from `~/.repooperator/config.json`, which is written by `repooperator onboard`.
 
 Optional advanced override variables:
 
@@ -101,10 +101,10 @@ curl http://127.0.0.1:8000/health
 You should receive a JSON response indicating:
 
 - `status: ok`
-- `service: openpatch-local-worker`
+- `service: repooperator-local-worker`
 - the configured `repo_base_dir`
 
-For a normal onboarded product flow, the worker should also be able to resolve git provider settings from `~/.openpatch/config.json` without requiring manual provider exports.
+For a normal onboarded product flow, the worker should also be able to resolve git provider settings from `~/.repooperator/config.json` without requiring manual provider exports.
 That includes the provider token needed for non-interactive private clone and fetch operations.
 
 ## Common User Flows

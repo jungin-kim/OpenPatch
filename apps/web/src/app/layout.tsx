@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "OpenPatch",
-  description: "Hosted UI shell for OpenPatch.",
+  title: "RepoOperator",
+  description: "Hosted UI shell for RepoOperator.",
 };
 
 export default function RootLayout({

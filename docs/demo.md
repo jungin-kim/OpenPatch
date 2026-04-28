@@ -1,19 +1,19 @@
-# OpenPatch Demo
+# RepoOperator Demo
 
-This guide shows the first successful end-to-end read-only OpenPatch workflow.
+This guide shows the first successful end-to-end read-only RepoOperator workflow.
 
 It covers:
 
-- `openpatch onboard`
-- `openpatch doctor`
-- `openpatch status`
+- `repooperator onboard`
+- `repooperator doctor`
+- `repooperator status`
 - provider-aware project and branch selection in the web UI
 - `repo/open` against a private GitLab repository
 - `/agent/run` repository summarization
 
 ## Overview
 
-OpenPatch now supports a working product flow where:
+RepoOperator now supports a working product flow where:
 
 1. the CLI prepares local runtime config
 2. the local worker starts on the developer machine
@@ -38,13 +38,13 @@ This example uses:
 Install the CLI:
 
 ```bash
-npm install -g openpatch
+npm install -g repooperator
 ```
 
 Run onboarding:
 
 ```bash
-openpatch onboard
+repooperator onboard
 ```
 
 Suggested choices:
@@ -59,21 +59,21 @@ Suggested choices:
 
 High-level success:
 
-- OpenPatch writes `~/.openpatch/config.json`
+- RepoOperator writes `~/.repooperator/config.json`
 - model and GitLab settings are stored for the worker to reuse
-- local runtime directories are prepared under `~/.openpatch`
+- local runtime directories are prepared under `~/.repooperator`
 
 ## Step 2: Verify Worker Health
 
 ```bash
-openpatch doctor
-openpatch status
+repooperator doctor
+repooperator status
 curl http://127.0.0.1:8000/health
 ```
 
 High-level success:
 
-- `openpatch onboard` has already started the worker
+- `repooperator onboard` has already started the worker
 - `doctor` shows the worker process as running and the worker as reachable
 - `status` shows the configured worker URL, model provider, and worker health detail
 - the health endpoint returns JSON with `status: ok`
@@ -110,7 +110,7 @@ curl -X POST http://127.0.0.1:8000/repo/open \
 
 High-level success:
 
-- the worker resolves GitLab credentials from `~/.openpatch/config.json`
+- the worker resolves GitLab credentials from `~/.repooperator/config.json`
 - clone and fetch happen non-interactively
 - the response includes:
   - `project_path`
@@ -161,17 +161,17 @@ This keeps the flow usable while limiting unnecessary repository transmission.
 
 ### Worker Not Running
 
-- Run `openpatch worker start`.
+- Run `repooperator worker start`.
 - If startup fails, inspect:
 
 ```bash
-openpatch worker status
-openpatch worker logs
+repooperator worker status
+repooperator worker logs
 ```
 
 ### Port Already In Use
 
-- If `127.0.0.1:8000` is already occupied, `openpatch worker start` fails fast.
+- If `127.0.0.1:8000` is already occupied, `repooperator worker start` fails fast.
 - Stop the existing process or change the configured worker URL and port.
 
 ### Wrong Repo Path
@@ -183,7 +183,7 @@ openpatch worker logs
 ### Missing GitLab Permissions
 
 - If `repo/open` reports repository not found or permission denied, confirm the stored GitLab token can read the private repository.
-- If needed, rerun `openpatch onboard` and update the GitLab provider settings.
+- If needed, rerun `repooperator onboard` and update the GitLab provider settings.
 
 ### Missing Ollama Model
 
@@ -191,7 +191,7 @@ openpatch worker logs
 
 ```bash
 ollama pull qwen2.5-coder:7b
-openpatch doctor
+repooperator doctor
 ```
 
 ## Related Docs

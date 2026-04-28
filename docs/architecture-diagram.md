@@ -1,6 +1,6 @@
-# OpenPatch Architecture Diagram
+# RepoOperator Architecture Diagram
 
-This diagram shows the current intended OpenPatch architecture and the current localhost expectation for the local worker.
+This diagram shows the current intended RepoOperator architecture and the current localhost expectation for the local worker.
 
 ## High-Level Diagram
 

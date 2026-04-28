@@ -54,7 +54,7 @@ def health() -> HealthResponse:
     settings = get_settings()
     return HealthResponse(
         status="ok",
-        service="openpatch-local-worker",
+        service="repooperator-local-worker",
         repo_base_dir=str(settings.repo_base_dir),
         configured_git_provider=settings.configured_git_provider,
         configured_repository_source=settings.configured_git_provider,

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This guide covers common problems when running OpenPatch locally.
+This guide covers common problems when running RepoOperator locally.
 
 ## Worker Health Check Fails
 
@@ -58,7 +58,7 @@ Checks:
 
 1. Confirm `LOCAL_REPO_BASE_DIR` exists or can be created.
 2. For GitLab or GitHub, confirm `project_path` matches the provider path exactly. For local projects, confirm `project_path` is an absolute filesystem path that exists.
-3. Confirm the git provider configuration in `~/.openpatch/config.json` matches the selected provider.
+3. Confirm the git provider configuration in `~/.repooperator/config.json` matches the selected provider.
 4. For advanced override flows, confirm provider environment overrides are correct.
 5. Confirm the branch exists on the remote or locally when the selected source is a git repository.
 
@@ -72,7 +72,7 @@ Symptoms:
 
 Checks:
 
-1. Confirm `~/.openpatch/config.json` contains the correct GitLab base URL and token.
+1. Confirm `~/.repooperator/config.json` contains the correct GitLab base URL and token.
 2. Confirm the token is valid and not expired.
 3. Confirm the token has sufficient repository and API permissions.
 4. Confirm the `project_path` matches the GitLab project path.
@@ -86,7 +86,7 @@ Symptoms:
 
 Checks:
 
-1. Confirm `~/.openpatch/config.json` contains the correct GitHub base URL and token.
+1. Confirm `~/.repooperator/config.json` contains the correct GitHub base URL and token.
 2. Confirm the token is valid and has repository access.
 3. Confirm the `project_path` matches the GitHub owner and repository path.
 
@@ -185,6 +185,6 @@ Collect these details before opening an issue:
 - operating system
 - exact request payload
 - exact error message
-- whether the same command works manually outside OpenPatch
+- whether the same command works manually outside RepoOperator
 
 If you file an issue, include sanitized logs and omit secrets or tokens.

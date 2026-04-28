@@ -20,7 +20,7 @@ type ConnectionState = "checking" | "connected" | "unavailable";
 const workerBaseUrl =
   process.env.NEXT_PUBLIC_LOCAL_WORKER_BASE_URL?.trim() || "http://127.0.0.1:8000";
 
-export function OpenPatchConsole() {
+export function RepoOperatorConsole() {
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("checking");
   const [healthDetail, setHealthDetail] = useState(
@@ -333,7 +333,7 @@ export function OpenPatchConsole() {
           <span className="hero-kicker">Guided repository selection</span>
           <h2>Choose a repository source and use the configured model connection without dropping to raw worker calls.</h2>
           <p>
-            OpenPatch can load hosted repositories from GitLab or GitHub, remember recent local
+            RepoOperator can load hosted repositories from GitLab or GitHub, remember recent local
             projects, and route read-only questions through either a local model runtime or a remote model API.
           </p>
 
@@ -529,7 +529,7 @@ export function OpenPatchConsole() {
                   placeholder="/Users/you/my-project"
                 />
                 <p className="field-help">
-                  Enter an absolute filesystem path. OpenPatch can analyze the project even if it is not a git repository.
+                  Enter an absolute filesystem path. RepoOperator can analyze the project even if it is not a git repository.
                 </p>
               </div>
             ) : null}
@@ -634,8 +634,8 @@ export function OpenPatchConsole() {
             <div className="task-actions">
               <span className="task-hint">
                 {gitProvider === "local"
-                  ? "OpenPatch treats local projects as a first-class source, with recent suggestions and direct path entry."
-                  : "OpenPatch keeps guided selection as the default experience and falls back to manual entry only when needed."}
+                  ? "RepoOperator treats local projects as a first-class source, with recent suggestions and direct path entry."
+                  : "RepoOperator keeps guided selection as the default experience and falls back to manual entry only when needed."}
               </span>
               <button
                 className="primary-button"
@@ -705,7 +705,7 @@ export function OpenPatchConsole() {
                 type="submit"
                 disabled={questionPending || !repositoryReady}
               >
-                {questionPending ? "Running question..." : "Ask OpenPatch"}
+                {questionPending ? "Running question..." : "Ask RepoOperator"}
               </button>
             </div>
           </form>

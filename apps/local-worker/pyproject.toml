@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openpatch-local-worker"
+name = "repooperator-local-worker"
 version = "0.1.0"
-description = "Local FastAPI worker for OpenPatch repository and command operations."
+description = "Local FastAPI worker for RepoOperator repository and command operations."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

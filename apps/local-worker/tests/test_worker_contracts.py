@@ -45,7 +45,7 @@ class WorkerContractTests(unittest.TestCase):
 
     def test_runtime_config_resolves_gitlab_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
-            config_dir = Path(temp_home) / ".openpatch"
+            config_dir = Path(temp_home) / ".repooperator"
             config_dir.mkdir(parents=True, exist_ok=True)
             (config_dir / "config.json").write_text(
                 """
@@ -81,7 +81,7 @@ class WorkerContractTests(unittest.TestCase):
 
     def test_runtime_config_resolves_github_provider(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
-            config_dir = Path(temp_home) / ".openpatch"
+            config_dir = Path(temp_home) / ".repooperator"
             config_dir.mkdir(parents=True, exist_ok=True)
             (config_dir / "config.json").write_text(
                 """
@@ -114,7 +114,7 @@ class WorkerContractTests(unittest.TestCase):
 
     def test_runtime_config_prefers_environment_override_for_gitlab(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
-            config_dir = Path(temp_home) / ".openpatch"
+            config_dir = Path(temp_home) / ".repooperator"
             config_dir.mkdir(parents=True, exist_ok=True)
             (config_dir / "config.json").write_text(
                 """

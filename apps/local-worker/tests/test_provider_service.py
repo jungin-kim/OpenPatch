@@ -59,7 +59,7 @@ class ProviderServiceTests(unittest.TestCase):
 
     def test_local_recent_projects_are_returned_from_runtime_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
-            config_dir = Path(temp_home) / ".openpatch"
+            config_dir = Path(temp_home) / ".repooperator"
             config_dir.mkdir(parents=True, exist_ok=True)
             config_path = config_dir / "config.json"
             config_path.write_text('{"gitProvider":{"provider":"local"}}', encoding="utf-8")

@@ -1,1 +1,1 @@
-"""API layer for the OpenPatch local worker."""
+"""API layer for the RepoOperator local worker."""

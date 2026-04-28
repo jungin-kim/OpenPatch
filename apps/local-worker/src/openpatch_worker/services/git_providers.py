@@ -45,12 +45,12 @@ def build_provider_git_options(
     if not provider_settings.base_url:
         raise ValueError(
             f"{provider_settings.provider} base URL is not configured. "
-            "Update ~/.openpatch/config.json with gitProvider.baseUrl or set an environment override."
+            "Update ~/.repooperator/config.json with gitProvider.baseUrl or set an environment override."
         )
     if not provider_settings.token:
         raise ValueError(
             f"{provider_settings.provider} token is not configured. "
-            "Update ~/.openpatch/config.json with gitProvider.token or set an environment override."
+            "Update ~/.repooperator/config.json with gitProvider.token or set an environment override."
         )
 
     clone_url = build_provider_clone_url(

@@ -7,17 +7,24 @@ const net = require("node:net");
 const { spawn } = require("node:child_process");
 const { stdin, stdout } = require("node:process");
 
-const CONFIG_DIR = path.join(os.homedir(), ".openpatch");
+const PRODUCT_NAME = "RepoOperator";
+const CLI_COMMAND = "repooperator";
+const CONFIG_DIR = path.join(os.homedir(), ".repooperator");
+const LEGACY_CONFIG_DIR = path.join(os.homedir(), ".openpatch");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
+const LEGACY_CONFIG_PATH = path.join(LEGACY_CONFIG_DIR, "config.json");
 const RUN_DIR = path.join(CONFIG_DIR, "run");
+const LEGACY_RUN_DIR = path.join(LEGACY_CONFIG_DIR, "run");
 const LOG_DIR = path.join(CONFIG_DIR, "logs");
+const LEGACY_LOG_DIR = path.join(LEGACY_CONFIG_DIR, "logs");
 const STATE_PATH = path.join(RUN_DIR, "worker-state.json");
-const LEGACY_STATE_PATH = path.join(CONFIG_DIR, "daemon", "state.json");
+const LEGACY_STATE_PATH = path.join(LEGACY_CONFIG_DIR, "daemon", "state.json");
+const LEGACY_RUN_STATE_PATH = path.join(LEGACY_RUN_DIR, "worker-state.json");
 const PID_PATH = path.join(RUN_DIR, "worker.pid");
 const WORKER_LOG_PATH = path.join(LOG_DIR, "worker.log");
 const OLLAMA_LOG_PATH = path.join(LOG_DIR, "ollama.log");
 const DEFAULT_WORKER_URL = "http://127.0.0.1:8000";
-const DEFAULT_REPO_BASE_DIR = path.join(os.homedir(), ".openpatch", "repos");
+const DEFAULT_REPO_BASE_DIR = path.join(os.homedir(), ".repooperator", "repos");
 const DEFAULT_WORKER_HEALTH_TIMEOUT_MS = 1500;
 const DEFAULT_WORKER_START_TIMEOUT_MS = 8000;
 const DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS = 2000;
@@ -139,9 +146,9 @@ async function runOnboard() {
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
   try {
-    console.log("OpenPatch onboarding");
-    console.log("Set up OpenPatch on this machine.");
-    console.log("We will save your local settings, choose how OpenPatch should reach a model, choose a git provider, and prepare the local worker runtime.");
+    console.log(`${PRODUCT_NAME} onboarding`);
+    console.log(`Set up ${PRODUCT_NAME} on this machine.`);
+    console.log(`We will save your local settings, choose how ${PRODUCT_NAME} should reach a model, choose a repository source, and prepare the local worker runtime.`);
     console.log("");
 
     const modelConfig = await promptModelConfig(rl);
@@ -188,7 +195,7 @@ async function runOnboard() {
     });
 
     console.log("");
-    console.log("OpenPatch is now configured.");
+    console.log(`${PRODUCT_NAME} is now configured.`);
     console.log(`Config file: ${CONFIG_PATH}`);
     console.log(`Worker detection: ${workerDetection.summary}`);
     console.log("");
@@ -202,7 +209,7 @@ async function runOnboard() {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.log(`Worker start failed: ${message}`);
-      console.log("You can inspect the worker with `openpatch worker logs` and retry with `openpatch worker start`.");
+      console.log(`You can inspect the worker with \`${CLI_COMMAND} worker logs\` and retry with \`${CLI_COMMAND} worker start\`.`);
     }
 
     const workerHealth = await checkWorkerHealth(
@@ -215,7 +222,7 @@ async function runOnboard() {
     );
 
     console.log("");
-    console.log("OpenPatch onboarding summary");
+    console.log(`${PRODUCT_NAME} onboarding summary`);
     console.log(`Worker URL: ${config.worker.baseUrl}`);
     console.log(`Model connection: ${formatModelSummary(config.model)}`);
     console.log(`Worker health: ${workerHealth.reachable ? "ok" : "needs attention"}`);
@@ -223,9 +230,9 @@ async function runOnboard() {
 
     if (workerStarted && workerHealth.reachable && modelConnectivity.reachable) {
       console.log("");
-      console.log("OpenPatch is ready for read-only repository Q&A.");
+      console.log(`${PRODUCT_NAME} is ready for read-only repository Q&A.`);
       console.log("Next steps:");
-      console.log("  1. Run `openpatch status`");
+      console.log(`  1. Run \`${CLI_COMMAND} status\``);
       console.log("  2. Open the web UI");
       console.log("  3. Open a repository and ask a read-only question");
       return;
@@ -245,13 +252,14 @@ async function runOnboard() {
 }
 
 async function runDoctor() {
+  await ensureMigratedRuntimeHome();
   const checks = [];
   const configExists = await fileExists(CONFIG_PATH);
   checks.push(
     makeCheck(
       "Config file exists",
       configExists,
-      configExists ? CONFIG_PATH : "Run `openpatch onboard` first.",
+      configExists ? CONFIG_PATH : `Run \`${CLI_COMMAND} onboard\` first.`,
     ),
   );
 
@@ -336,7 +344,7 @@ async function runDoctor() {
       ),
       config.model?.provider
         ? `Configured model connection: ${formatModelSummary(config.model)}`
-        : "No model connection is configured yet. Run `openpatch onboard` to add one.",
+        : `No model connection is configured yet. Run \`${CLI_COMMAND} onboard\` to add one.`,
     ),
   );
   checks.push(
@@ -356,10 +364,11 @@ async function runDoctor() {
 }
 
 async function runStatus() {
+  await ensureMigratedRuntimeHome();
   const configExists = await fileExists(CONFIG_PATH);
   if (!configExists) {
-    console.log("OpenPatch is not configured yet.");
-    console.log("Run `openpatch onboard` to create the local configuration.");
+    console.log(`${PRODUCT_NAME} is not configured yet.`);
+    console.log(`Run \`${CLI_COMMAND} onboard\` to create the local configuration.`);
     process.exitCode = 1;
     return;
   }
@@ -379,7 +388,7 @@ async function runStatus() {
     DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
   );
 
-  console.log("OpenPatch status");
+  console.log(`${PRODUCT_NAME} status`);
   console.log("");
   console.log(`Config file: ${CONFIG_PATH}`);
   console.log(`Configured worker URL: ${workerUrl}`);
@@ -438,7 +447,7 @@ async function startWorker({ interactive }) {
 
   if (!workerInstallation.installed || !workerInstallation.detectedPath) {
     throw new Error(
-      "Local worker not installed. OpenPatch could not find apps/local-worker in the current repository tree.",
+      `Local worker not installed. ${PRODUCT_NAME} could not find apps/local-worker in the current repository tree.`,
     );
   }
 
@@ -500,7 +509,7 @@ async function startWorker({ interactive }) {
     }
   }
 
-  console.log("Launching OpenPatch local worker");
+  console.log(`Launching ${PRODUCT_NAME} local worker`);
   console.log(`Command: ${launchedCommand}`);
   console.log(`Working directory: ${workerInstallation.detectedPath}`);
   console.log(`Worker src path: ${workerLaunch.srcPath}`);
@@ -583,7 +592,7 @@ async function startWorker({ interactive }) {
       console.log(logTail);
     }
     throw new Error(
-      `Worker failed to start. ${startupHealth.message} Check logs with \`openpatch worker logs\`.`,
+      `Worker failed to start. ${startupHealth.message} Check logs with \`${CLI_COMMAND} worker logs\`.`,
     );
   }
 
@@ -594,7 +603,7 @@ async function startWorker({ interactive }) {
   });
 
   if (interactive) {
-    console.log("OpenPatch local worker started.");
+    console.log(`${PRODUCT_NAME} local worker started.`);
     console.log(`Worker URL: ${workerUrl}`);
     console.log(`Logs: ${WORKER_LOG_PATH}`);
   }
@@ -628,14 +637,14 @@ async function stopWorker({ interactive }) {
   await removePidFile();
 
   if (interactive) {
-    console.log("OpenPatch local worker stopped.");
+    console.log(`${PRODUCT_NAME} local worker stopped.`);
   }
 }
 
 async function restartWorker() {
   await stopWorker({ interactive: false });
   await startWorker({ interactive: true });
-  console.log("OpenPatch local worker restarted.");
+  console.log(`${PRODUCT_NAME} local worker restarted.`);
 }
 
 async function showWorkerLogs() {
@@ -647,16 +656,17 @@ async function showWorkerLogs() {
   }
 
   const logContent = await readLogTail(logPath, 200);
-  console.log(`OpenPatch worker logs: ${logPath}`);
+  console.log(`${PRODUCT_NAME} worker logs: ${logPath}`);
   console.log("");
   process.stdout.write(logContent || "(log file is empty)\n");
 }
 
 async function showWorkerStatus() {
+  await ensureMigratedRuntimeHome();
   const configExists = await fileExists(CONFIG_PATH);
   if (!configExists) {
-    console.log("OpenPatch is not configured yet.");
-    console.log("Run `openpatch onboard` to create the local configuration.");
+    console.log(`${PRODUCT_NAME} is not configured yet.`);
+    console.log(`Run \`${CLI_COMMAND} onboard\` to create the local configuration.`);
     process.exitCode = 1;
     return;
   }
@@ -669,7 +679,7 @@ async function showWorkerStatus() {
   const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
   const workerHealth = await checkWorkerHealth(workerUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS);
 
-  console.log("OpenPatch worker status");
+  console.log(`${PRODUCT_NAME} worker status`);
   console.log("");
   console.log(`Configured worker URL: ${workerUrl}`);
   console.log(`PID: ${runtimeState?.pid ?? "not recorded"}`);
@@ -690,9 +700,53 @@ async function showWorkerStatus() {
 }
 
 async function ensureBaseDirectories() {
+  await ensureMigratedRuntimeHome();
   await fsp.mkdir(CONFIG_DIR, { recursive: true });
   await fsp.mkdir(RUN_DIR, { recursive: true });
   await fsp.mkdir(LOG_DIR, { recursive: true });
+}
+
+let migrationChecked = false;
+
+async function ensureMigratedRuntimeHome() {
+  if (migrationChecked) {
+    return;
+  }
+
+  await fsp.mkdir(CONFIG_DIR, { recursive: true });
+  await fsp.mkdir(RUN_DIR, { recursive: true });
+  await fsp.mkdir(LOG_DIR, { recursive: true });
+
+  const repooperatorExists =
+    (await fileExists(CONFIG_PATH))
+    || (await fileExists(STATE_PATH))
+    || (await fileExists(PID_PATH))
+    || (await fileExists(WORKER_LOG_PATH));
+  const legacyExists =
+    (await fileExists(LEGACY_CONFIG_PATH))
+    || (await fileExists(LEGACY_RUN_STATE_PATH))
+    || (await fileExists(LEGACY_STATE_PATH))
+    || (await fileExists(path.join(LEGACY_RUN_DIR, "worker.pid")))
+    || (await fileExists(path.join(LEGACY_LOG_DIR, "worker.log")));
+
+  if (!repooperatorExists && legacyExists) {
+    await copyFileIfMissing(LEGACY_CONFIG_PATH, CONFIG_PATH);
+    await copyFileIfMissing(LEGACY_RUN_STATE_PATH, STATE_PATH);
+    await copyFileIfMissing(LEGACY_STATE_PATH, STATE_PATH);
+    await copyFileIfMissing(path.join(LEGACY_RUN_DIR, "worker.pid"), PID_PATH);
+    await copyFileIfMissing(path.join(LEGACY_LOG_DIR, "worker.log"), WORKER_LOG_PATH);
+    await copyFileIfMissing(path.join(LEGACY_LOG_DIR, "ollama.log"), OLLAMA_LOG_PATH);
+  }
+
+  migrationChecked = true;
+}
+
+async function copyFileIfMissing(sourcePath, targetPath) {
+  if (!(await fileExists(sourcePath)) || (await fileExists(targetPath))) {
+    return;
+  }
+  await fsp.mkdir(path.dirname(targetPath), { recursive: true });
+  await fsp.copyFile(sourcePath, targetPath);
 }
 
 async function resolveWorkerInstallation(config, startDir) {
@@ -772,7 +826,7 @@ async function resolveWorkerLaunchConfig(workerPath) {
 
   if (!(await fileExists(moduleEntry))) {
     throw new Error(
-      `Worker app entrypoint not found at ${moduleEntry}. OpenPatch expected a src-layout worker package.`,
+      `Worker app entrypoint not found at ${moduleEntry}. ${PRODUCT_NAME} expected a src-layout worker package.`,
     );
   }
 
@@ -874,7 +928,7 @@ async function checkOllamaServer(baseUrl, timeoutMs) {
     return {
       reachable: false,
       models: [],
-      message: `OpenPatch could not reach Ollama at ${tagsUrl}: ${formatTimeoutAwareError(error, `Ollama check timed out after ${Math.round(timeoutMs / 1000)} seconds.`)}`,
+      message: `${PRODUCT_NAME} could not reach Ollama at ${tagsUrl}: ${formatTimeoutAwareError(error, `Ollama check timed out after ${Math.round(timeoutMs / 1000)} seconds.`)}`,
     };
   }
 }
@@ -1025,7 +1079,7 @@ async function promptRemoteApiModelConfig(rl) {
 
   console.log("");
   console.log(`Remote model API: ${providerConfig.label}`);
-  console.log("OpenPatch will use these settings when the local worker calls your remote model API.");
+  console.log(`${PRODUCT_NAME} will use these settings when the local worker calls your remote model API.`);
 
   let baseUrl = providerConfig.defaultBaseUrl || "";
   let apiKey = providerConfig.defaultApiKey || "";
@@ -1063,13 +1117,13 @@ async function promptRemoteApiModelConfig(rl) {
 async function promptOllamaModelConfig(rl) {
   console.log("");
   console.log("Local model runtime: Ollama");
-  console.log("OpenPatch will look for a local Ollama installation, help you start it if needed, and guide model selection.");
+  console.log(`${PRODUCT_NAME} will look for a local Ollama installation, help you start it if needed, and guide model selection.`);
 
   const commandInstalled = await commandExists("ollama");
   if (!commandInstalled) {
     const installedNow = await ensureOllamaInstalled(rl);
     if (!installedNow) {
-      throw new Error("Ollama is required for the guided local Ollama setup. Install it, then rerun `openpatch onboard`.");
+      throw new Error(`Ollama is required for the guided local Ollama setup. Install it, then rerun \`${CLI_COMMAND} onboard\`.`);
     }
   }
 
@@ -1088,7 +1142,7 @@ async function promptOllamaModelConfig(rl) {
 
 async function promptModelConnectionMode(rl) {
   while (true) {
-    console.log("Choose how OpenPatch should connect to your model:");
+    console.log(`Choose how ${PRODUCT_NAME} should connect to your model:`);
     console.log("  1. Local model runtime");
     console.log("  2. Remote model API");
     const answer = (await rl.question("Choice [1]: ")).trim() || "1";
@@ -1201,14 +1255,14 @@ async function ensureOllamaInstalled(rl) {
       }
     }
 
-    console.log("Install Ollama on macOS, then rerun `openpatch onboard`.");
+    console.log(`Install Ollama on macOS, then rerun \`${CLI_COMMAND} onboard\`.`);
     console.log("Suggested options:");
     console.log("  - install Homebrew and run `brew install ollama`");
     console.log("  - or install Ollama from the official macOS installer");
     return false;
   }
 
-  console.log("Install Ollama on this machine, then rerun `openpatch onboard`.");
+  console.log(`Install Ollama on this machine, then rerun \`${CLI_COMMAND} onboard\`.`);
   console.log("Suggested options:");
   console.log("  - use your system package manager if available");
   console.log("  - or install Ollama from the official installer for your platform");
@@ -1233,7 +1287,7 @@ async function ensureOllamaServerReady(rl, baseUrl) {
   );
   if (!startNow) {
     throw new Error(
-      "Ollama is not running. Start it with `ollama serve`, then rerun `openpatch onboard`.",
+      `Ollama is not running. Start it with \`ollama serve\`, then rerun \`${CLI_COMMAND} onboard\`.`,
     );
   }
 
@@ -1271,7 +1325,7 @@ async function chooseOllamaModel(rl, baseUrl, initialModels) {
 
   if (models.length === 0) {
     console.log("");
-    console.log("OpenPatch could not detect any local Ollama models.");
+    console.log(`${PRODUCT_NAME} could not detect any local Ollama models.`);
     return promptWithDefault(rl, "Model name", OLLAMA_RECOMMENDED_MODEL);
   }
 
@@ -1303,26 +1357,33 @@ async function chooseOllamaModel(rl, baseUrl, initialModels) {
 
 async function showConfig() {
   const config = await requireConfig();
-  console.log("OpenPatch config");
+  console.log(`${PRODUCT_NAME} config`);
   console.log("");
   console.log(JSON.stringify(redactConfig(config), null, 2));
 }
 
 async function requireConfig() {
+  await ensureMigratedRuntimeHome();
   if (!(await fileExists(CONFIG_PATH))) {
-    throw new Error("OpenPatch is not configured yet. Run `openpatch onboard` first.");
+    throw new Error(`${PRODUCT_NAME} is not configured yet. Run \`${CLI_COMMAND} onboard\` first.`);
   }
   return readConfig();
 }
 
 async function readConfig() {
+  await ensureMigratedRuntimeHome();
   const raw = await fsp.readFile(CONFIG_PATH, "utf-8");
   return normalizeConfig(JSON.parse(raw));
 }
 
 async function readState() {
+  await ensureMigratedRuntimeHome();
   if (await fileExists(STATE_PATH)) {
     const raw = await fsp.readFile(STATE_PATH, "utf-8");
+    return JSON.parse(raw);
+  }
+  if (await fileExists(LEGACY_RUN_STATE_PATH)) {
+    const raw = await fsp.readFile(LEGACY_RUN_STATE_PATH, "utf-8");
     return JSON.parse(raw);
   }
   if (await fileExists(LEGACY_STATE_PATH)) {
@@ -1571,7 +1632,7 @@ function buildPythonPathEnv(srcPath, existingPythonPath) {
 
 function buildModelConnectivityHeaders(modelConfig) {
   const headers = {
-    "User-Agent": "OpenPatch CLI",
+    "User-Agent": "RepoOperator CLI",
   };
 
   if (modelConfig?.apiKey) {
@@ -1669,7 +1730,7 @@ function describeWorkerHealthState(workerHealth, runtimeState, portState) {
     return runtimeState.lastError || workerHealth.message;
   }
   if (portState?.inUse && !workerHealth.reachable) {
-    return `A process is listening on the configured port, but the OpenPatch health endpoint did not respond successfully. ${workerHealth.message}`;
+    return `A process is listening on the configured port, but the ${PRODUCT_NAME} health endpoint did not respond successfully. ${workerHealth.message}`;
   }
   return workerHealth.message;
 }
@@ -1832,7 +1893,7 @@ function normalizeModelConfig(modelConfig) {
 }
 
 function printChecks(checks) {
-  console.log("OpenPatch doctor");
+  console.log(`${PRODUCT_NAME} doctor`);
   console.log("");
   for (const check of checks) {
     const prefix = check.ok ? "[ok]" : "[fail]";
@@ -1844,18 +1905,18 @@ function printChecks(checks) {
 }
 
 function printHelp() {
-  console.log("OpenPatch CLI");
+  console.log(`${PRODUCT_NAME} CLI`);
   console.log("");
   console.log("Usage:");
-  console.log("  openpatch config show");
-  console.log("  openpatch onboard");
-  console.log("  openpatch doctor");
-  console.log("  openpatch status");
-  console.log("  openpatch worker start");
-  console.log("  openpatch worker stop");
-  console.log("  openpatch worker restart");
-  console.log("  openpatch worker status");
-  console.log("  openpatch worker logs");
+  console.log(`  ${CLI_COMMAND} config show`);
+  console.log(`  ${CLI_COMMAND} onboard`);
+  console.log(`  ${CLI_COMMAND} doctor`);
+  console.log(`  ${CLI_COMMAND} status`);
+  console.log(`  ${CLI_COMMAND} worker start`);
+  console.log(`  ${CLI_COMMAND} worker stop`);
+  console.log(`  ${CLI_COMMAND} worker restart`);
+  console.log(`  ${CLI_COMMAND} worker status`);
+  console.log(`  ${CLI_COMMAND} worker logs`);
 }
 
 module.exports = {

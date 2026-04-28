@@ -20,6 +20,6 @@ if [[ -f ".env" ]]; then
   set +a
 fi
 
-export LOCAL_REPO_BASE_DIR="${LOCAL_REPO_BASE_DIR:-$HOME/.openpatch/repos}"
+export LOCAL_REPO_BASE_DIR="${LOCAL_REPO_BASE_DIR:-$HOME/.repooperator/repos}"
 
 exec uvicorn openpatch_worker.main:app --reload --host 127.0.0.1 --port 8000
