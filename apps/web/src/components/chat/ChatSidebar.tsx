@@ -1,13 +1,29 @@
 import type { ProviderProjectSummary } from "@/lib/local-worker-client";
+import type { ChatThread } from "./ChatApp";
 import Link from "next/link";
 
 interface ChatSidebarProps {
   recentProjects: ProviderProjectSummary[];
-  hasMessages: boolean;
+  threads: ChatThread[];
+  activeThreadId: string | null;
   onNewChat: () => void;
+  onSelectThread: (threadId: string) => void;
 }
 
-export function ChatSidebar({ recentProjects, hasMessages, onNewChat }: ChatSidebarProps) {
+function providerLabel(provider: string): string {
+  if (provider === "local") return "Local";
+  if (provider === "gitlab") return "GitLab";
+  if (provider === "github") return "GitHub";
+  return provider;
+}
+
+export function ChatSidebar({
+  recentProjects,
+  threads,
+  activeThreadId,
+  onNewChat,
+  onSelectThread,
+}: ChatSidebarProps) {
   return (
     <aside className="chat-sidebar">
       <div className="chat-sidebar-header">
@@ -24,10 +40,24 @@ export function ChatSidebar({ recentProjects, hasMessages, onNewChat }: ChatSide
           <span className="sidebar-section-title">Threads</span>
         </div>
 
-        {hasMessages ? (
-          <button className="sidebar-item sidebar-item-active" type="button">
-            Current session
-          </button>
+        {threads.length > 0 ? (
+          threads.map((thread) => (
+            <button
+              key={thread.id}
+              className={`sidebar-item sidebar-thread${
+                thread.id === activeThreadId ? " sidebar-item-active" : ""
+              }`}
+              type="button"
+              title={`${thread.repoResult.git_provider}:${thread.repoResult.project_path}`}
+              onClick={() => onSelectThread(thread.id)}
+            >
+              <span className="sidebar-thread-title">{thread.title}</span>
+              <span className="sidebar-thread-meta">
+                {providerLabel(thread.repoResult.git_provider)}
+                {thread.repoResult.branch ? ` @ ${thread.repoResult.branch}` : ""}
+              </span>
+            </button>
+          ))
         ) : (
           <span className="sidebar-empty-note">No threads yet</span>
         )}

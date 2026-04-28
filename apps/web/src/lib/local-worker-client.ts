@@ -42,6 +42,7 @@ export type ProviderBranchesPayload = {
 
 export type RepoOpenPayload = {
   project_path: string;
+  git_provider: string;
   local_repo_path: string;
   branch?: string | null;
   head_sha?: string | null;
@@ -60,6 +61,10 @@ export type FileReadPayload = {
 
 export type AgentRunPayload = {
   project_path: string;
+  git_provider?: string | null;
+  active_repository_source?: string | null;
+  active_repository_path?: string | null;
+  active_branch?: string | null;
   task: string;
   model: string;
   branch?: string | null;
@@ -149,6 +154,8 @@ export async function openRepository(input: {
 
 export async function runAgentTask(input: {
   project_path: string;
+  git_provider?: string;
+  branch?: string;
   task: string;
 }): Promise<AgentRunPayload> {
   const response = await fetch("/api/worker/agent-run", {

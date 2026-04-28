@@ -270,6 +270,14 @@ class AgentRunRequest(BaseModel):
         description="Repository identifier for the opened project. Local projects use an absolute filesystem path.",
     )
     task: str = Field(..., description="User task sent to the centralized model backend.")
+    git_provider: str | None = Field(
+        default=None,
+        description="Repository source identifier for the opened project.",
+    )
+    branch: str | None = Field(
+        default=None,
+        description="Branch that was active when the repository was opened.",
+    )
 
     @field_validator("project_path")
     @classmethod
@@ -282,6 +290,26 @@ class AgentRunRequest(BaseModel):
         if not value.strip():
             raise ValueError("task must not be empty")
         return value.strip()
+
+    @field_validator("git_provider")
+    @classmethod
+    def validate_git_provider(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            return None
+        if normalized not in SUPPORTED_REPOSITORY_PROVIDERS:
+            raise ValueError("git_provider must be one of: gitlab, github, local")
+        return normalized
+
+    @field_validator("branch")
+    @classmethod
+    def validate_branch(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
 
 class AgentProposeFileRequest(BaseModel):

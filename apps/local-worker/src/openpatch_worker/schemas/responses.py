@@ -43,6 +43,7 @@ class ProviderBranchesResponse(BaseModel):
 
 class RepoOpenResponse(BaseModel):
     project_path: str
+    git_provider: str
     local_repo_path: str
     branch: str | None = None
     head_sha: str | None = None
@@ -114,6 +115,10 @@ class GitMergeRequestCreateResponse(BaseModel):
 
 class AgentRunResponse(BaseModel):
     project_path: str
+    git_provider: str | None = None
+    active_repository_source: str | None = None
+    active_repository_path: str | None = None
+    active_branch: str | None = None
     task: str
     model: str
     branch: str | None = None

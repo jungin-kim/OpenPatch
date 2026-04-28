@@ -6,7 +6,7 @@ import { MarkdownContent } from "./MarkdownContent";
 
 export type ChatMessage = {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   timestamp: Date;
   metadata?: AgentRunPayload;
@@ -19,7 +19,7 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
 
   const headerLabel = fileCount > 0
     ? `${fileCount} file${fileCount === 1 ? "" : "s"} read`
-    : "Context & metadata";
+    : "Answer trust trace";
 
   return (
     <div className="tool-card">
@@ -34,6 +34,24 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
       </button>
       {open && (
         <div className="tool-card-body">
+          <div className="tool-meta-item">
+            <span className="tool-meta-label">Source</span>
+            <span className="tool-meta-value">
+              {metadata.active_repository_source || metadata.git_provider || "unknown"}
+            </span>
+          </div>
+          <div className="tool-meta-item">
+            <span className="tool-meta-label">Project</span>
+            <span className="tool-meta-value">
+              {metadata.active_repository_path || metadata.project_path}
+            </span>
+          </div>
+          <div className="tool-meta-item">
+            <span className="tool-meta-label">Active branch</span>
+            <span className="tool-meta-value">
+              {metadata.active_branch || metadata.branch || "none"}
+            </span>
+          </div>
           {filesRead.length > 0 && (
             <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
               <span className="tool-meta-label">Files read</span>
@@ -110,10 +128,11 @@ export function ChatMessages({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, questionPending]);
 
+  const activeProvider = repoResult?.git_provider || gitProvider;
   const providerLabel =
-    gitProvider === "local"
+    activeProvider === "local"
       ? "Local project"
-      : gitProvider === "gitlab"
+      : activeProvider === "gitlab"
         ? "GitLab"
         : "GitHub";
 
@@ -153,12 +172,18 @@ export function ChatMessages({
               className={`message-group message-group-${msg.role}`}
             >
               <span className="message-role-label">
-                {msg.role === "user" ? "You" : "RepoOperator"}
+                {msg.role === "user"
+                  ? "You"
+                  : msg.role === "system"
+                    ? "Context"
+                    : "RepoOperator"}
               </span>
               {msg.role === "assistant" ? (
                 <div className="message-bubble message-bubble-md">
                   <MarkdownContent content={msg.content} />
                 </div>
+              ) : msg.role === "system" ? (
+                <div className="message-bubble message-bubble-system">{msg.content}</div>
               ) : (
                 <div className="message-bubble">{msg.content}</div>
               )}
