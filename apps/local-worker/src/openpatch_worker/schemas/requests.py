@@ -107,6 +107,10 @@ class RepoOpenRequest(BaseModel):
         default=None,
         description="Optional git provider metadata used for clone and future provider integration.",
     )
+    client_request_id: str | None = Field(
+        default=None,
+        description="Client-generated repository-open operation id used to ignore stale concurrent opens.",
+    )
 
     @field_validator("project_path")
     @classmethod
@@ -132,6 +136,14 @@ class RepoOpenRequest(BaseModel):
         if normalized not in SUPPORTED_REPOSITORY_PROVIDERS:
             raise ValueError("git_provider must be one of: gitlab, github, local")
         return normalized
+
+    @field_validator("client_request_id")
+    @classmethod
+    def validate_client_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
 
 class FileReadRequest(BaseModel):

@@ -11,6 +11,11 @@ from openpatch_worker.services.git_providers import (
     resolve_provider_git_options,
 )
 from openpatch_worker.services.provider_service import record_recent_project
+from openpatch_worker.services.repo_open_requests import (
+    clear_repository_open_request,
+    is_repository_open_request_current,
+    mark_repository_open_request_current,
+)
 from openpatch_worker.services.subprocess_utils import run_subprocess
 
 logger = logging.getLogger(__name__)
@@ -49,51 +54,55 @@ def plan_repository_open(request: RepoOpenRequest) -> RepoOpenPlanResponse:
 
 
 def open_repository(request: RepoOpenRequest) -> RepoOpenResponse:
-    if _is_local_request(request):
-        return _open_local_project(request)
+    mark_repository_open_request_current(request.client_request_id)
+    try:
+        if _is_local_request(request):
+            return _open_local_project(request)
 
-    settings = get_settings()
-    repo_base_dir = get_repo_base_dir()
-    repo_path = _resolve_repo_path(repo_base_dir, request.project_path)
-    cloned = False
-    provider_options = _get_provider_options(request, settings)
-    if not request.branch:
-        raise ValueError("branch is required for provider-backed repositories")
+        settings = get_settings()
+        repo_base_dir = get_repo_base_dir()
+        repo_path = _resolve_repo_path(repo_base_dir, request.project_path)
+        cloned = False
+        provider_options = _get_provider_options(request, settings)
+        if not request.branch:
+            raise ValueError("branch is required for provider-backed repositories")
 
-    if not repo_path.exists():
-        repo_path.parent.mkdir(parents=True, exist_ok=True)
-        clone_url = _get_clone_url(request, provider_options)
-        _clone_repository(clone_url, repo_path, provider_options, settings)
-        cloned = True
-    elif not repo_path.is_dir():
-        raise ValueError(f"Repository path is not a directory: {repo_path}")
+        if not repo_path.exists():
+            repo_path.parent.mkdir(parents=True, exist_ok=True)
+            clone_url = _get_clone_url(request, provider_options)
+            _clone_repository(clone_url, repo_path, provider_options, settings)
+            cloned = True
+        elif not repo_path.is_dir():
+            raise ValueError(f"Repository path is not a directory: {repo_path}")
 
-    _ensure_git_repository(repo_path)
-    _fetch_repository(repo_path, provider_options, settings)
-    _checkout_branch(repo_path=repo_path, branch=request.branch, provider_options=provider_options)
+        _ensure_git_repository(repo_path)
+        _fetch_repository(repo_path, provider_options, settings)
+        _checkout_branch(repo_path=repo_path, branch=request.branch, provider_options=provider_options)
 
-    head_sha = _git_stdout(["git", "rev-parse", "HEAD"], repo_path)
-    current_branch = _git_stdout(["git", "branch", "--show-current"], repo_path) or request.branch
-    message = "repository cloned and branch checked out" if cloned else "repository fetched and branch checked out"
-    record_recent_project(
-        project_path=request.project_path,
-        git_provider=request.git_provider or provider_options.provider,
-        display_name=request.project_path,
-        is_git_repo=True,
-    )
+        head_sha = _git_stdout(["git", "rev-parse", "HEAD"], repo_path)
+        current_branch = _git_stdout(["git", "branch", "--show-current"], repo_path) or request.branch
+        message = "repository cloned and branch checked out" if cloned else "repository fetched and branch checked out"
+        record_recent_project(
+            project_path=request.project_path,
+            git_provider=request.git_provider or provider_options.provider,
+            display_name=request.project_path,
+            is_git_repo=True,
+        )
 
-    response = RepoOpenResponse(
-        project_path=request.project_path,
-        git_provider=request.git_provider or provider_options.provider,
-        local_repo_path=str(repo_path),
-        branch=current_branch,
-        head_sha=head_sha,
-        cloned=cloned,
-        is_git_repository=True,
-        message=message,
-    )
-    _set_active_from_response(response)
-    return response
+        response = RepoOpenResponse(
+            project_path=request.project_path,
+            git_provider=request.git_provider or provider_options.provider,
+            local_repo_path=str(repo_path),
+            branch=current_branch,
+            head_sha=head_sha,
+            cloned=cloned,
+            is_git_repository=True,
+            message=message,
+        )
+        _set_active_from_response(response, request.client_request_id)
+        return response
+    finally:
+        clear_repository_open_request(request.client_request_id)
 
 
 def _open_local_project(request: RepoOpenRequest) -> RepoOpenResponse:
@@ -129,11 +138,20 @@ def _open_local_project(request: RepoOpenRequest) -> RepoOpenResponse:
             else "local project opened (no git repository detected)"
         ),
     )
-    _set_active_from_response(response)
+    _set_active_from_response(response, request.client_request_id)
     return response
 
 
-def _set_active_from_response(response: RepoOpenResponse) -> None:
+def _set_active_from_response(
+    response: RepoOpenResponse,
+    client_request_id: str | None = None,
+) -> None:
+    if not is_repository_open_request_current(client_request_id):
+        logger.info(
+            "Skipping active repository update for stale open request '%s'",
+            client_request_id,
+        )
+        return
     set_active_repository(
         ActiveRepository(
             git_provider=response.git_provider,

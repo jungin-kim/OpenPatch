@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ProviderBranchSummary, ProviderProjectSummary } from "@/lib/local-worker-client";
-import type { RepositoryOpenMode } from "./ChatApp";
+import type { RepositoryOpenProgress } from "./ChatApp";
 
 type ConnectionState = "checking" | "connected" | "unavailable";
 
@@ -33,7 +33,7 @@ interface ChatHeaderProps {
   onToggleAdvanced: () => void;
 
   repoPending: boolean;
-  repoOpenMode: RepositoryOpenMode;
+  repositoryOpenProgress: RepositoryOpenProgress | null;
   repoError: string | null;
   onOpenRepo: () => void;
 }
@@ -81,7 +81,7 @@ export function ChatHeader({
   onManualBranchChange,
   onToggleAdvanced,
   repoPending,
-  repoOpenMode,
+  repositoryOpenProgress,
   repoError,
   onOpenRepo,
 }: ChatHeaderProps) {
@@ -89,18 +89,22 @@ export function ChatHeader({
   const [openElapsedSeconds, setOpenElapsedSeconds] = useState(0);
 
   useEffect(() => {
-    if (!repoPending) {
+    if (!repositoryOpenProgress) {
       setOpenElapsedSeconds(0);
       return;
     }
 
-    const startedAt = Date.now();
     const interval = window.setInterval(() => {
-      setOpenElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+      setOpenElapsedSeconds(
+        Math.floor((Date.now() - repositoryOpenProgress.startedAt) / 1000),
+      );
     }, 1000);
+    setOpenElapsedSeconds(
+      Math.floor((Date.now() - repositoryOpenProgress.startedAt) / 1000),
+    );
 
     return () => window.clearInterval(interval);
-  }, [repoPending]);
+  }, [repositoryOpenProgress]);
 
   const connectionLabel =
     connectionState === "connected"
@@ -121,6 +125,7 @@ export function ChatHeader({
   const branchRequired = gitProvider !== "local";
   const effectiveProject = useAdvanced ? manualProjectPath.trim() : selectedProjectPath;
   const effectiveBranch = useAdvanced ? manualBranch.trim() : selectedBranch;
+  const repoOpenMode = repositoryOpenProgress?.mode || "unknown";
   const progressStages =
     repoOpenMode === "clone"
       ? cloneStages
@@ -154,7 +159,6 @@ export function ChatHeader({
         : "RepoOperator is opening the local workspace and reading git context.";
   const canOpen =
     connectionState === "connected" &&
-    !repoPending &&
     Boolean(effectiveProject) &&
     (!branchRequired || Boolean(effectiveBranch));
 
@@ -256,7 +260,7 @@ export function ChatHeader({
             onClick={onOpenRepo}
             disabled={!canOpen}
           >
-            {repoPending ? "Opening…" : "Open repository"}
+            {repoPending ? "Open selected repository" : "Open repository"}
           </button>
 
           {gitProvider !== "local" && (
@@ -323,7 +327,7 @@ export function ChatHeader({
         </div>
       )}
 
-      {repoPending && (
+      {repositoryOpenProgress && (
         <div className="repo-open-progress" role="status" aria-live="polite">
           <div className="repo-open-progress-copy">
             <span className="repo-open-progress-kicker">{openModeLabel}</span>
@@ -332,7 +336,9 @@ export function ChatHeader({
           </div>
           <div className="repo-open-progress-meta">
             <span>{openElapsedSeconds}s</span>
-            <span>{effectiveProject}</span>
+            <span>{repositoryOpenProgress.gitProvider}</span>
+            <span>{repositoryOpenProgress.projectPath}</span>
+            {repositoryOpenProgress.branch && <span>{repositoryOpenProgress.branch}</span>}
           </div>
           <div className="repo-open-progress-track" aria-hidden="true">
             <div

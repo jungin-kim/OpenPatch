@@ -20,6 +20,7 @@ src/openpatch_worker/services/git_providers.py
 src/openpatch_worker/services/git_service.py
 src/openpatch_worker/services/model_client.py
 src/openpatch_worker/services/provider_service.py
+src/openpatch_worker/services/repo_open_requests.py
 src/openpatch_worker/services/repo_service.py
 src/openpatch_worker/services/retrieval_service.py
 src/openpatch_worker/services/review_providers.py

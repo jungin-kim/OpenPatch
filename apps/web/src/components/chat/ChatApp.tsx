@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   getProviderBranches,
@@ -28,6 +28,14 @@ import { ChatComposer } from "./ChatComposer";
 type ConnectionState = "checking" | "connected" | "unavailable";
 type ThreadStoreState = "loading" | "connected" | "saving" | "unavailable";
 export type RepositoryOpenMode = "clone" | "refresh" | "local" | "unknown";
+export type RepositoryOpenProgress = {
+  requestId: string;
+  mode: RepositoryOpenMode;
+  projectPath: string;
+  gitProvider: string;
+  branch: string;
+  startedAt: number;
+};
 
 export type ChatThread = {
   id: string;
@@ -56,8 +64,8 @@ export function ChatApp() {
 
   const [projectsPending, setProjectsPending] = useState(false);
   const [branchesPending, setBranchesPending] = useState(false);
-  const [repoPending, setRepoPending] = useState(false);
-  const [repoOpenMode, setRepoOpenMode] = useState<RepositoryOpenMode>("unknown");
+  const [repositoryOpenProgress, setRepositoryOpenProgress] =
+    useState<RepositoryOpenProgress | null>(null);
   const [questionPending, setQuestionPending] = useState(false);
 
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -73,6 +81,7 @@ export function ChatApp() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadStoreState, setThreadStoreState] = useState<ThreadStoreState>("loading");
   const [question, setQuestion] = useState("");
+  const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
 
   // ── Health check ─────────────────────────────────────────────────────────
   async function refreshHealthCheck(options: { syncProvider?: boolean } = {}) {
@@ -225,15 +234,62 @@ export function ChatApp() {
   const effectiveProjectPath = useAdvanced ? manualProjectPath.trim() : selectedProjectPath.trim();
   const effectiveBranch = useAdvanced ? manualBranch.trim() : selectedBranch.trim();
   const branchRequired = gitProvider !== "local";
+  const repoPending = repositoryOpenProgress !== null;
 
-  function getRepositoryOpenMode(projectPath: string): RepositoryOpenMode {
-    if (gitProvider === "local") return "local";
+  function getRepositoryOpenMode(
+    projectPath: string,
+    provider = gitProvider,
+  ): RepositoryOpenMode {
+    if (provider === "local") return "local";
     if (!projectPath) return "unknown";
     const seenRecently = recentProjects.some(
       (project) =>
-        project.git_provider === gitProvider && project.project_path === projectPath,
+        project.git_provider === provider && project.project_path === projectPath,
     );
     return seenRecently ? "refresh" : "clone";
+  }
+
+  function createRepositoryOpenRequestId(): string {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+      return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function isActiveRepositoryOpenRequest(requestId: string): boolean {
+    return activeRepositoryOpenRequestIdRef.current === requestId;
+  }
+
+  function startRepositoryOpenProgress(input: {
+    projectPath: string;
+    gitProvider: string;
+    branch: string;
+    mode: RepositoryOpenMode;
+  }): string {
+    const requestId = createRepositoryOpenRequestId();
+    activeRepositoryOpenRequestIdRef.current = requestId;
+    setRepositoryOpenProgress({
+      requestId,
+      mode: input.mode,
+      projectPath: input.projectPath,
+      gitProvider: input.gitProvider,
+      branch: input.branch,
+      startedAt: Date.now(),
+    });
+    return requestId;
+  }
+
+  function updateRepositoryOpenMode(requestId: string, mode: RepositoryOpenMode) {
+    if (!isActiveRepositoryOpenRequest(requestId)) return;
+    setRepositoryOpenProgress((current) =>
+      current?.requestId === requestId ? { ...current, mode } : current,
+    );
+  }
+
+  function clearRepositoryOpenProgress(requestId: string) {
+    if (!isActiveRepositoryOpenRequest(requestId)) return;
+    activeRepositoryOpenRequestIdRef.current = null;
+    setRepositoryOpenProgress(null);
   }
 
   function threadFromRecord(record: ThreadRecordPayload): ChatThread {
@@ -313,12 +369,7 @@ export function ChatApp() {
 
   // ── Handlers ─────────────────────────────────────────────────────────────
   async function handleOpenRepo() {
-    setRepoPending(true);
-    setRepoOpenMode(getRepositoryOpenMode(effectiveProjectPath));
-    setRepoError(null);
-
     if (!effectiveProjectPath || (branchRequired && !effectiveBranch)) {
-      setRepoPending(false);
       setRepoError(
         branchRequired
           ? "Choose a project and branch, or use the Advanced override fields."
@@ -327,21 +378,34 @@ export function ChatApp() {
       return;
     }
 
+    const requestGitProvider = gitProvider.trim() || "local";
+    const requestId = startRepositoryOpenProgress({
+      projectPath: effectiveProjectPath,
+      gitProvider: requestGitProvider,
+      branch: effectiveBranch,
+      mode: getRepositoryOpenMode(effectiveProjectPath, requestGitProvider),
+    });
+    setRepoError(null);
+
     const openInput = {
       project_path: effectiveProjectPath,
       branch: effectiveBranch || undefined,
-      git_provider: gitProvider.trim() || undefined,
+      git_provider: requestGitProvider,
+      client_request_id: requestId,
     };
 
     try {
       const plan = await getRepositoryOpenPlan(openInput);
-      setRepoOpenMode(plan.open_mode);
+      updateRepositoryOpenMode(requestId, plan.open_mode);
     } catch {
       // Planning is a UX hint only; the main repository-open flow remains authoritative.
     }
 
+    if (!isActiveRepositoryOpenRequest(requestId)) return;
+
     try {
       const payload = await openRepository(openInput);
+      if (!isActiveRepositoryOpenRequest(requestId)) return;
       const nextMessages = [buildSwitchMessage(payload)];
       const nextThread: ChatThread = {
         id: `${Date.now()}-${payload.git_provider}-${payload.project_path}`,
@@ -356,8 +420,10 @@ export function ChatApp() {
       setActiveThreadId(nextThread.id);
       rememberThread(nextThread);
       void persistThread(nextThread);
+      clearRepositoryOpenProgress(requestId);
       await refreshHealthCheck();
     } catch (error) {
+      if (!isActiveRepositoryOpenRequest(requestId)) return;
       setRepoResult(null);
       setRepoError(
         error instanceof LocalWorkerClientError || error instanceof Error
@@ -365,8 +431,7 @@ export function ChatApp() {
           : "Unable to open the repository through the local worker.",
       );
     } finally {
-      setRepoPending(false);
-      setRepoOpenMode("unknown");
+      clearRepositoryOpenProgress(requestId);
     }
   }
 
@@ -459,14 +524,24 @@ export function ChatApp() {
   async function handleSelectThread(threadId: string) {
     const thread = threads.find((item) => item.id === threadId);
     if (!thread) return;
-    setRepoPending(true);
+    const requestId = startRepositoryOpenProgress({
+      projectPath: thread.repoResult.project_path,
+      gitProvider: thread.repoResult.git_provider,
+      branch: thread.repoResult.branch || "",
+      mode: getRepositoryOpenMode(
+        thread.repoResult.project_path,
+        thread.repoResult.git_provider,
+      ),
+    });
     setRepoError(null);
     try {
       const reopened = await openRepository({
         project_path: thread.repoResult.project_path,
         git_provider: thread.repoResult.git_provider,
         branch: thread.repoResult.branch || undefined,
+        client_request_id: requestId,
       });
+      if (!isActiveRepositoryOpenRequest(requestId)) return;
       const restoredThread = {
         ...thread,
         repoResult: reopened,
@@ -481,13 +556,14 @@ export function ChatApp() {
       void persistThread(restoredThread);
       setQuestion("");
     } catch (error) {
+      if (!isActiveRepositoryOpenRequest(requestId)) return;
       setRepoError(
         error instanceof LocalWorkerClientError || error instanceof Error
           ? error.message
           : "Unable to restore the repository for this thread.",
       );
     } finally {
-      setRepoPending(false);
+      clearRepositoryOpenProgress(requestId);
     }
   }
 
@@ -568,7 +644,7 @@ export function ChatApp() {
           onManualBranchChange={setManualBranch}
           onToggleAdvanced={handleToggleAdvanced}
           repoPending={repoPending}
-          repoOpenMode={repoOpenMode}
+          repositoryOpenProgress={repositoryOpenProgress}
           repoError={repoError}
           onOpenRepo={handleOpenRepo}
         />

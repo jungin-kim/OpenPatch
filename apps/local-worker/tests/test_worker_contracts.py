@@ -25,6 +25,11 @@ from openpatch_worker.services.agent_service import run_agent_task
 from openpatch_worker.services.common import get_repooperator_home_dir
 from openpatch_worker.services.git_providers import resolve_provider_git_options
 from openpatch_worker.services.repo_service import open_repository, plan_repository_open
+from openpatch_worker.services.repo_open_requests import (
+    clear_repository_open_request,
+    is_repository_open_request_current,
+    mark_repository_open_request_current,
+)
 from openpatch_worker.services.thread_service import list_threads, upsert_thread
 
 
@@ -431,6 +436,20 @@ class WorkerContractTests(unittest.TestCase):
             self.assertTrue(refresh_plan.local_checkout_exists)
             self.assertEqual(clone_plan.open_mode, "clone")
             self.assertFalse(clone_plan.local_checkout_exists)
+
+    def test_repository_open_request_identity_ignores_stale_operations(self) -> None:
+        mark_repository_open_request_current("open-repo-a")
+        self.assertTrue(is_repository_open_request_current("open-repo-a"))
+
+        mark_repository_open_request_current("open-repo-b")
+        self.assertFalse(is_repository_open_request_current("open-repo-a"))
+        self.assertTrue(is_repository_open_request_current("open-repo-b"))
+
+        clear_repository_open_request("open-repo-a")
+        self.assertTrue(is_repository_open_request_current("open-repo-b"))
+
+        clear_repository_open_request("open-repo-b")
+        self.assertFalse(is_repository_open_request_current("open-repo-b"))
 
     def test_thread_history_persists_across_restart_and_repository_switch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:

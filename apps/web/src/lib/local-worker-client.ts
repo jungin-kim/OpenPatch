@@ -172,6 +172,7 @@ export async function openRepository(input: {
   project_path: string;
   branch?: string;
   git_provider?: string;
+  client_request_id?: string;
 }): Promise<RepoOpenPayload> {
   const response = await fetch("/api/worker/repo-open", {
     method: "POST",
@@ -186,6 +187,7 @@ export async function getRepositoryOpenPlan(input: {
   project_path: string;
   branch?: string;
   git_provider?: string;
+  client_request_id?: string;
 }): Promise<RepoOpenPlanPayload> {
   const response = await fetch("/api/worker/repo-open-plan", {
     method: "POST",
