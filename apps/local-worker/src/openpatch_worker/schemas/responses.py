@@ -123,6 +123,7 @@ class AgentRunResponse(BaseModel):
     readme_included: bool
     diff_included: bool
     is_git_repository: bool
+    files_read: list[str] = []
     response: str
 
 

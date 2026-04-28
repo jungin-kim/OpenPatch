@@ -69,6 +69,7 @@ export type AgentRunPayload = {
   readme_included: boolean;
   diff_included: boolean;
   is_git_repository: boolean;
+  files_read: string[];
   response: string;
 };
 

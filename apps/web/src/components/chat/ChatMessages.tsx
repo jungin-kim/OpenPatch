@@ -13,6 +13,12 @@ export type ChatMessage = {
 
 function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
   const [open, setOpen] = useState(false);
+  const filesRead = metadata.files_read ?? [];
+  const fileCount = filesRead.length;
+
+  const headerLabel = fileCount > 0
+    ? `${fileCount} file${fileCount === 1 ? "" : "s"} read`
+    : "Context & metadata";
 
   return (
     <div className="tool-card">
@@ -22,11 +28,23 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
-        Context &amp; metadata
+        {headerLabel}
         <span className={`tool-card-caret${open ? " tool-card-caret-open" : ""}`}>▼</span>
       </button>
       {open && (
         <div className="tool-card-body">
+          {filesRead.length > 0 && (
+            <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="tool-meta-label">Files read</span>
+              <ul style={{ margin: "4px 0 0", padding: 0, listStyle: "none" }}>
+                {filesRead.map((f) => (
+                  <li key={f} className="tool-meta-value" style={{ paddingBottom: "2px" }}>
+                    {f}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {metadata.model && (
             <div className="tool-meta-item">
               <span className="tool-meta-label">Model</span>
