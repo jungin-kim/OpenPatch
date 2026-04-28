@@ -161,6 +161,120 @@ class WorkerContractTests(unittest.TestCase):
             )
             self.assertIn("Authorization: Basic", " ".join(provider_options.git_config_args))
 
+    def test_runtime_config_resolves_explicit_gitlab_when_default_is_github(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".repooperator"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "config.json").write_text(
+                """
+                {
+                  "gitProvider": {
+                    "provider": "github",
+                    "baseUrl": "https://github.example.com",
+                    "token": "github-default-token"
+                  },
+                  "repositorySources": [
+                    {
+                      "provider": "github",
+                      "baseUrl": "https://github.example.com",
+                      "token": "github-source-token"
+                    },
+                    {
+                      "provider": "gitlab",
+                      "baseUrl": "https://gitlab.example.com",
+                      "token": "gitlab-source-token"
+                    }
+                  ]
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": "",
+                    "OPENPATCH_CONFIG_PATH": "",
+                    "GITHUB_BASE_URL": "",
+                    "GITHUB_TOKEN": "",
+                    "GITLAB_BASE_URL": "",
+                    "GITLAB_TOKEN": "",
+                },
+                clear=False,
+            ):
+                settings = get_settings()
+                provider_options = resolve_provider_git_options(
+                    git_provider="gitlab",
+                    project_path="group/demo-repo",
+                    settings=settings,
+                )
+
+            self.assertEqual(settings.configured_git_provider, "github")
+            self.assertIsNotNone(provider_options)
+            assert provider_options is not None
+            self.assertEqual(
+                provider_options.clone_url,
+                "https://gitlab.example.com/group/demo-repo.git",
+            )
+
+    def test_runtime_config_resolves_explicit_github_when_default_is_gitlab(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".repooperator"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "config.json").write_text(
+                """
+                {
+                  "gitProvider": {
+                    "provider": "gitlab",
+                    "baseUrl": "https://gitlab.example.com",
+                    "token": "gitlab-default-token"
+                  },
+                  "repositorySources": [
+                    {
+                      "provider": "gitlab",
+                      "baseUrl": "https://gitlab.example.com",
+                      "token": "gitlab-source-token"
+                    },
+                    {
+                      "provider": "github",
+                      "baseUrl": "https://github.example.com",
+                      "token": "github-source-token"
+                    }
+                  ]
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": "",
+                    "OPENPATCH_CONFIG_PATH": "",
+                    "GITHUB_BASE_URL": "",
+                    "GITHUB_TOKEN": "",
+                    "GITLAB_BASE_URL": "",
+                    "GITLAB_TOKEN": "",
+                },
+                clear=False,
+            ):
+                settings = get_settings()
+                provider_options = resolve_provider_git_options(
+                    git_provider="github",
+                    project_path="octo/demo-repo",
+                    settings=settings,
+                )
+
+            self.assertEqual(settings.configured_git_provider, "gitlab")
+            self.assertIsNotNone(provider_options)
+            assert provider_options is not None
+            self.assertEqual(
+                provider_options.clone_url,
+                "https://github.example.com/octo/demo-repo.git",
+            )
+
     def test_runtime_config_prefers_environment_override_for_gitlab(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
             config_dir = Path(temp_home) / ".repooperator"

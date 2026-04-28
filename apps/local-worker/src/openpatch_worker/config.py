@@ -141,12 +141,23 @@ def _resolve_provider_value(
     if env_normalized is not None:
         return env_normalized
 
+    for provider_config in _iter_repository_source_configs(runtime_config):
+        if provider_config.get("provider") == provider:
+            return normalizer(provider_config.get(key))
+
     provider_config = runtime_config.get("gitProvider")
     if not isinstance(provider_config, dict):
         return None
     if provider_config.get("provider") != provider:
         return None
     return normalizer(provider_config.get(key))
+
+
+def _iter_repository_source_configs(runtime_config: dict) -> list[dict]:
+    sources = runtime_config.get("repositorySources")
+    if not isinstance(sources, list):
+        return []
+    return [source for source in sources if isinstance(source, dict)]
 
 
 def _normalize_optional_url(value: str | None) -> str | None:

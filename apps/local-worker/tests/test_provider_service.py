@@ -135,6 +135,90 @@ class ProviderServiceTests(unittest.TestCase):
             self.assertEqual(payload.projects[0].project_path, str(local_project.resolve()))
             self.assertFalse(payload.projects[0].is_git_repository)
 
+    def test_explicit_provider_listing_ignores_different_default_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".repooperator"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_path = config_dir / "config.json"
+            config_path.write_text(
+                """
+                {
+                  "gitProvider": {
+                    "provider": "github",
+                    "baseUrl": "https://github.example.com",
+                    "token": "github-default-token"
+                  },
+                  "repositorySources": [
+                    {
+                      "provider": "github",
+                      "baseUrl": "https://github.example.com",
+                      "token": "github-source-token"
+                    },
+                    {
+                      "provider": "gitlab",
+                      "baseUrl": "https://gitlab.example.com",
+                      "token": "gitlab-source-token"
+                    }
+                  ]
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            requested_urls: list[str] = []
+
+            def fake_provider_json(url: str, headers: dict[str, str], provider: str):
+                requested_urls.append(url)
+                if provider == "gitlab":
+                    self.assertEqual(headers["PRIVATE-TOKEN"], "gitlab-source-token")
+                    return [
+                        {
+                            "path_with_namespace": "group/gitlab-demo",
+                            "name_with_namespace": "Group / GitLab Demo",
+                            "default_branch": "main",
+                        }
+                    ]
+                if provider == "github":
+                    self.assertEqual(headers["Authorization"], "Bearer github-source-token")
+                    return [
+                        {
+                            "full_name": "owner/github-demo",
+                            "name": "github-demo",
+                            "default_branch": "main",
+                        }
+                    ]
+                raise AssertionError(f"Unexpected provider: {provider}")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": str(config_path),
+                    "OPENPATCH_CONFIG_PATH": "",
+                    "GITHUB_BASE_URL": "",
+                    "GITHUB_TOKEN": "",
+                    "GITLAB_BASE_URL": "",
+                    "GITLAB_TOKEN": "",
+                },
+                clear=False,
+            ), patch(
+                "openpatch_worker.services.provider_service._request_provider_json",
+                side_effect=fake_provider_json,
+            ):
+                gitlab_payload = list_provider_projects("gitlab")
+                github_payload = list_provider_projects("github")
+
+            self.assertEqual(gitlab_payload.git_provider, "gitlab")
+            self.assertEqual(gitlab_payload.projects[0].project_path, "group/gitlab-demo")
+            self.assertEqual(github_payload.git_provider, "github")
+            self.assertEqual(github_payload.projects[0].project_path, "owner/github-demo")
+            self.assertTrue(
+                any(url.startswith("https://gitlab.example.com/api/v4/projects?") for url in requested_urls)
+            )
+            self.assertTrue(
+                any(url.startswith("https://github.example.com/api/v3/user/repos?") for url in requested_urls)
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
