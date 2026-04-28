@@ -28,6 +28,10 @@ export type ProviderProjectsPayload = {
   recent_projects: ProviderProjectSummary[];
 };
 
+export type RecentProjectsPayload = {
+  projects: ProviderProjectSummary[];
+};
+
 export type ProviderBranchSummary = {
   name: string;
   is_default: boolean;
@@ -151,6 +155,19 @@ export async function getProviderProjects(input: {
     cache: "no-store",
   });
   return parseWorkerResponse<ProviderProjectsPayload>(response);
+}
+
+export async function getRecentProjects(input: { limit?: number } = {}): Promise<RecentProjectsPayload> {
+  const query = new URLSearchParams();
+  if (input.limit) {
+    query.set("limit", String(input.limit));
+  }
+
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetch(`/api/worker/provider/recent-projects${suffix}`, {
+    cache: "no-store",
+  });
+  return parseWorkerResponse<RecentProjectsPayload>(response);
 }
 
 export async function getProviderBranches(input: {

@@ -29,6 +29,10 @@ class ProviderProjectsResponse(BaseModel):
     recent_projects: list[ProviderProjectSummary]
 
 
+class RecentProjectsResponse(BaseModel):
+    projects: list[ProviderProjectSummary]
+
+
 class ProviderBranchSummary(BaseModel):
     name: str
     is_default: bool = False

@@ -9,6 +9,7 @@ interface ChatSidebarProps {
   threadStoreState: "loading" | "connected" | "saving" | "unavailable";
   onNewChat: () => void;
   onSelectThread: (threadId: string) => void;
+  onSelectRecentProject: (project: ProviderProjectSummary) => void;
 }
 
 function providerLabel(provider: string): string {
@@ -25,6 +26,7 @@ export function ChatSidebar({
   threadStoreState,
   onNewChat,
   onSelectThread,
+  onSelectRecentProject,
 }: ChatSidebarProps) {
   const threadStoreLabel =
     threadStoreState === "loading"
@@ -84,11 +86,17 @@ export function ChatSidebar({
             {recentProjects.map((project) => (
               <button
                 key={`${project.git_provider}:${project.project_path}`}
-                className="sidebar-item sidebar-item-mono"
+                className="sidebar-item sidebar-recent-project"
                 type="button"
-                title={project.project_path}
+                title={`${providerLabel(project.git_provider)}:${project.project_path}`}
+                onClick={() => onSelectRecentProject(project)}
               >
-                {project.display_name}
+                <span className="sidebar-recent-project-name">
+                  {project.display_name}
+                </span>
+                <span className="sidebar-recent-project-source">
+                  {providerLabel(project.git_provider)}
+                </span>
               </button>
             ))}
           </>

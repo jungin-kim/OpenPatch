@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   getProviderBranches,
   getProviderProjects,
+  getRecentProjects,
   getRepositoryOpenPlan,
   getWorkerHealth,
   listThreads,
@@ -72,6 +73,7 @@ export function ChatApp() {
 
   const [projects, setProjects] = useState<ProviderProjectSummary[]>([]);
   const [recentProjects, setRecentProjects] = useState<ProviderProjectSummary[]>([]);
+  const [recentProjectHistory, setRecentProjectHistory] = useState<ProviderProjectSummary[]>([]);
   const [branches, setBranches] = useState<ProviderBranchSummary[]>([]);
 
   // ── Repository + chat state ───────────────────────────────────────────────
@@ -129,6 +131,25 @@ export function ChatApp() {
     }
 
     void loadThreadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionState]);
+
+  useEffect(() => {
+    if (connectionState !== "connected") return;
+
+    let cancelled = false;
+    async function loadRecentProjectHistory() {
+      try {
+        const payload = await getRecentProjects({ limit: 20 });
+        if (!cancelled) setRecentProjectHistory(payload.projects);
+      } catch {
+        if (!cancelled) setRecentProjectHistory([]);
+      }
+    }
+
+    void loadRecentProjectHistory();
     return () => {
       cancelled = true;
     };
@@ -420,6 +441,7 @@ export function ChatApp() {
       setActiveThreadId(nextThread.id);
       rememberThread(nextThread);
       void persistThread(nextThread);
+      setRecentProjectHistory((prev) => mergeRecentProject(prev, payload));
       clearRepositoryOpenProgress(requestId);
       await refreshHealthCheck();
     } catch (error) {
@@ -608,17 +630,52 @@ export function ChatApp() {
     if (gitProvider === "local") setUseAdvanced(true);
   }
 
+  function mergeRecentProject(
+    current: ProviderProjectSummary[],
+    payload: RepoOpenPayload,
+  ): ProviderProjectSummary[] {
+    const nextProject: ProviderProjectSummary = {
+      git_provider: payload.git_provider,
+      project_path: payload.project_path,
+      display_name: payload.project_path.split(/[\\/]/).filter(Boolean).at(-1) || payload.project_path,
+      default_branch: payload.branch || null,
+      source: "recent",
+      is_git_repository: payload.is_git_repository,
+    };
+    return [
+      nextProject,
+      ...current.filter(
+        (project) =>
+          project.git_provider !== nextProject.git_provider ||
+          project.project_path !== nextProject.project_path,
+      ),
+    ].slice(0, 20);
+  }
+
+  function handleRecentProjectSelect(project: ProviderProjectSummary) {
+    setGitProvider(project.git_provider);
+    setUseAdvanced(project.git_provider === "local");
+    setRepoResult(null);
+    setRepoError(null);
+    setSelectedProjectPath(project.project_path);
+    setManualProjectPath(project.project_path);
+    setSelectedBranch(project.default_branch || "");
+    setManualBranch(project.default_branch || "");
+    setBranches([]);
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <ChatLayout
       sidebar={
         <ChatSidebar
-          recentProjects={recentProjects}
+          recentProjects={recentProjectHistory}
           threads={threads}
           activeThreadId={activeThreadId}
           threadStoreState={threadStoreState}
           onNewChat={handleNewChat}
           onSelectThread={handleSelectThread}
+          onSelectRecentProject={handleRecentProjectSelect}
         />
       }
       header={

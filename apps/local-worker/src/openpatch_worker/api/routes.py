@@ -25,6 +25,7 @@ from openpatch_worker.schemas import (
     HealthResponse,
     ProviderBranchesResponse,
     ProviderProjectsResponse,
+    RecentProjectsResponse,
     RepoOpenPlanResponse,
     RepoOpenRequest,
     RepoOpenResponse,
@@ -39,6 +40,7 @@ from openpatch_worker.services.file_service import read_text_file, write_text_fi
 from openpatch_worker.services.provider_service import (
     list_provider_branches,
     list_provider_projects,
+    list_recent_projects,
     list_recent_project_paths,
 )
 from openpatch_worker.services.git_service import (
@@ -81,6 +83,12 @@ def provider_projects(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/provider/recent-projects", response_model=RecentProjectsResponse)
+def provider_recent_projects(limit: int = 20) -> RecentProjectsResponse:
+    safe_limit = max(1, min(limit, 50))
+    return RecentProjectsResponse(projects=list_recent_projects(limit=safe_limit))
 
 
 @router.get("/provider/branches", response_model=ProviderBranchesResponse)

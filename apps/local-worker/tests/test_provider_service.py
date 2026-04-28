@@ -15,6 +15,7 @@ from openpatch_worker.services.provider_service import (
     _build_github_api_base,
     _build_gitlab_api_base,
     list_recent_project_paths,
+    list_recent_projects,
     record_recent_project,
     list_provider_projects,
 )
@@ -65,6 +66,46 @@ class ProviderServiceTests(unittest.TestCase):
 
             self.assertIn("group-one/repo-one", recent)
             self.assertIn("group-two/repo-two", recent)
+
+    def test_recent_projects_are_cross_source_history_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".repooperator"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_path = config_dir / "config.json"
+            config_path.write_text('{"gitProvider":{"provider":"github"}}', encoding="utf-8")
+            local_project = Path(temp_home) / "work" / "local-demo"
+            local_project.mkdir(parents=True, exist_ok=True)
+
+            with patch.dict(
+                os.environ,
+                {"REPOOPERATOR_CONFIG_PATH": str(config_path)},
+                clear=False,
+            ):
+                record_recent_project(
+                    project_path="group/gitlab-demo",
+                    git_provider="gitlab",
+                    display_name="gitlab-demo",
+                )
+                record_recent_project(
+                    project_path="owner/github-demo",
+                    git_provider="github",
+                    display_name="github-demo",
+                )
+                record_recent_project(
+                    project_path=str(local_project),
+                    git_provider="local",
+                    display_name="local-demo",
+                    is_git_repo=False,
+                )
+                recent = list_recent_projects(limit=10)
+
+            projects_by_source = {
+                (project.git_provider, project.project_path)
+                for project in recent
+            }
+            self.assertIn(("gitlab", "group/gitlab-demo"), projects_by_source)
+            self.assertIn(("github", "owner/github-demo"), projects_by_source)
+            self.assertIn(("local", str(local_project)), projects_by_source)
 
     def test_local_recent_projects_are_returned_from_runtime_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
