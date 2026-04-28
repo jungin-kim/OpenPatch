@@ -6,6 +6,7 @@ const readline = require("node:readline/promises");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
 const { stdin, stdout } = require("node:process");
+const term = require("./terminal");
 
 const PRODUCT_NAME = "RepoOperator";
 const CLI_COMMAND = "repooperator";
@@ -158,21 +159,45 @@ async function runOnboard() {
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
   try {
-    console.log(`${PRODUCT_NAME} onboarding`);
-    console.log(`Set up ${PRODUCT_NAME} on this machine.`);
-    console.log(`We will save your local settings, choose how ${PRODUCT_NAME} should reach a model, choose a repository source, and prepare the local worker runtime.`);
-    console.log("");
+    console.log(term.banner());
+    term.heading("1/6", "Welcome", "Set up the local RepoOperator runtime on this machine.");
+    term.summaryBox("What this wizard will configure", [
+      "Model connection for repository questions",
+      "Repository source for guided project selection",
+      "Local worker runtime and repository storage",
+      "A one-command startup flow with repooperator up",
+    ]);
 
+    term.heading("2/6", "Environment checks", "RepoOperator checks for the local pieces it can prepare automatically.");
+    const workerDetection = await term.spinner("Detect local worker installation", () =>
+      detectLocalWorkerInstallation(process.cwd()),
+    );
+    const webDetection = await term.spinner("Detect web app installation", () =>
+      resolveWebInstallation({}, process.cwd()),
+    );
+    const pythonAvailable = await commandExists("python3");
+    const npmAvailable = await commandExists("npm");
+    term.summaryBox("Environment", [
+      ["Local worker", workerDetection.installed ? workerDetection.summary : workerDetection.summary],
+      ["Web app", webDetection.installed ? webDetection.summary : webDetection.summary],
+      ["Python", pythonAvailable ? "python3 found" : "python3 not found"],
+      ["npm", npmAvailable ? "npm found" : "npm not found"],
+    ]);
+
+    term.heading("3/6", "Model connection", "Choose how the worker should reach a model.");
     const modelConfig = await promptModelConfig(rl);
+
+    term.heading("4/6", "Repository source", "Choose where projects should be discovered from.");
     const gitProvider = await promptGitProvider(rl);
     const gitProviderConfig = await promptGitProviderConfig(rl, gitProvider);
+
+    term.heading("5/6", "Local worker setup", "Choose where local checkouts and runtime files should live.");
     const localRepoBaseDir = await promptWithDefault(
       rl,
       "Local repository base directory",
       DEFAULT_REPO_BASE_DIR,
     );
 
-    const workerDetection = await detectLocalWorkerInstallation(process.cwd());
     const config = {
       version: 2,
       createdAt: new Date().toISOString(),
@@ -181,6 +206,11 @@ async function runOnboard() {
         installed: workerDetection.installed,
         installMode: workerDetection.installMode,
         detectedPath: workerDetection.detectedPath,
+      },
+      web: {
+        baseUrl: DEFAULT_WEB_URL,
+        installed: webDetection.installed,
+        detectedPath: webDetection.detectedPath,
       },
       model: modelConfig,
       gitProvider: gitProviderConfig,
@@ -206,55 +236,58 @@ async function runOnboard() {
       logPath: WORKER_LOG_PATH,
     });
 
-    console.log("");
-    console.log(`${PRODUCT_NAME} is now configured.`);
-    console.log(`Config file: ${CONFIG_PATH}`);
-    console.log(`Worker detection: ${workerDetection.summary}`);
-    console.log("");
-    console.log("Starting the local worker...");
+    term.line("success", `${PRODUCT_NAME} configuration written`, CONFIG_PATH);
 
     let workerStarted = false;
     try {
-      await startWorker({ interactive: false });
+      await term.spinner("Start local worker", () => startWorker({ interactive: false, quiet: true }));
       workerStarted = true;
-      console.log("The local worker has been started.");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.log(`Worker start failed: ${message}`);
-      console.log(`You can inspect the worker with \`${CLI_COMMAND} worker logs\` and retry with \`${CLI_COMMAND} worker start\`.`);
+      term.line("warning", "Worker start needs attention", message);
+      term.line("info", "Inspect logs", `${CLI_COMMAND} worker logs`);
     }
 
-    const workerHealth = await checkWorkerHealth(
-      config.worker.baseUrl,
-      DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+    const workerHealth = await term.spinner(
+      "Verify worker health",
+      () => checkWorkerHealth(
+        config.worker.baseUrl,
+        DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+      ),
     );
-    const modelConnectivity = await checkModelConnectivity(
-      config.model,
-      DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
+    const modelConnectivity = await term.spinner(
+      "Verify model connectivity",
+      () => checkModelConnectivity(
+        config.model,
+        DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
+      ),
     );
 
-    console.log("");
-    console.log(`${PRODUCT_NAME} onboarding summary`);
-    console.log(`Worker URL: ${config.worker.baseUrl}`);
-    console.log(`Model connection: ${formatModelSummary(config.model)}`);
-    console.log(`Worker health: ${workerHealth.reachable ? "ok" : "needs attention"}`);
-    console.log(`Model connectivity: ${modelConnectivity.reachable ? "ok" : "needs attention"}`);
+    term.heading("6/6", "Final summary", "Your local RepoOperator configuration is ready.");
+    term.summaryBox(`${PRODUCT_NAME} setup`, [
+      ["Config", CONFIG_PATH],
+      ["Worker URL", config.worker.baseUrl],
+      ["Web URL", config.web?.baseUrl || DEFAULT_WEB_URL],
+      ["Repository source", formatProviderSummary(config.gitProvider)],
+      ["Model", formatModelSummary(config.model)],
+      ["Worker health", workerHealth.reachable ? "ok" : "needs attention"],
+      ["Model connectivity", modelConnectivity.reachable ? "ok" : "needs attention"],
+    ]);
 
     if (workerStarted && workerHealth.reachable && modelConnectivity.reachable) {
-      console.log("");
-      console.log(`${PRODUCT_NAME} is ready for read-only repository Q&A.`);
-      console.log("Next steps:");
-      console.log(`  1. Run \`${CLI_COMMAND} up\``);
-      console.log("  2. Open the printed local web URL");
-      console.log("  3. Choose a repository and ask a read-only question");
+      term.summaryBox("Next steps", [
+        `Run ${CLI_COMMAND} up`,
+        "Open the printed local web URL",
+        "Choose a repository and ask a read-only question",
+      ]);
       return;
     }
 
     if (!workerHealth.reachable) {
-      console.log(`Worker detail: ${workerHealth.message}`);
+      term.line("warning", "Worker detail", workerHealth.message);
     }
     if (!modelConnectivity.reachable) {
-      console.log(`Model detail: ${modelConnectivity.message}`);
+      term.line("warning", "Model detail", modelConnectivity.message);
     }
 
     process.exitCode = 1;
@@ -383,8 +416,10 @@ async function runStatus() {
   await ensureMigratedRuntimeHome();
   const configExists = await fileExists(CONFIG_PATH);
   if (!configExists) {
-    console.log(`${PRODUCT_NAME} is not configured yet.`);
-    console.log(`Run \`${CLI_COMMAND} onboard\` to create the local configuration.`);
+    term.summaryBox(`${PRODUCT_NAME} status`, [
+      ["Config", "not found"],
+      ["Next step", `Run ${CLI_COMMAND} onboard`],
+    ]);
     process.exitCode = 1;
     return;
   }
@@ -406,34 +441,30 @@ async function runStatus() {
     DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
   );
 
-  console.log(`${PRODUCT_NAME} status`);
-  console.log("");
-  console.log(`Config file: ${CONFIG_PATH}`);
-  console.log(`Configured worker URL: ${workerUrl}`);
-  console.log(`Worker install mode: ${config.worker?.installMode || "unknown"}`);
-  console.log(`Worker detected path: ${config.worker?.detectedPath || "not detected"}`);
-  console.log(`Worker process running: ${workerRunning.running ? "yes" : "no"}`);
-  console.log(`Worker process detail: ${describeWorkerProcessState(workerRunning, runtimeState)}`);
-  console.log(`Worker port in use: ${portState.inUse ? "yes" : "no"}`);
-  console.log(`Worker port detail: ${describePortState(portState, workerUrl, workerHealth.reachable)}`);
-  console.log(`Worker reachable: ${workerHealth.reachable ? "yes" : "no"}`);
-  console.log(`Worker health detail: ${describeWorkerHealthState(workerHealth, runtimeState, portState)}`);
-  if (runtimeState?.failureType) {
-    console.log(`Last startup failure: ${runtimeState.failureType}`);
+  console.log(term.banner());
+  term.summaryBox(`${PRODUCT_NAME} status`, [
+    ["Config", CONFIG_PATH],
+    ["Worker URL", workerUrl],
+    ["Worker", workerHealth.reachable ? "reachable" : "not reachable"],
+    ["Worker process", workerRunning.running ? "running" : "stopped"],
+    ["Model", formatModelSummary(config.model)],
+    ["Model connectivity", modelConnectivity.reachable ? "reachable" : "not reachable"],
+    ["Git provider", formatProviderSummary(config.gitProvider)],
+    ["Repo base dir", config.localRepoBaseDir || "not configured"],
+  ]);
+  term.summaryBox("Runtime files", [
+    ["PID file", runtimeState?.pidFile || PID_PATH],
+    ["Worker log", runtimeState?.logPath || WORKER_LOG_PATH],
+    ["Prepared", config.daemon?.prepared ? "yes" : "no"],
+  ]);
+  if (runtimeState?.failureType || runtimeState?.lastError) {
+    term.summaryBox("Last startup detail", [
+      ["Failure type", runtimeState?.failureType || "none"],
+      ["Detail", runtimeState?.lastError || "none"],
+    ]);
   }
-  if (runtimeState?.lastError) {
-    console.log(`Last startup detail: ${runtimeState.lastError}`);
-  }
-  console.log(`Worker pid file: ${runtimeState?.pidFile || PID_PATH}`);
-  console.log(`Worker log file: ${runtimeState?.logPath || WORKER_LOG_PATH}`);
-  console.log(`Model connection mode: ${formatModelConnectionMode(config.model)}`);
-  console.log(`Model provider: ${config.model?.provider || "not configured"}`);
-  console.log(`Model summary: ${formatModelSummary(config.model)}`);
-  console.log(`Model connectivity: ${modelConnectivity.reachable ? "reachable" : "not reachable"}`);
-  console.log(`Model connectivity detail: ${modelConnectivity.message}`);
-  console.log(`Git provider: ${formatProviderSummary(config.gitProvider)}`);
-  console.log(`Local repo base dir: ${config.localRepoBaseDir || "not configured"}`);
-  console.log(`Worker runtime prepared: ${config.daemon?.prepared ? "yes" : "no"}`);
+  term.line(workerHealth.reachable ? "success" : "warning", "Worker detail", describeWorkerHealthState(workerHealth, runtimeState, portState));
+  term.line(modelConnectivity.reachable ? "success" : "warning", "Model detail", modelConnectivity.message);
 }
 
 async function runUp() {
@@ -442,42 +473,47 @@ async function runUp() {
   const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
   const webUrl = config.web?.baseUrl || DEFAULT_WEB_URL;
 
-  console.log(`${PRODUCT_NAME} local product runtime`);
-  console.log("");
-  console.log("Starting local worker...");
-  await startWorker({ interactive: false });
+  console.log(term.banner());
+  term.heading("Runtime", "Starting local product runtime", "RepoOperator will start the worker, start the web UI, and verify both endpoints.");
+  await term.spinner("Start local worker", () => startWorker({ interactive: false, quiet: true }));
 
-  const workerHealth = await checkWorkerHealth(
-    workerUrl,
-    DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+  const workerHealth = await term.spinner(
+    "Verify worker health",
+    () => checkWorkerHealth(
+      workerUrl,
+      DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+    ),
   );
   if (!workerHealth.reachable) {
     throw new Error(`Local worker did not become healthy. ${workerHealth.message}`);
   }
-  console.log(`Worker ready: ${workerUrl}`);
 
-  console.log("Starting web UI...");
-  await startWeb({ interactive: false, workerUrl, webUrl });
+  await term.spinner("Start web UI", () => startWeb({ interactive: false, quiet: true, workerUrl, webUrl }));
 
-  const webHealth = await checkWebHealth(webUrl, DEFAULT_WEB_HEALTH_TIMEOUT_MS);
+  const webHealth = await term.spinner("Verify web UI", () => checkWebHealth(webUrl, DEFAULT_WEB_HEALTH_TIMEOUT_MS));
   if (!webHealth.reachable) {
     throw new Error(`Web UI did not become healthy. ${webHealth.message}`);
   }
 
-  console.log(`Web UI ready: ${webUrl}`);
-  console.log("");
-  console.log(`${PRODUCT_NAME} is up.`);
-  console.log(`Open: ${webUrl}`);
+  term.summaryBox(`${PRODUCT_NAME} is up`, [
+    ["Web UI", webUrl],
+    ["Worker", workerUrl],
+    ["Logs", WEB_LOG_PATH],
+  ], "Open the web URL to choose a repository and start chatting.");
 }
 
 async function runDown() {
   await ensureMigratedRuntimeHome();
-  console.log(`Stopping ${PRODUCT_NAME} local product runtime...`);
-  await stopWeb({ interactive: true });
-  await stopWorker({ interactive: true });
+  term.heading("Runtime", "Stopping local product runtime");
+  await term.spinner("Stop web UI", () => stopWeb({ interactive: false }));
+  await term.spinner("Stop local worker", () => stopWorker({ interactive: false }));
+  term.summaryBox(`${PRODUCT_NAME} is down`, [
+    ["Web UI", "stopped"],
+    ["Worker", "stopped"],
+  ]);
 }
 
-async function startWorker({ interactive }) {
+async function startWorker({ interactive, quiet = false }) {
   await ensureBaseDirectories();
   const config = await requireConfig();
   const workerInstallation = await resolveWorkerInstallation(config, process.cwd());
@@ -488,7 +524,11 @@ async function startWorker({ interactive }) {
 
   if (running.running) {
     if (interactive) {
-      console.log(`The local worker is already running. ${running.message}`);
+      term.summaryBox("Local worker", [
+        ["Status", "already running"],
+        ["Worker URL", workerUrl],
+        ["Detail", running.message],
+      ]);
     }
     return;
   }
@@ -563,14 +603,17 @@ async function startWorker({ interactive }) {
     }
   }
 
-  console.log(`Launching ${PRODUCT_NAME} local worker`);
-  console.log(`Command: ${launchedCommand}`);
-  console.log(`Working directory: ${workerInstallation.detectedPath}`);
-  console.log(`Worker src path: ${workerLaunch.srcPath}`);
-  console.log(`PYTHONPATH: ${env.PYTHONPATH}`);
-  console.log(`Expected health URL: ${workerUrl}/health`);
-  console.log(`Log file: ${WORKER_LOG_PATH}`);
-  console.log(`PID file: ${PID_PATH}`);
+  if (interactive && !quiet) {
+    term.heading("Worker", "Starting local worker");
+    term.summaryBox("Launch plan", [
+      ["Command", launchedCommand],
+      ["Working directory", workerInstallation.detectedPath],
+      ["Worker src", workerLaunch.srcPath],
+      ["Health URL", `${workerUrl}/health`],
+      ["Log file", WORKER_LOG_PATH],
+      ["PID file", PID_PATH],
+    ]);
+  }
 
   let child;
   try {
@@ -638,12 +681,11 @@ async function startWorker({ interactive }) {
       exitCode: startupHealth.exitCode ?? null,
       exitSignal: startupHealth.exitSignal ?? null,
     });
-    console.log(`Startup failure detail: ${startupHealth.message}`);
-    console.log(`Process exited: ${startupHealth.exited ? "yes" : "no"}`);
-    console.log(`Exit code: ${startupHealth.exitCode ?? "unknown"}`);
+    term.line("error", "Startup failure", startupHealth.message);
+    term.line("info", "Process exited", startupHealth.exited ? "yes" : "no");
+    term.line("info", "Exit code", String(startupHealth.exitCode ?? "unknown"));
     if (logTail) {
-      console.log("Recent worker log output:");
-      console.log(logTail);
+      term.summaryBox("Recent worker log output", logTail.split(/\r?\n/).slice(-12));
     }
     throw new Error(
       `Worker failed to start. ${startupHealth.message} Check logs with \`${CLI_COMMAND} worker logs\`.`,
@@ -657,9 +699,11 @@ async function startWorker({ interactive }) {
   });
 
   if (interactive) {
-    console.log(`${PRODUCT_NAME} local worker started.`);
-    console.log(`Worker URL: ${workerUrl}`);
-    console.log(`Logs: ${WORKER_LOG_PATH}`);
+    term.summaryBox("Local worker started", [
+      ["Worker URL", workerUrl],
+      ["Logs", WORKER_LOG_PATH],
+      ["PID file", PID_PATH],
+    ]);
   }
 }
 
@@ -702,22 +746,37 @@ async function stopWorker({ interactive }) {
 
   if (interactive) {
     if (!runtimeState?.pid || !running.running) {
-      console.log(`${PRODUCT_NAME} local worker was already stopped. Cleaned up stale runtime state.`);
+      term.summaryBox("Local worker", [
+        ["Status", "already stopped"],
+        ["Cleanup", "stale runtime state removed"],
+      ]);
     } else if (stopResult.forced) {
-      console.log(`${PRODUCT_NAME} local worker did not exit gracefully and was force-stopped.`);
+      term.summaryBox("Local worker stopped", [
+        ["Status", "force-stopped"],
+        ["PID", String(runtimeState.pid)],
+      ]);
     } else {
-      console.log(`${PRODUCT_NAME} local worker stopped cleanly.`);
+      term.summaryBox("Local worker stopped", [
+        ["Status", "stopped cleanly"],
+        ["PID", String(runtimeState.pid)],
+      ]);
     }
   }
 }
 
 async function restartWorker() {
-  await stopWorker({ interactive: false });
-  await startWorker({ interactive: true });
-  console.log(`${PRODUCT_NAME} local worker restarted.`);
+  const config = await requireConfig();
+  const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
+  term.heading("Worker", "Restarting local worker");
+  await term.spinner("Stop local worker", () => stopWorker({ interactive: false }));
+  await term.spinner("Start local worker", () => startWorker({ interactive: false, quiet: true }));
+  term.summaryBox("Local worker restarted", [
+    ["Worker URL", workerUrl],
+    ["Logs", WORKER_LOG_PATH],
+  ]);
 }
 
-async function startWeb({ interactive, workerUrl, webUrl }) {
+async function startWeb({ interactive, quiet = false, workerUrl, webUrl }) {
   await ensureBaseDirectories();
   const config = await requireConfig();
   const webInstallation = await resolveWebInstallation(config, process.cwd());
@@ -727,7 +786,11 @@ async function startWeb({ interactive, workerUrl, webUrl }) {
 
   if (running.running) {
     if (interactive) {
-      console.log(`The web UI is already running. ${running.message}`);
+      term.summaryBox("Web UI", [
+        ["Status", "already running"],
+        ["Web URL", webUrl],
+        ["Detail", running.message],
+      ]);
     }
     return;
   }
@@ -761,7 +824,10 @@ async function startWeb({ interactive, workerUrl, webUrl }) {
         note: "Web UI was already reachable on the configured URL.",
       });
       if (interactive) {
-        console.log(`The web UI is already reachable at ${webUrl}.`);
+        term.summaryBox("Web UI", [
+          ["Status", "already reachable"],
+          ["Web URL", webUrl],
+        ]);
       }
       return;
     }
@@ -787,13 +853,17 @@ async function startWeb({ interactive, workerUrl, webUrl }) {
     NEXT_PUBLIC_LOCAL_WORKER_BASE_URL: workerUrl,
   };
 
-  console.log(`Launching ${PRODUCT_NAME} web UI`);
-  console.log(`Command: ${launchedCommand}`);
-  console.log(`Working directory: ${webInstallation.detectedPath}`);
-  console.log(`Expected web URL: ${webUrl}`);
-  console.log(`Worker URL for web UI: ${workerUrl}`);
-  console.log(`Log file: ${WEB_LOG_PATH}`);
-  console.log(`PID file: ${WEB_PID_PATH}`);
+  if (interactive && !quiet) {
+    term.heading("Web UI", "Starting web app");
+    term.summaryBox("Launch plan", [
+      ["Command", launchedCommand],
+      ["Working directory", webInstallation.detectedPath],
+      ["Web URL", webUrl],
+      ["Worker URL", workerUrl],
+      ["Log file", WEB_LOG_PATH],
+      ["PID file", WEB_PID_PATH],
+    ]);
+  }
 
   let child;
   try {
@@ -857,10 +927,9 @@ async function startWeb({ interactive, workerUrl, webUrl }) {
       exitCode: startupHealth.exitCode ?? null,
       exitSignal: startupHealth.exitSignal ?? null,
     });
-    console.log(`Web startup failure detail: ${startupHealth.message}`);
+    term.line("error", "Web startup failure", startupHealth.message);
     if (logTail) {
-      console.log("Recent web log output:");
-      console.log(logTail);
+      term.summaryBox("Recent web log output", logTail.split(/\r?\n/).slice(-12));
     }
     throw new Error(
       `Web UI failed to start. ${startupHealth.message} Check logs at ${WEB_LOG_PATH}.`,
@@ -874,9 +943,11 @@ async function startWeb({ interactive, workerUrl, webUrl }) {
   });
 
   if (interactive) {
-    console.log(`${PRODUCT_NAME} web UI started.`);
-    console.log(`Web URL: ${webUrl}`);
-    console.log(`Logs: ${WEB_LOG_PATH}`);
+    term.summaryBox("Web UI started", [
+      ["Web URL", webUrl],
+      ["Worker URL", workerUrl],
+      ["Logs", WEB_LOG_PATH],
+    ]);
   }
 }
 
@@ -910,11 +981,20 @@ async function stopWeb({ interactive }) {
 
   if (interactive) {
     if (!webState?.pid || !running.running) {
-      console.log(`${PRODUCT_NAME} web UI was already stopped. Cleaned up stale runtime state.`);
+      term.summaryBox("Web UI", [
+        ["Status", "already stopped"],
+        ["Cleanup", "stale runtime state removed"],
+      ]);
     } else if (stopResult.forced) {
-      console.log(`${PRODUCT_NAME} web UI did not exit gracefully and was force-stopped.`);
+      term.summaryBox("Web UI stopped", [
+        ["Status", "force-stopped"],
+        ["PID", String(webState.pid)],
+      ]);
     } else {
-      console.log(`${PRODUCT_NAME} web UI stopped cleanly.`);
+      term.summaryBox("Web UI stopped", [
+        ["Status", "stopped cleanly"],
+        ["PID", String(webState.pid)],
+      ]);
     }
   }
 }
@@ -928,8 +1008,7 @@ async function showWorkerLogs() {
   }
 
   const logContent = await readLogTail(logPath, 200);
-  console.log(`${PRODUCT_NAME} worker logs: ${logPath}`);
-  console.log("");
+  term.heading("Worker", "Recent local worker logs", logPath);
   process.stdout.write(logContent || "(log file is empty)\n");
 }
 
@@ -937,8 +1016,10 @@ async function showWorkerStatus() {
   await ensureMigratedRuntimeHome();
   const configExists = await fileExists(CONFIG_PATH);
   if (!configExists) {
-    console.log(`${PRODUCT_NAME} is not configured yet.`);
-    console.log(`Run \`${CLI_COMMAND} onboard\` to create the local configuration.`);
+    term.summaryBox(`${PRODUCT_NAME} worker status`, [
+      ["Config", "not found"],
+      ["Next step", `Run ${CLI_COMMAND} onboard`],
+    ]);
     process.exitCode = 1;
     return;
   }
@@ -953,24 +1034,23 @@ async function showWorkerStatus() {
     ? await checkWorkerHealth(workerUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS)
     : { reachable: false, message: "Worker is stopped." };
 
-  console.log(`${PRODUCT_NAME} worker status`);
-  console.log("");
-  console.log(`Configured worker URL: ${workerUrl}`);
-  console.log(`PID: ${runtimeState?.pid ?? "not recorded"}`);
-  console.log(`PID file: ${runtimeState?.pidFile || PID_PATH}`);
-  console.log(`Process appears alive: ${workerRunning.running ? "yes" : "no"}`);
-  console.log(`Process detail: ${describeWorkerProcessState(workerRunning, runtimeState)}`);
-  console.log(`Port in use: ${portState.inUse ? "yes" : "no"}`);
-  console.log(`Port detail: ${describePortState(portState, workerUrl, workerHealth.reachable)}`);
-  console.log(`Health responds: ${workerHealth.reachable ? "yes" : "no"}`);
-  console.log(`Health detail: ${describeWorkerHealthState(workerHealth, runtimeState, portState)}`);
+  term.summaryBox(`${PRODUCT_NAME} worker status`, [
+    ["Worker URL", workerUrl],
+    ["PID", runtimeState?.pid ?? "not recorded"],
+    ["Process", workerRunning.running ? "running" : "stopped"],
+    ["Health", workerHealth.reachable ? "responding" : "not responding"],
+    ["Port", portState.inUse ? "in use" : "available"],
+    ["Log file", runtimeState?.logPath || WORKER_LOG_PATH],
+  ]);
+  term.line(workerHealth.reachable ? "success" : "warning", "Health detail", describeWorkerHealthState(workerHealth, runtimeState, portState));
+  term.line(workerRunning.running ? "success" : "warning", "Process detail", describeWorkerProcessState(workerRunning, runtimeState));
+  term.line(portState.inUse && !workerHealth.reachable ? "warning" : "info", "Port detail", describePortState(portState, workerUrl, workerHealth.reachable));
   if (runtimeState?.failureType) {
-    console.log(`Last startup failure: ${runtimeState.failureType}`);
+    term.line("warning", "Last startup failure", runtimeState.failureType);
   }
   if (runtimeState?.lastError) {
-    console.log(`Last startup detail: ${runtimeState.lastError}`);
+    term.line("warning", "Last startup detail", runtimeState.lastError);
   }
-  console.log(`Log file: ${runtimeState?.logPath || WORKER_LOG_PATH}`);
 }
 
 async function ensureBaseDirectories() {
@@ -1186,6 +1266,38 @@ async function runInteractiveCommand(command, args, options = {}) {
         return;
       }
       reject(new Error(`${command} ${args.join(" ")} exited with code ${code ?? "unknown"}.`));
+    });
+  });
+}
+
+async function runCommandCapture(command, args, options = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || process.cwd(),
+      env: options.env || process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdoutContent = "";
+    let stderrContent = "";
+    child.stdout.on("data", (chunk) => {
+      stdoutContent += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderrContent += chunk.toString();
+    });
+    child.once("error", (error) => {
+      resolve({
+        returncode: 1,
+        stdout: stdoutContent,
+        stderr: error instanceof Error ? error.message : String(error),
+      });
+    });
+    child.once("exit", (code) => {
+      resolve({
+        returncode: code ?? 0,
+        stdout: stdoutContent,
+        stderr: stderrContent,
+      });
     });
   });
 }
@@ -1426,6 +1538,10 @@ function sleep(ms) {
 
 async function promptGitProviderConfig(rl, provider) {
   if (provider === "gitlab") {
+    term.summaryBox("GitLab source", [
+      "Use a GitLab personal, project, or group token with repository read access.",
+      "RepoOperator stores the base URL and token locally for the worker.",
+    ]);
     const baseUrl = await promptWithDefault(
       rl,
       "GitLab base URL",
@@ -1436,6 +1552,10 @@ async function promptGitProviderConfig(rl, provider) {
   }
 
   if (provider === "github") {
+    term.summaryBox("GitHub source", [
+      "Use a GitHub token that can read the repositories you want to open.",
+      "GitHub Enterprise URLs are supported through the base URL prompt.",
+    ]);
     const baseUrl = await promptWithDefault(
       rl,
       "GitHub base URL",
@@ -1446,9 +1566,14 @@ async function promptGitProviderConfig(rl, provider) {
   }
 
   if (provider === "local") {
+    term.summaryBox("Local project source", [
+      "Use absolute filesystem paths for repositories or plain directories.",
+      "Recent local projects will appear in the web app after they are opened.",
+    ]);
     return { provider: "local" };
   }
 
+  term.line("info", "Repository source skipped", "You can rerun onboarding later to add one.");
   return { provider: "none" };
 }
 
@@ -1475,9 +1600,10 @@ async function promptRemoteApiModelConfig(rl) {
 
   const providerConfig = MODEL_PROVIDER_CONFIG[provider];
 
-  console.log("");
-  console.log(`Remote model API: ${providerConfig.label}`);
-  console.log(`${PRODUCT_NAME} will use these settings when the local worker calls your remote model API.`);
+  term.summaryBox(`Remote model API: ${providerConfig.label}`, [
+    "RepoOperator will use these settings when the local worker calls your model API.",
+    "Secrets are stored locally in ~/.repooperator/config.json.",
+  ]);
 
   let baseUrl = providerConfig.defaultBaseUrl || "";
   let apiKey = providerConfig.defaultApiKey || "";
@@ -1513,11 +1639,12 @@ async function promptRemoteApiModelConfig(rl) {
 }
 
 async function promptOllamaModelConfig(rl) {
-  console.log("");
-  console.log("Local model runtime: Ollama");
-  console.log(`${PRODUCT_NAME} will look for a local Ollama installation, help you start it if needed, and guide model selection.`);
+  term.summaryBox("Local model runtime: Ollama", [
+    "RepoOperator will detect the Ollama command, check the local server, and list available models.",
+    `Recommended coding model: ${OLLAMA_RECOMMENDED_MODEL}`,
+  ]);
 
-  const commandInstalled = await commandExists("ollama");
+  const commandInstalled = await term.spinner("Check ollama command", () => commandExists("ollama"));
   if (!commandInstalled) {
     const installedNow = await ensureOllamaInstalled(rl);
     if (!installedNow) {
@@ -1527,7 +1654,12 @@ async function promptOllamaModelConfig(rl) {
 
   const baseUrl = await promptWithDefault(rl, "Ollama base URL", OLLAMA_DEFAULT_BASE_URL);
   const serverState = await ensureOllamaServerReady(rl, baseUrl);
-  const selectedModel = await chooseOllamaModel(rl, baseUrl, serverState.models || []);
+  const listedModels = await listOllamaModels();
+  const selectedModel = await chooseOllamaModel(
+    rl,
+    baseUrl,
+    listedModels.length ? listedModels : serverState.models || [],
+  );
 
   return {
     connectionMode: "local-runtime",
@@ -1540,9 +1672,10 @@ async function promptOllamaModelConfig(rl) {
 
 async function promptModelConnectionMode(rl) {
   while (true) {
-    console.log(`Choose how ${PRODUCT_NAME} should connect to your model:`);
-    console.log("  1. Local model runtime");
-    console.log("  2. Remote model API");
+    printOptionList("Choose how RepoOperator should connect to a model", [
+      ["1", "Local model runtime", "Ollama on this machine"],
+      ["2", "Remote model API", "OpenAI-compatible or hosted provider"],
+    ]);
     const answer = (await rl.question("Choice [1]: ")).trim() || "1";
 
     if (answer === "1") {
@@ -1551,30 +1684,32 @@ async function promptModelConnectionMode(rl) {
     if (answer === "2") {
       return "remote-api";
     }
-    console.log("Please choose 1 or 2.");
+    term.line("warning", "Invalid choice", "Please choose 1 or 2.");
   }
 }
 
 async function promptLocalRuntimeProvider(rl) {
   while (true) {
-    console.log("Choose a local model runtime:");
-    console.log("  1. Ollama");
+    printOptionList("Choose a local model runtime", [
+      ["1", "Ollama", "Local OpenAI-compatible model server"],
+    ]);
     const answer = (await rl.question("Choice [1]: ")).trim() || "1";
 
     if (answer === "1") {
       return "ollama";
     }
-    console.log("Please choose 1.");
+    term.line("warning", "Invalid choice", "Please choose 1.");
   }
 }
 
 async function promptRemoteApiProvider(rl) {
   while (true) {
-    console.log("Choose a remote model API:");
-    console.log("  1. OpenAI-compatible");
-    console.log("  2. OpenAI");
-    console.log("  3. Anthropic");
-    console.log("  4. Gemini");
+    printOptionList("Choose a remote model API", [
+      ["1", "OpenAI-compatible", "Enterprise gateways and compatible APIs"],
+      ["2", "OpenAI", "OpenAI API"],
+      ["3", "Anthropic", "Anthropic API"],
+      ["4", "Gemini", "Gemini OpenAI-compatible endpoint"],
+    ]);
     const answer = (await rl.question("Choice [1]: ")).trim() || "1";
 
     if (answer === "1") {
@@ -1589,17 +1724,18 @@ async function promptRemoteApiProvider(rl) {
     if (answer === "4") {
       return "gemini";
     }
-    console.log("Please choose 1, 2, 3, or 4.");
+    term.line("warning", "Invalid choice", "Please choose 1, 2, 3, or 4.");
   }
 }
 
 async function promptGitProvider(rl) {
   while (true) {
-    console.log("Select a git provider:");
-    console.log("  1. GitLab");
-    console.log("  2. GitHub");
-    console.log("  3. Local project");
-    console.log("  4. None for now");
+    printOptionList("Select a repository source", [
+      ["1", "GitLab", "Project discovery, clone, fetch, branch selection"],
+      ["2", "GitHub", "Repository discovery and clone/fetch support"],
+      ["3", "Local project", "Open absolute paths on this machine"],
+      ["4", "None for now", "Configure repository access later"],
+    ]);
     const answer = (await rl.question("Choice [1]: ")).trim() || "1";
 
     if (answer === "1") {
@@ -1614,7 +1750,7 @@ async function promptGitProvider(rl) {
     if (answer === "4") {
       return "none";
     }
-    console.log("Please choose 1, 2, 3, or 4.");
+    term.line("warning", "Invalid choice", "Please choose 1, 2, 3, or 4.");
   }
 }
 
@@ -1634,9 +1770,13 @@ async function promptYesNo(rl, prompt, defaultYes) {
   return answer === "y" || answer === "yes";
 }
 
-async function ensureOllamaInstalled(rl) {
+function printOptionList(title, rows) {
   console.log("");
-  console.log("Ollama was not found on this machine.");
+  term.summaryBox(title, rows.map(([choice, label, detail]) => `${choice}. ${label} - ${detail}`));
+}
+
+async function ensureOllamaInstalled(rl) {
+  term.line("warning", "Ollama command not found", "RepoOperator can guide installation options.");
 
   if (process.platform === "darwin") {
     const brewInstalled = await commandExists("brew");
@@ -1647,36 +1787,52 @@ async function ensureOllamaInstalled(rl) {
         true,
       );
       if (installNow) {
-        console.log("Installing Ollama with Homebrew...");
+        term.line("info", "Installing Ollama", "brew install ollama");
         await runInteractiveCommand("brew", ["install", "ollama"]);
         return commandExists("ollama");
       }
     }
 
-    console.log(`Install Ollama on macOS, then rerun \`${CLI_COMMAND} onboard\`.`);
-    console.log("Suggested options:");
-    console.log("  - install Homebrew and run `brew install ollama`");
-    console.log("  - or install Ollama from the official macOS installer");
+    term.summaryBox("Install Ollama on macOS", [
+      "Install Homebrew and run: brew install ollama",
+      "Or install Ollama from the official macOS installer.",
+      `Then rerun: ${CLI_COMMAND} onboard`,
+    ]);
     return false;
   }
 
-  console.log(`Install Ollama on this machine, then rerun \`${CLI_COMMAND} onboard\`.`);
-  console.log("Suggested options:");
-  console.log("  - use your system package manager if available");
-  console.log("  - or install Ollama from the official installer for your platform");
+  term.summaryBox("Install Ollama", [
+    "Use your system package manager if available.",
+    "Or install Ollama from the official installer for your platform.",
+    `Then rerun: ${CLI_COMMAND} onboard`,
+  ]);
   return false;
 }
 
+async function listOllamaModels() {
+  const result = await term.spinner("Run ollama list", () => runCommandCapture("ollama", ["list"]));
+  if (result.returncode !== 0) {
+    term.line("warning", "ollama list failed", result.stderr || "Unable to list local models.");
+    return [];
+  }
+
+  return result.stdout
+    .split(/\r?\n/)
+    .slice(1)
+    .map((line) => line.trim().split(/\s+/)[0])
+    .filter(Boolean);
+}
+
 async function ensureOllamaServerReady(rl, baseUrl) {
-  const initialState = await checkOllamaServer(baseUrl, DEFAULT_OLLAMA_TIMEOUT_MS);
+  const initialState = await term.spinner("Check Ollama server", () =>
+    checkOllamaServer(baseUrl, DEFAULT_OLLAMA_TIMEOUT_MS),
+  );
   if (initialState.reachable) {
-    console.log(`Ollama is reachable at ${baseUrl}.`);
+    term.line("success", "Ollama is reachable", baseUrl);
     return initialState;
   }
 
-  console.log("");
-  console.log("Ollama is installed, but the local server is not reachable yet.");
-  console.log(initialState.message);
+  term.line("warning", "Ollama server is not reachable", initialState.message);
 
   const startNow = await promptYesNo(
     rl,
@@ -1689,16 +1845,17 @@ async function ensureOllamaServerReady(rl, baseUrl) {
     );
   }
 
-  console.log("Starting the Ollama server...");
-  await startOllamaServer(baseUrl);
-  const startedState = await waitForOllamaServer(baseUrl, DEFAULT_OLLAMA_START_TIMEOUT_MS);
+  await term.spinner("Start Ollama server", () => startOllamaServer(baseUrl));
+  const startedState = await term.spinner("Wait for Ollama server", () =>
+    waitForOllamaServer(baseUrl, DEFAULT_OLLAMA_START_TIMEOUT_MS),
+  );
   if (!startedState.reachable) {
     throw new Error(
       `Ollama did not become reachable in time. ${startedState.message} Check ${OLLAMA_LOG_PATH} or run \`ollama serve\` manually.`,
     );
   }
 
-  console.log(`Ollama is now reachable at ${baseUrl}.`);
+  term.line("success", "Ollama is now reachable", baseUrl);
   return startedState;
 }
 
@@ -1706,8 +1863,10 @@ async function chooseOllamaModel(rl, baseUrl, initialModels) {
   let models = initialModels;
 
   if (models.length === 0) {
-    console.log("");
-    console.log("No local Ollama models were detected.");
+    term.summaryBox("No local Ollama models detected", [
+      `Recommended model: ${OLLAMA_RECOMMENDED_MODEL}`,
+      "RepoOperator can pull it now, or you can enter another model name.",
+    ]);
     const pullNow = await promptYesNo(
       rl,
       `Pull the recommended model now (${OLLAMA_RECOMMENDED_MODEL})?`,
@@ -1716,24 +1875,29 @@ async function chooseOllamaModel(rl, baseUrl, initialModels) {
 
     if (pullNow) {
       await pullOllamaModel(OLLAMA_RECOMMENDED_MODEL);
-      const refreshed = await checkOllamaServer(baseUrl, DEFAULT_OLLAMA_TIMEOUT_MS);
+      const refreshed = await term.spinner("Refresh Ollama model list", () =>
+        checkOllamaServer(baseUrl, DEFAULT_OLLAMA_TIMEOUT_MS),
+      );
       models = refreshed.models || [];
     }
   }
 
   if (models.length === 0) {
-    console.log("");
-    console.log(`${PRODUCT_NAME} could not detect any local Ollama models.`);
+    term.line("warning", "No local models detected", "Enter a model name manually.");
     return promptWithDefault(rl, "Model name", OLLAMA_RECOMMENDED_MODEL);
   }
 
-  console.log("");
-  console.log("Detected local Ollama models:");
-  for (const [index, modelName] of models.entries()) {
-    console.log(`  ${index + 1}. ${modelName}`);
-  }
-  console.log(`  ${models.length + 1}. Pull recommended model (${OLLAMA_RECOMMENDED_MODEL})`);
-  console.log(`  ${models.length + 2}. Enter a model name manually`);
+  term.summaryBox("Detected local Ollama models", [
+    "Choose an installed model or pull the recommended coding model.",
+  ]);
+  term.table(
+    ["Choice", "Model"],
+    [
+      ...models.map((modelName, index) => [String(index + 1), modelName]),
+      [String(models.length + 1), `Pull recommended model (${OLLAMA_RECOMMENDED_MODEL})`],
+      [String(models.length + 2), "Enter a model name manually"],
+    ],
+  );
 
   while (true) {
     const answer = (await rl.question("Choice [1]: ")).trim() || "1";
@@ -1755,8 +1919,7 @@ async function chooseOllamaModel(rl, baseUrl, initialModels) {
 
 async function showConfig() {
   const config = await requireConfig();
-  console.log(`${PRODUCT_NAME} config`);
-  console.log("");
+  term.heading("Config", `${PRODUCT_NAME} local configuration`);
   console.log(JSON.stringify(redactConfig(config), null, 2));
 }
 
@@ -2422,36 +2585,40 @@ function normalizeModelConfig(modelConfig) {
 }
 
 function printChecks(checks) {
-  console.log(`${PRODUCT_NAME} doctor`);
-  console.log("");
+  console.log(term.banner());
+  term.heading("Doctor", "Local runtime diagnostics", "A quick health report for the local RepoOperator setup.");
   for (const check of checks) {
-    const prefix = check.ok ? "[ok]" : "[fail]";
-    console.log(`${prefix} ${check.name}`);
-    if (check.detail) {
-      console.log(`      ${check.detail}`);
-    }
+    term.line(check.ok ? "success" : "error", check.name, check.detail);
   }
+  const failing = checks.filter((check) => !check.ok);
+  term.summaryBox(
+    failing.length ? "Doctor summary: needs attention" : "Doctor summary: healthy",
+    [
+      ["Checks", String(checks.length)],
+      ["Passing", String(checks.length - failing.length)],
+      ["Failing", String(failing.length)],
+      ["Next step", failing.length ? `Run ${CLI_COMMAND} status or inspect logs` : `${CLI_COMMAND} up`],
+    ],
+  );
 }
 
 function printHelp() {
-  console.log(`${PRODUCT_NAME} CLI`);
-  console.log("");
-  console.log("Usage:");
-  console.log(`  ${CLI_COMMAND} onboard`);
-  console.log(`  ${CLI_COMMAND} up`);
-  console.log(`  ${CLI_COMMAND} down`);
-  console.log(`  ${CLI_COMMAND} doctor`);
-  console.log(`  ${CLI_COMMAND} status`);
-  console.log(`  ${CLI_COMMAND} config show`);
-  console.log("");
-  console.log("Worker maintenance:");
-  console.log(`  ${CLI_COMMAND} worker start`);
-  console.log(`  ${CLI_COMMAND} worker stop`);
-  console.log(`  ${CLI_COMMAND} worker restart`);
-  console.log(`  ${CLI_COMMAND} worker status`);
-  console.log(`  ${CLI_COMMAND} worker logs`);
-  console.log("");
-  console.log(`Recommended local product flow: ${CLI_COMMAND} onboard && ${CLI_COMMAND} up`);
+  console.log(term.banner());
+  term.summaryBox("Usage", [
+    [`${CLI_COMMAND} onboard`, "Guided first-run setup"],
+    [`${CLI_COMMAND} up`, "Start worker and web UI"],
+    [`${CLI_COMMAND} down`, "Stop worker and web UI"],
+    [`${CLI_COMMAND} doctor`, "Run local diagnostics"],
+    [`${CLI_COMMAND} status`, "Show runtime status"],
+    [`${CLI_COMMAND} config show`, "Print redacted config"],
+  ]);
+  term.summaryBox("Worker maintenance", [
+    [`${CLI_COMMAND} worker start`, "Start only the local worker"],
+    [`${CLI_COMMAND} worker stop`, "Stop the local worker"],
+    [`${CLI_COMMAND} worker restart`, "Restart the local worker"],
+    [`${CLI_COMMAND} worker status`, "Inspect worker runtime state"],
+    [`${CLI_COMMAND} worker logs`, "Show recent worker logs"],
+  ], `Recommended flow: ${CLI_COMMAND} onboard && ${CLI_COMMAND} up`);
 }
 
 module.exports = {
