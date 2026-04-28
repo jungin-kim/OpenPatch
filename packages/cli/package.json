@@ -1,13 +1,31 @@
 {
   "name": "repooperator",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
-  "description": "RepoOperator onboarding and local product runtime CLI.",
+  "description": "RepoOperator onboarding and local worker management CLI.",
   "bin": {
     "repooperator": "bin/repooperator.js"
   },
   "engines": {
     "node": ">=20"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "homepage": "https://github.com/jungin-kim/RepoOperator",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jungin-kim/RepoOperator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jungin-kim/RepoOperator/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "gitlab",
+    "github",
+    "repository",
+    "ollama",
+    "developer-tools"
+  ]
 }
