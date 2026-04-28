@@ -2,7 +2,7 @@
   "name": "repooperator",
   "version": "0.1.2",
   "private": false,
-  "description": "RepoOperator onboarding and local worker management CLI.",
+  "description": "RepoOperator onboarding and local product runtime CLI.",
   "bin": {
     "repooperator": "bin/repooperator.js"
   },
