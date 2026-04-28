@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   getProviderBranches,
@@ -22,6 +22,15 @@ import { ChatMessages, type ChatMessage } from "./ChatMessages";
 import { ChatComposer } from "./ChatComposer";
 
 type ConnectionState = "checking" | "connected" | "unavailable";
+
+export type ChatThread = {
+  id: string;
+  title: string;
+  repoResult: RepoOpenPayload;
+  messages: ChatMessage[];
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 export function ChatApp() {
   // ── Worker / model connection state ──────────────────────────────────────
@@ -53,10 +62,12 @@ export function ChatApp() {
   // ── Repository + chat state ───────────────────────────────────────────────
   const [repoResult, setRepoResult] = useState<RepoOpenPayload | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [threads, setThreads] = useState<ChatThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
 
   // ── Health check ─────────────────────────────────────────────────────────
-  async function refreshHealthCheck() {
+  async function refreshHealthCheck(options: { syncProvider?: boolean } = {}) {
     setConnectionState("checking");
     try {
       const payload = await getWorkerHealth();
@@ -67,7 +78,7 @@ export function ChatApp() {
       setConfiguredModelConnectionMode(payload.configured_model_connection_mode || "");
       setConfiguredModelProvider(payload.configured_model_provider || "");
       setConfiguredModelName(payload.configured_model_name || "");
-      if (nextSource) setGitProvider(nextSource);
+      if (options.syncProvider && nextSource) setGitProvider(nextSource);
       if (payload.recent_projects?.length) {
         setManualProjectPath((cur) => cur || payload.recent_projects?.[0] || "");
       }
@@ -81,8 +92,24 @@ export function ChatApp() {
   }
 
   useEffect(() => {
-    void refreshHealthCheck();
+    void refreshHealthCheck({ syncProvider: true });
   }, []);
+
+  useEffect(() => {
+    if (!activeThreadId || !repoResult) return;
+    setThreads((prev) =>
+      prev.map((thread) =>
+        thread.id === activeThreadId
+          ? {
+              ...thread,
+              repoResult,
+              messages,
+              updatedAt: new Date(),
+            }
+          : thread,
+      ),
+    );
+  }, [activeThreadId, messages, repoResult]);
 
   // ── Load projects when provider changes ──────────────────────────────────
   useEffect(() => {
@@ -169,6 +196,26 @@ export function ChatApp() {
   const effectiveBranch = useAdvanced ? manualBranch.trim() : selectedBranch.trim();
   const branchRequired = gitProvider !== "local";
 
+  function appendMessages(updater: (current: ChatMessage[]) => ChatMessage[]) {
+    setMessages(updater);
+  }
+
+  function buildThreadTitle(payload: RepoOpenPayload): string {
+    const repoName = payload.project_path.split(/[\\/]/).filter(Boolean).at(-1);
+    return repoName || payload.project_path;
+  }
+
+  function buildSwitchMessage(payload: RepoOpenPayload): ChatMessage {
+    return {
+      id: `${Date.now()}-context`,
+      role: "system",
+      content: `Repository switched. New chat started for ${payload.git_provider}:${payload.project_path}${
+        payload.branch ? ` @ ${payload.branch}` : ""
+      }.`,
+      timestamp: new Date(),
+    };
+  }
+
   // ── Handlers ─────────────────────────────────────────────────────────────
   async function handleOpenRepo() {
     setRepoPending(true);
@@ -190,8 +237,19 @@ export function ChatApp() {
         branch: effectiveBranch || undefined,
         git_provider: gitProvider.trim() || undefined,
       });
+      const nextMessages = [buildSwitchMessage(payload)];
+      const nextThread: ChatThread = {
+        id: `${Date.now()}-${payload.git_provider}-${payload.project_path}`,
+        title: buildThreadTitle(payload),
+        repoResult: payload,
+        messages: nextMessages,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
       setRepoResult(payload);
-      setMessages([]);
+      setMessages(nextMessages);
+      setActiveThreadId(nextThread.id);
+      setThreads((prev) => [nextThread, ...prev]);
       await refreshHealthCheck();
     } catch (error) {
       setRepoResult(null);
@@ -214,16 +272,18 @@ export function ChatApp() {
       content: question.trim(),
       timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, userMessage]);
+    appendMessages((prev) => [...prev, userMessage]);
     setQuestion("");
     setQuestionPending(true);
 
     try {
       const payload = await runAgentTask({
-        project_path: effectiveProjectPath,
+        project_path: repoResult.project_path,
+        git_provider: repoResult.git_provider,
+        branch: repoResult.branch || undefined,
         task: userMessage.content,
       });
-      setMessages((prev) => [
+      appendMessages((prev) => [
         ...prev,
         {
           id: `${Date.now()}-assistant`,
@@ -238,7 +298,7 @@ export function ChatApp() {
         error instanceof LocalWorkerClientError || error instanceof Error
           ? error.message
           : "Unable to run the task through the local worker.";
-      setMessages((prev) => [
+      appendMessages((prev) => [
         ...prev,
         {
           id: `${Date.now()}-error`,
@@ -253,8 +313,59 @@ export function ChatApp() {
   }
 
   function handleNewChat() {
-    setMessages([]);
     setQuestion("");
+    if (!repoResult) {
+      setMessages([]);
+      setActiveThreadId(null);
+      return;
+    }
+    const nextMessages: ChatMessage[] = [
+      {
+        id: `${Date.now()}-new-chat`,
+        role: "system",
+        content: `New chat started for ${repoResult.git_provider}:${repoResult.project_path}${
+          repoResult.branch ? ` @ ${repoResult.branch}` : ""
+        }.`,
+        timestamp: new Date(),
+      },
+    ];
+    const nextThread: ChatThread = {
+      id: `${Date.now()}-${repoResult.git_provider}-${repoResult.project_path}`,
+      title: buildThreadTitle(repoResult),
+      repoResult,
+      messages: nextMessages,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    setMessages(nextMessages);
+    setActiveThreadId(nextThread.id);
+    setThreads((prev) => [nextThread, ...prev]);
+  }
+
+  async function handleSelectThread(threadId: string) {
+    const thread = threads.find((item) => item.id === threadId);
+    if (!thread) return;
+    setRepoPending(true);
+    setRepoError(null);
+    try {
+      const reopened = await openRepository({
+        project_path: thread.repoResult.project_path,
+        git_provider: thread.repoResult.git_provider,
+        branch: thread.repoResult.branch || undefined,
+      });
+      setActiveThreadId(thread.id);
+      setRepoResult(reopened);
+      setMessages(thread.messages);
+      setQuestion("");
+    } catch (error) {
+      setRepoError(
+        error instanceof LocalWorkerClientError || error instanceof Error
+          ? error.message
+          : "Unable to restore the repository for this thread.",
+      );
+    } finally {
+      setRepoPending(false);
+    }
   }
 
   function handleGitProviderChange(nextProvider: string) {
@@ -304,8 +415,10 @@ export function ChatApp() {
       sidebar={
         <ChatSidebar
           recentProjects={recentProjects}
-          hasMessages={messages.length > 0}
+          threads={threads}
+          activeThreadId={activeThreadId}
           onNewChat={handleNewChat}
+          onSelectThread={handleSelectThread}
         />
       }
       header={

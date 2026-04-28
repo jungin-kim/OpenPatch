@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,8 +16,10 @@ if str(SRC_DIR) not in sys.path:
 
 from openpatch_worker.config import get_settings
 from openpatch_worker.schemas.requests import AgentProposeFileRequest, AgentRunRequest, RepoOpenRequest
+from openpatch_worker.services.agent_service import run_agent_task
 from openpatch_worker.services.common import get_repooperator_home_dir
 from openpatch_worker.services.git_providers import resolve_provider_git_options
+from openpatch_worker.services.repo_service import open_repository
 
 
 class WorkerContractTests(unittest.TestCase):
@@ -31,6 +34,16 @@ class WorkerContractTests(unittest.TestCase):
     def test_agent_run_request_accepts_project_path(self) -> None:
         payload = AgentRunRequest(project_path="examples/demo-repo", task="Summarize the repo")
         self.assertEqual(payload.project_path, "examples/demo-repo")
+
+    def test_agent_run_request_accepts_repository_trace(self) -> None:
+        payload = AgentRunRequest(
+            project_path="examples/demo-repo",
+            task="Summarize the repo",
+            git_provider="gitlab",
+            branch="main",
+        )
+        self.assertEqual(payload.git_provider, "gitlab")
+        self.assertEqual(payload.branch, "main")
 
     def test_agent_run_request_requires_project_path(self) -> None:
         with self.assertRaises(ValidationError):
@@ -264,6 +277,126 @@ class WorkerContractTests(unittest.TestCase):
 
             self.assertEqual(settings.repooperator_config_path, legacy_config.resolve())
             self.assertEqual(home_dir, legacy_config.parent.resolve())
+
+    def test_repository_switch_replaces_active_agent_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            repooperator_dir = Path(temp_home) / ".repooperator"
+            repo_base = repooperator_dir / "repos"
+            repo_base.mkdir(parents=True, exist_ok=True)
+            config_path = repooperator_dir / "config.json"
+            config_path.write_text(
+                """
+                {
+                  "gitProvider": {
+                    "provider": "gitlab",
+                    "baseUrl": "https://gitlab.example.com",
+                    "token": "gitlab-test-token"
+                  }
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            gitlab_repo = repo_base / "group" / "repo-a"
+            local_repo = Path(temp_home) / "work" / "repo-b"
+            _init_git_repo(gitlab_repo, "Repo A")
+            _init_git_repo(local_repo, "Repo B")
+
+            prompts: list[str] = []
+
+            def fake_generate_text(_client, prompt) -> str:
+                prompts.append(prompt.user_prompt)
+                return "grounded answer"
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": str(config_path),
+                    "LOCAL_REPO_BASE_DIR": str(repo_base),
+                    "OPENAI_BASE_URL": "http://127.0.0.1:11434/v1",
+                    "OPENAI_API_KEY": "test-key",
+                    "OPENAI_MODEL": "test-model",
+                },
+                clear=False,
+            ), patch(
+                "openpatch_worker.services.repo_service._fetch_repository",
+                return_value=None,
+            ), patch(
+                "openpatch_worker.services.agent_service.OpenAICompatibleModelClient.generate_text",
+                fake_generate_text,
+            ):
+                opened_gitlab = open_repository(
+                    RepoOpenRequest(
+                        project_path="group/repo-a",
+                        branch="main",
+                        git_provider="gitlab",
+                    )
+                )
+                first = run_agent_task(
+                    AgentRunRequest(
+                        project_path=opened_gitlab.project_path,
+                        git_provider=opened_gitlab.git_provider,
+                        branch=opened_gitlab.branch,
+                        task="Summarize this repository.",
+                    )
+                )
+
+                opened_local = open_repository(
+                    RepoOpenRequest(
+                        project_path=str(local_repo),
+                        branch="main",
+                        git_provider="local",
+                    )
+                )
+                second = run_agent_task(
+                    AgentRunRequest(
+                        project_path=opened_local.project_path,
+                        git_provider=opened_local.git_provider,
+                        branch=opened_local.branch,
+                        task="Summarize this repository.",
+                    )
+                )
+
+                with self.assertRaises(ValueError):
+                    run_agent_task(
+                        AgentRunRequest(
+                            project_path=opened_gitlab.project_path,
+                            git_provider=opened_gitlab.git_provider,
+                            branch=opened_gitlab.branch,
+                            task="This stale request should be rejected.",
+                        )
+                    )
+
+            self.assertEqual(first.active_repository_source, "gitlab")
+            self.assertEqual(first.active_repository_path, "group/repo-a")
+            self.assertEqual(second.active_repository_source, "local")
+            self.assertEqual(second.active_repository_path, str(local_repo.resolve()))
+            self.assertIn("source: local", prompts[-1])
+            self.assertIn(str(local_repo.resolve()), prompts[-1])
+            self.assertNotIn("group/repo-a", prompts[-1])
+
+
+def _init_git_repo(path: Path, readme_title: str) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, stdout=subprocess.DEVNULL)
+    (path / "README.md").write_text(f"# {readme_title}\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=path, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=RepoOperator Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "init",
+        ],
+        cwd=path,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
 
 
 if __name__ == "__main__":

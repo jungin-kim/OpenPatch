@@ -4,6 +4,7 @@ import os
 
 from openpatch_worker.config import get_settings
 from openpatch_worker.schemas import RepoOpenRequest, RepoOpenResponse
+from openpatch_worker.services.active_repository import ActiveRepository, set_active_repository
 from openpatch_worker.services.common import get_repo_base_dir, is_git_repository, resolve_project_path
 from openpatch_worker.services.git_providers import (
     ProviderGitOptions,
@@ -49,8 +50,9 @@ def open_repository(request: RepoOpenRequest) -> RepoOpenResponse:
         is_git_repo=True,
     )
 
-    return RepoOpenResponse(
+    response = RepoOpenResponse(
         project_path=request.project_path,
+        git_provider=request.git_provider or provider_options.provider,
         local_repo_path=str(repo_path),
         branch=current_branch,
         head_sha=head_sha,
@@ -58,6 +60,8 @@ def open_repository(request: RepoOpenRequest) -> RepoOpenResponse:
         is_git_repository=True,
         message=message,
     )
+    _set_active_from_response(response)
+    return response
 
 
 def _open_local_project(request: RepoOpenRequest) -> RepoOpenResponse:
@@ -79,8 +83,9 @@ def _open_local_project(request: RepoOpenRequest) -> RepoOpenResponse:
         is_git_repo=git_repo,
     )
 
-    return RepoOpenResponse(
+    response = RepoOpenResponse(
         project_path=str(repo_path),
+        git_provider="local",
         local_repo_path=str(repo_path),
         branch=branch,
         head_sha=head_sha,
@@ -91,6 +96,20 @@ def _open_local_project(request: RepoOpenRequest) -> RepoOpenResponse:
             if git_repo
             else "local project opened (no git repository detected)"
         ),
+    )
+    _set_active_from_response(response)
+    return response
+
+
+def _set_active_from_response(response: RepoOpenResponse) -> None:
+    set_active_repository(
+        ActiveRepository(
+            git_provider=response.git_provider,
+            project_path=response.project_path,
+            local_repo_path=response.local_repo_path,
+            branch=response.branch,
+            head_sha=response.head_sha,
+        )
     )
 
 
