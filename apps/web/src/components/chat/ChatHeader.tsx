@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ProviderBranchSummary, ProviderProjectSummary } from "@/lib/local-worker-client";
+import type { RepositoryOpenMode } from "./ChatApp";
 
 type ConnectionState = "checking" | "connected" | "unavailable";
 
@@ -32,9 +33,31 @@ interface ChatHeaderProps {
   onToggleAdvanced: () => void;
 
   repoPending: boolean;
+  repoOpenMode: RepositoryOpenMode;
   repoError: string | null;
   onOpenRepo: () => void;
 }
+
+const cloneStages = [
+  "Connecting to provider",
+  "Preparing local workspace",
+  "Cloning repository",
+  "Checking out branch",
+  "Finalizing repository context",
+];
+
+const refreshStages = [
+  "Connecting to provider",
+  "Refreshing existing checkout",
+  "Checking out branch",
+  "Finalizing repository context",
+];
+
+const localStages = [
+  "Opening local project",
+  "Inspecting git metadata",
+  "Finalizing repository context",
+];
 
 export function ChatHeader({
   connectionState,
@@ -58,10 +81,26 @@ export function ChatHeader({
   onManualBranchChange,
   onToggleAdvanced,
   repoPending,
+  repoOpenMode,
   repoError,
   onOpenRepo,
 }: ChatHeaderProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [openElapsedSeconds, setOpenElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    if (!repoPending) {
+      setOpenElapsedSeconds(0);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const interval = window.setInterval(() => {
+      setOpenElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [repoPending]);
 
   const connectionLabel =
     connectionState === "connected"
@@ -82,6 +121,37 @@ export function ChatHeader({
   const branchRequired = gitProvider !== "local";
   const effectiveProject = useAdvanced ? manualProjectPath.trim() : selectedProjectPath;
   const effectiveBranch = useAdvanced ? manualBranch.trim() : selectedBranch;
+  const progressStages =
+    repoOpenMode === "clone"
+      ? cloneStages
+      : repoOpenMode === "refresh"
+        ? refreshStages
+        : repoOpenMode === "local"
+          ? localStages
+          : cloneStages;
+  const stageIndex = Math.min(
+    progressStages.length - 1,
+    Math.floor(openElapsedSeconds / 4),
+  );
+  const stageLabel = progressStages[stageIndex];
+  const stagePercent = Math.min(
+    92,
+    Math.round(((stageIndex + 0.45) / progressStages.length) * 100),
+  );
+  const openModeLabel =
+    repoOpenMode === "clone"
+      ? "First-time clone"
+      : repoOpenMode === "refresh"
+        ? "Existing checkout refresh"
+        : repoOpenMode === "local"
+          ? "Local project"
+          : "Repository open";
+  const openHelpText =
+    repoOpenMode === "clone"
+      ? "First-time clones can take a few minutes. RepoOperator is preparing a local checkout."
+      : repoOpenMode === "refresh"
+        ? "RepoOperator is updating the existing local checkout and switching to the selected branch."
+        : "RepoOperator is opening the local workspace and reading git context.";
   const canOpen =
     connectionState === "connected" &&
     !repoPending &&
@@ -250,6 +320,26 @@ export function ChatHeader({
           <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--muted)", alignSelf: "flex-end" }}>
             Use only when the project list is missing the repo you need.
           </p>
+        </div>
+      )}
+
+      {repoPending && (
+        <div className="repo-open-progress" role="status" aria-live="polite">
+          <div className="repo-open-progress-copy">
+            <span className="repo-open-progress-kicker">{openModeLabel}</span>
+            <strong>{stageLabel}</strong>
+            <span>{openHelpText}</span>
+          </div>
+          <div className="repo-open-progress-meta">
+            <span>{openElapsedSeconds}s</span>
+            <span>{effectiveProject}</span>
+          </div>
+          <div className="repo-open-progress-track" aria-hidden="true">
+            <div
+              className="repo-open-progress-bar"
+              style={{ width: `${stagePercent}%` }}
+            />
+          </div>
         </div>
       )}
 

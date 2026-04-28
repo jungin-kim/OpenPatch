@@ -8,6 +8,10 @@ const DEFAULT_AGENT_WORKER_PROXY_TIMEOUT_MS = Number.parseInt(
   process.env.OPENPATCH_WORKER_PROXY_AGENT_TIMEOUT_MS || "60000",
   10,
 );
+const DEFAULT_REPO_OPEN_WORKER_PROXY_TIMEOUT_MS = Number.parseInt(
+  process.env.OPENPATCH_WORKER_PROXY_REPO_OPEN_TIMEOUT_MS || "600000",
+  10,
+);
 
 export class WorkerProxyError extends Error {
   status: number;
@@ -71,4 +75,8 @@ export async function workerProxyFetch(
 
 export function getDefaultAgentWorkerProxyTimeoutMs(): number {
   return DEFAULT_AGENT_WORKER_PROXY_TIMEOUT_MS;
+}
+
+export function getDefaultRepoOpenWorkerProxyTimeoutMs(): number {
+  return DEFAULT_REPO_OPEN_WORKER_PROXY_TIMEOUT_MS;
 }

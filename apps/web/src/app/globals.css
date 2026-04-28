@@ -980,6 +980,77 @@ select {
   font-size: 0.86rem;
 }
 
+.repo-open-progress {
+  padding: 11px 14px 12px;
+  border-top: 1px solid rgba(31, 106, 83, 0.14);
+  background: rgba(31, 106, 83, 0.06);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 16px;
+  align-items: end;
+}
+
+.repo-open-progress-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.repo-open-progress-kicker {
+  color: var(--accent);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.repo-open-progress-copy strong {
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.repo-open-progress-copy span:last-child {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.repo-open-progress-meta {
+  min-width: 0;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-end;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.repo-open-progress-meta span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-open-progress-track {
+  grid-column: 1 / -1;
+  position: relative;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(31, 106, 83, 0.14);
+}
+
+.repo-open-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1b5d49 0%, #2a8f68 100%);
+  transition: width 650ms ease;
+}
+
 /* ── Chat body ────────────────────────────────────── */
 
 .chat-body {

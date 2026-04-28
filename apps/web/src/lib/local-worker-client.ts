@@ -51,6 +51,15 @@ export type RepoOpenPayload = {
   message: string;
 };
 
+export type RepoOpenPlanPayload = {
+  project_path: string;
+  git_provider: string;
+  local_repo_path: string;
+  local_checkout_exists: boolean;
+  open_mode: "clone" | "refresh" | "local" | "unknown";
+  message: string;
+};
+
 export type FileReadPayload = {
   project_path: string;
   relative_path: string;
@@ -171,6 +180,20 @@ export async function openRepository(input: {
   });
 
   return parseWorkerResponse<RepoOpenPayload>(response);
+}
+
+export async function getRepositoryOpenPlan(input: {
+  project_path: string;
+  branch?: string;
+  git_provider?: string;
+}): Promise<RepoOpenPlanPayload> {
+  const response = await fetch("/api/worker/repo-open-plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  return parseWorkerResponse<RepoOpenPlanPayload>(response);
 }
 
 export async function runAgentTask(input: {

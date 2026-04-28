@@ -25,6 +25,7 @@ from openpatch_worker.schemas import (
     HealthResponse,
     ProviderBranchesResponse,
     ProviderProjectsResponse,
+    RepoOpenPlanResponse,
     RepoOpenRequest,
     RepoOpenResponse,
     ThreadListResponse,
@@ -47,7 +48,7 @@ from openpatch_worker.services.git_service import (
     get_diff,
     push_branch,
 )
-from openpatch_worker.services.repo_service import open_repository
+from openpatch_worker.services.repo_service import open_repository, plan_repository_open
 from openpatch_worker.services.thread_service import list_threads, upsert_thread
 
 router = APIRouter()
@@ -115,6 +116,16 @@ def threads_upsert(request: ThreadUpsertRequest) -> ThreadSummary:
 def repo_open(request: RepoOpenRequest) -> RepoOpenResponse:
     try:
         return open_repository(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/repo/open-plan", response_model=RepoOpenPlanResponse)
+def repo_open_plan(request: RepoOpenRequest) -> RepoOpenPlanResponse:
+    try:
+        return plan_repository_open(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

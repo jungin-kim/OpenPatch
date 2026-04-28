@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   getProviderBranches,
   getProviderProjects,
+  getRepositoryOpenPlan,
   getWorkerHealth,
   listThreads,
   LocalWorkerClientError,
@@ -26,6 +27,7 @@ import { ChatComposer } from "./ChatComposer";
 
 type ConnectionState = "checking" | "connected" | "unavailable";
 type ThreadStoreState = "loading" | "connected" | "saving" | "unavailable";
+export type RepositoryOpenMode = "clone" | "refresh" | "local" | "unknown";
 
 export type ChatThread = {
   id: string;
@@ -55,6 +57,7 @@ export function ChatApp() {
   const [projectsPending, setProjectsPending] = useState(false);
   const [branchesPending, setBranchesPending] = useState(false);
   const [repoPending, setRepoPending] = useState(false);
+  const [repoOpenMode, setRepoOpenMode] = useState<RepositoryOpenMode>("unknown");
   const [questionPending, setQuestionPending] = useState(false);
 
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -223,6 +226,16 @@ export function ChatApp() {
   const effectiveBranch = useAdvanced ? manualBranch.trim() : selectedBranch.trim();
   const branchRequired = gitProvider !== "local";
 
+  function getRepositoryOpenMode(projectPath: string): RepositoryOpenMode {
+    if (gitProvider === "local") return "local";
+    if (!projectPath) return "unknown";
+    const seenRecently = recentProjects.some(
+      (project) =>
+        project.git_provider === gitProvider && project.project_path === projectPath,
+    );
+    return seenRecently ? "refresh" : "clone";
+  }
+
   function threadFromRecord(record: ThreadRecordPayload): ChatThread {
     return {
       id: record.id,
@@ -301,6 +314,7 @@ export function ChatApp() {
   // ── Handlers ─────────────────────────────────────────────────────────────
   async function handleOpenRepo() {
     setRepoPending(true);
+    setRepoOpenMode(getRepositoryOpenMode(effectiveProjectPath));
     setRepoError(null);
 
     if (!effectiveProjectPath || (branchRequired && !effectiveBranch)) {
@@ -313,12 +327,21 @@ export function ChatApp() {
       return;
     }
 
+    const openInput = {
+      project_path: effectiveProjectPath,
+      branch: effectiveBranch || undefined,
+      git_provider: gitProvider.trim() || undefined,
+    };
+
     try {
-      const payload = await openRepository({
-        project_path: effectiveProjectPath,
-        branch: effectiveBranch || undefined,
-        git_provider: gitProvider.trim() || undefined,
-      });
+      const plan = await getRepositoryOpenPlan(openInput);
+      setRepoOpenMode(plan.open_mode);
+    } catch {
+      // Planning is a UX hint only; the main repository-open flow remains authoritative.
+    }
+
+    try {
+      const payload = await openRepository(openInput);
       const nextMessages = [buildSwitchMessage(payload)];
       const nextThread: ChatThread = {
         id: `${Date.now()}-${payload.git_provider}-${payload.project_path}`,
@@ -343,6 +366,7 @@ export function ChatApp() {
       );
     } finally {
       setRepoPending(false);
+      setRepoOpenMode("unknown");
     }
   }
 
@@ -544,6 +568,7 @@ export function ChatApp() {
           onManualBranchChange={setManualBranch}
           onToggleAdvanced={handleToggleAdvanced}
           repoPending={repoPending}
+          repoOpenMode={repoOpenMode}
           repoError={repoError}
           onOpenRepo={handleOpenRepo}
         />

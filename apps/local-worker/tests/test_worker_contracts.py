@@ -24,7 +24,7 @@ from openpatch_worker.schemas.requests import (
 from openpatch_worker.services.agent_service import run_agent_task
 from openpatch_worker.services.common import get_repooperator_home_dir
 from openpatch_worker.services.git_providers import resolve_provider_git_options
-from openpatch_worker.services.repo_service import open_repository
+from openpatch_worker.services.repo_service import open_repository, plan_repository_open
 from openpatch_worker.services.thread_service import list_threads, upsert_thread
 
 
@@ -381,6 +381,56 @@ class WorkerContractTests(unittest.TestCase):
             self.assertIn("source: local", prompts[-1])
             self.assertIn(str(local_repo.resolve()), prompts[-1])
             self.assertNotIn("group/repo-a", prompts[-1])
+
+    def test_repository_open_plan_distinguishes_clone_and_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            repooperator_dir = Path(temp_home) / ".repooperator"
+            repo_base = repooperator_dir / "repos"
+            existing_repo = repo_base / "group" / "repo-a"
+            existing_repo.mkdir(parents=True, exist_ok=True)
+            config_path = repooperator_dir / "config.json"
+            config_path.write_text(
+                """
+                {
+                  "gitProvider": {
+                    "provider": "gitlab",
+                    "baseUrl": "https://gitlab.example.com",
+                    "token": "gitlab-test-token"
+                  }
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": str(config_path),
+                    "LOCAL_REPO_BASE_DIR": str(repo_base),
+                    "OPENPATCH_CONFIG_PATH": "",
+                },
+                clear=False,
+            ):
+                refresh_plan = plan_repository_open(
+                    RepoOpenRequest(
+                        project_path="group/repo-a",
+                        branch="main",
+                        git_provider="gitlab",
+                    )
+                )
+                clone_plan = plan_repository_open(
+                    RepoOpenRequest(
+                        project_path="group/repo-b",
+                        branch="main",
+                        git_provider="gitlab",
+                    )
+                )
+
+            self.assertEqual(refresh_plan.open_mode, "refresh")
+            self.assertTrue(refresh_plan.local_checkout_exists)
+            self.assertEqual(clone_plan.open_mode, "clone")
+            self.assertFalse(clone_plan.local_checkout_exists)
 
     def test_thread_history_persists_across_restart_and_repository_switch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:

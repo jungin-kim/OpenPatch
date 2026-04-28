@@ -3,7 +3,7 @@ import logging
 import os
 
 from openpatch_worker.config import get_settings
-from openpatch_worker.schemas import RepoOpenRequest, RepoOpenResponse
+from openpatch_worker.schemas import RepoOpenPlanResponse, RepoOpenRequest, RepoOpenResponse
 from openpatch_worker.services.active_repository import ActiveRepository, set_active_repository
 from openpatch_worker.services.common import get_repo_base_dir, is_git_repository, resolve_project_path
 from openpatch_worker.services.git_providers import (
@@ -14,6 +14,38 @@ from openpatch_worker.services.provider_service import record_recent_project
 from openpatch_worker.services.subprocess_utils import run_subprocess
 
 logger = logging.getLogger(__name__)
+
+
+def plan_repository_open(request: RepoOpenRequest) -> RepoOpenPlanResponse:
+    if _is_local_request(request):
+        repo_path = Path(request.project_path).expanduser().resolve()
+        return RepoOpenPlanResponse(
+            project_path=str(repo_path),
+            git_provider="local",
+            local_repo_path=str(repo_path),
+            local_checkout_exists=repo_path.exists(),
+            open_mode="local",
+            message="RepoOperator will open the selected local workspace.",
+        )
+
+    settings = get_settings()
+    repo_base_dir = get_repo_base_dir()
+    repo_path = _resolve_repo_path(repo_base_dir, request.project_path)
+    provider_options = _get_provider_options(request, settings)
+    git_provider = request.git_provider or (provider_options.provider if provider_options else "provider")
+    checkout_exists = repo_path.exists() and repo_path.is_dir()
+    return RepoOpenPlanResponse(
+        project_path=request.project_path,
+        git_provider=git_provider,
+        local_repo_path=str(repo_path),
+        local_checkout_exists=checkout_exists,
+        open_mode="refresh" if checkout_exists else "clone",
+        message=(
+            "RepoOperator will refresh the existing local checkout."
+            if checkout_exists
+            else "RepoOperator will clone this repository into the local workspace."
+        ),
+    )
 
 
 def open_repository(request: RepoOpenRequest) -> RepoOpenResponse:

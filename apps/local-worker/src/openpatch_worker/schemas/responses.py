@@ -84,6 +84,15 @@ class RepoOpenResponse(BaseModel):
     message: str
 
 
+class RepoOpenPlanResponse(BaseModel):
+    project_path: str
+    git_provider: str
+    local_repo_path: str
+    local_checkout_exists: bool
+    open_mode: str
+    message: str
+
+
 class FileReadResponse(BaseModel):
     project_path: str
     relative_path: str
