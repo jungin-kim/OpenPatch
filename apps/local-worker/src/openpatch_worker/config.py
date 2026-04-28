@@ -26,7 +26,8 @@ class Settings:
     openai_api_key: str | None
     openai_model: str | None
     model_request_timeout_seconds: int
-    openpatch_config_path: Path
+    repooperator_config_path: Path
+    repooperator_home_dir: Path
     configured_git_provider: str | None
     configured_model_connection_mode: str | None
     configured_model_provider: str | None
@@ -50,8 +51,8 @@ class Settings:
 
 
 def get_settings() -> Settings:
-    openpatch_config_path = _get_openpatch_config_path()
-    runtime_config = _load_runtime_config(openpatch_config_path)
+    repooperator_config_path = _get_repooperator_config_path()
+    runtime_config = _load_runtime_config(repooperator_config_path)
     repo_base_dir = Path(
         os.getenv("LOCAL_REPO_BASE_DIR", Path.home() / ".repooperator" / "repos")
     ).expanduser().resolve()
@@ -98,7 +99,8 @@ def get_settings() -> Settings:
         model_request_timeout_seconds=int(
             os.getenv("OPENPATCH_MODEL_REQUEST_TIMEOUT_SECONDS", "60")
         ),
-        openpatch_config_path=openpatch_config_path,
+        repooperator_config_path=repooperator_config_path,
+        repooperator_home_dir=repooperator_config_path.parent,
         configured_git_provider=_resolve_configured_git_provider(runtime_config),
         configured_model_connection_mode=_resolve_configured_model_connection_mode(runtime_config),
         configured_model_provider=_resolve_configured_model_provider(runtime_config),
@@ -106,12 +108,12 @@ def get_settings() -> Settings:
     )
 
 
-def _get_openpatch_config_path() -> Path:
-    configured = os.getenv("OPENPATCH_CONFIG_PATH")
+def _get_repooperator_config_path() -> Path:
+    configured = os.getenv("REPOOPERATOR_CONFIG_PATH") or os.getenv("OPENPATCH_CONFIG_PATH")
     if configured:
         return Path(configured).expanduser().resolve()
     repooperator_path = (Path.home() / ".repooperator" / "config.json").resolve()
-    legacy_path = (Path.home() / ".repooperator" / "config.json").resolve()
+    legacy_path = (Path.home() / ".openpatch" / "config.json").resolve()
     if repooperator_path.exists():
         return repooperator_path
     if legacy_path.exists():

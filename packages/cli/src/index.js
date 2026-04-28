@@ -10,7 +10,7 @@ const { stdin, stdout } = require("node:process");
 const PRODUCT_NAME = "RepoOperator";
 const CLI_COMMAND = "repooperator";
 const CONFIG_DIR = path.join(os.homedir(), ".repooperator");
-const LEGACY_CONFIG_DIR = path.join(os.homedir(), ".repooperator");
+const LEGACY_CONFIG_DIR = path.join(os.homedir(), ".openpatch");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 const LEGACY_CONFIG_PATH = path.join(LEGACY_CONFIG_DIR, "config.json");
 const RUN_DIR = path.join(CONFIG_DIR, "run");
@@ -537,6 +537,7 @@ async function startWorker({ interactive }) {
   const env = {
     ...process.env,
     PYTHONPATH: buildPythonPathEnv(workerLaunch.srcPath, process.env.PYTHONPATH),
+    REPOOPERATOR_CONFIG_PATH: CONFIG_PATH,
     OPENPATCH_CONFIG_PATH: CONFIG_PATH,
     LOCAL_REPO_BASE_DIR: config.localRepoBaseDir || DEFAULT_REPO_BASE_DIR,
     OPENAI_BASE_URL: config.model?.baseUrl || "",

@@ -15,6 +15,7 @@ if str(SRC_DIR) not in sys.path:
 
 from openpatch_worker.config import get_settings
 from openpatch_worker.schemas.requests import AgentProposeFileRequest, AgentRunRequest, RepoOpenRequest
+from openpatch_worker.services.common import get_repooperator_home_dir
 from openpatch_worker.services.git_providers import resolve_provider_git_options
 
 
@@ -60,7 +61,15 @@ class WorkerContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.dict(os.environ, {"HOME": temp_home}, clear=False):
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": "",
+                    "OPENPATCH_CONFIG_PATH": "",
+                },
+                clear=False,
+            ):
                 settings = get_settings()
                 provider_options = resolve_provider_git_options(
                     git_provider="gitlab",
@@ -73,6 +82,14 @@ class WorkerContractTests(unittest.TestCase):
             self.assertEqual(
                 provider_options.clone_url,
                 "https://gitlab.example.com/group/demo-repo.git",
+            )
+            self.assertEqual(
+                settings.repooperator_config_path,
+                (Path(temp_home) / ".repooperator" / "config.json").resolve(),
+            )
+            self.assertEqual(
+                settings.repooperator_home_dir,
+                (Path(temp_home) / ".repooperator").resolve(),
             )
             joined_args = " ".join(provider_options.git_config_args)
             self.assertIn("Authorization: Basic", joined_args)
@@ -96,7 +113,15 @@ class WorkerContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.dict(os.environ, {"HOME": temp_home}, clear=False):
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": "",
+                    "OPENPATCH_CONFIG_PATH": "",
+                },
+                clear=False,
+            ):
                 settings = get_settings()
                 provider_options = resolve_provider_git_options(
                     git_provider="github",
@@ -133,6 +158,8 @@ class WorkerContractTests(unittest.TestCase):
                 os.environ,
                 {
                     "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": "",
+                    "OPENPATCH_CONFIG_PATH": "",
                     "GITLAB_BASE_URL": "https://gitlab.override.example.com",
                     "GITLAB_TOKEN": "override-token",
                 },
@@ -151,6 +178,92 @@ class WorkerContractTests(unittest.TestCase):
                 provider_options.clone_url,
                 "https://gitlab.override.example.com/group/demo-repo.git",
             )
+
+    def test_runtime_config_prefers_repooperator_config_path_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_path = Path(temp_home) / "custom" / "config.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                """
+                {
+                  "gitProvider": {
+                    "provider": "gitlab",
+                    "baseUrl": "https://gitlab.env.example.com",
+                    "token": "env-token"
+                  }
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": str(config_path),
+                    "OPENPATCH_CONFIG_PATH": str(Path(temp_home) / "old" / "config.json"),
+                },
+                clear=False,
+            ):
+                settings = get_settings()
+
+            self.assertEqual(settings.repooperator_config_path, config_path.resolve())
+            self.assertEqual(settings.repooperator_home_dir, config_path.parent.resolve())
+            self.assertEqual(settings.gitlab_base_url, "https://gitlab.env.example.com")
+
+    def test_runtime_config_supports_legacy_openpatch_config_path_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_path = Path(temp_home) / ".openpatch" / "config.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                """
+                {
+                  "gitProvider": {
+                    "provider": "github",
+                    "baseUrl": "https://github.legacy.example.com",
+                    "token": "legacy-token"
+                  }
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "OPENPATCH_CONFIG_PATH": str(config_path),
+                    "REPOOPERATOR_CONFIG_PATH": "",
+                },
+                clear=False,
+            ):
+                settings = get_settings()
+
+            self.assertEqual(settings.repooperator_config_path, config_path.resolve())
+            self.assertEqual(settings.repooperator_home_dir, config_path.parent.resolve())
+            self.assertEqual(settings.github_base_url, "https://github.legacy.example.com")
+
+    def test_runtime_config_falls_back_to_legacy_openpatch_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            legacy_config = Path(temp_home) / ".openpatch" / "config.json"
+            legacy_config.parent.mkdir(parents=True, exist_ok=True)
+            legacy_config.write_text(
+                """
+                {
+                  "gitProvider": {
+                    "provider": "local"
+                  }
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"HOME": temp_home}, clear=True):
+                settings = get_settings()
+                home_dir = get_repooperator_home_dir()
+
+            self.assertEqual(settings.repooperator_config_path, legacy_config.resolve())
+            self.assertEqual(home_dir, legacy_config.parent.resolve())
 
 
 if __name__ == "__main__":

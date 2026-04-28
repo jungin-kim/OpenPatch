@@ -12,7 +12,7 @@ from openpatch_worker.schemas import (
     ProviderProjectSummary,
     ProviderProjectsResponse,
 )
-from openpatch_worker.services.common import get_openpatch_home_dir, is_git_repository
+from openpatch_worker.services.common import get_repooperator_home_dir, is_git_repository
 from openpatch_worker.services.subprocess_utils import run_subprocess
 
 SUPPORTED_PROVIDER_LISTING = {"gitlab", "github", "local"}
@@ -356,7 +356,7 @@ def _normalize_git_provider(git_provider: str) -> str:
 
 
 def _recent_projects_file_path() -> Path:
-    return get_openpatch_home_dir() / RECENT_PROJECTS_FILE_NAME
+    return get_repooperator_home_dir() / RECENT_PROJECTS_FILE_NAME
 
 
 def _load_recent_project_entries() -> list[dict]:

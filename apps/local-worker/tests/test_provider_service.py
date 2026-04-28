@@ -40,18 +40,27 @@ class ProviderServiceTests(unittest.TestCase):
         )
 
     def test_list_recent_project_paths(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_repo_base:
-            repo_base = Path(temp_repo_base)
-            project_one = repo_base / "group-one" / "repo-one"
-            project_two = repo_base / "group-two" / "repo-two"
-            (project_one / ".git").mkdir(parents=True)
-            (project_two / ".git").mkdir(parents=True)
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".repooperator"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_path = config_dir / "config.json"
+            config_path.write_text('{"gitProvider":{"provider":"gitlab"}}', encoding="utf-8")
 
             with patch.dict(
                 os.environ,
-                {"LOCAL_REPO_BASE_DIR": temp_repo_base},
+                {"REPOOPERATOR_CONFIG_PATH": str(config_path)},
                 clear=False,
             ):
+                record_recent_project(
+                    project_path="group-one/repo-one",
+                    git_provider="gitlab",
+                    display_name="repo-one",
+                )
+                record_recent_project(
+                    project_path="group-two/repo-two",
+                    git_provider="gitlab",
+                    display_name="repo-two",
+                )
                 recent = list_recent_project_paths(limit=10)
 
             self.assertIn("group-one/repo-one", recent)
@@ -69,7 +78,7 @@ class ProviderServiceTests(unittest.TestCase):
 
             with patch.dict(
                 os.environ,
-                {"OPENPATCH_CONFIG_PATH": str(config_path)},
+                {"REPOOPERATOR_CONFIG_PATH": str(config_path)},
                 clear=False,
             ):
                 record_recent_project(
