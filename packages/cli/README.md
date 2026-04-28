@@ -32,6 +32,24 @@ The onboarding wizard is organized into six sections:
 
 The wizard uses structured terminal output, bounded health checks, and clear success, warning, and failure states.
 
+## Re-Onboarding
+
+Run onboarding again whenever you want to update the local setup:
+
+```bash
+repooperator onboard
+```
+
+If a config already exists, RepoOperator shows the current model, default repository source, saved repository sources, local repo directory, worker URL, and web URL. You can then choose to:
+
+- keep the current setup and validate it
+- update only model settings
+- update or add repository sources
+- update model and repository sources together
+- fully review model, repository, and local runtime paths
+
+Re-onboarding preserves working settings by default. Repository sources are retained, and adding another source does not erase existing GitLab, GitHub, or local project settings unless you explicitly choose to replace them.
+
 ## Model Connection Modes
 
 RepoOperator supports two model connection modes:

@@ -159,14 +159,44 @@ async function runOnboard() {
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
   try {
+    const existingConfig = await readOptionalConfig();
+    const isReonboarding = Boolean(existingConfig);
     console.log(term.banner());
-    term.heading("1/6", "Welcome", "Set up the local RepoOperator runtime on this machine.");
-    term.summaryBox("What this wizard will configure", [
-      "Model connection for repository questions",
-      "Repository source for guided project selection",
-      "Local worker runtime and repository storage",
-      "A one-command startup flow with repooperator up",
-    ]);
+    term.heading(
+      "1/6",
+      isReonboarding ? "Welcome back" : "Welcome",
+      isReonboarding
+        ? "Update your local RepoOperator setup without losing working settings."
+        : "Set up the local RepoOperator runtime on this machine.",
+    );
+
+    if (existingConfig) {
+      term.summaryBox("Current setup", [
+        ["Config", CONFIG_PATH],
+        ["Model", formatModelSummary(existingConfig.model)],
+        ["Default repository source", formatProviderSummary(existingConfig.gitProvider)],
+        ["Saved repository sources", formatRepositorySourcesSummary(existingConfig)],
+        ["Local repo base dir", existingConfig.localRepoBaseDir || DEFAULT_REPO_BASE_DIR],
+        ["Worker URL", existingConfig.worker?.baseUrl || DEFAULT_WORKER_URL],
+        ["Web URL", existingConfig.web?.baseUrl || DEFAULT_WEB_URL],
+      ]);
+    } else {
+      term.summaryBox("What this wizard will configure", [
+        "Model connection for repository questions",
+        "Repository source for guided project selection",
+        "Local worker runtime and repository storage",
+        "A one-command startup flow with repooperator up",
+      ]);
+    }
+
+    const updatePlan = existingConfig
+      ? await promptReonboardingPlan(rl)
+      : {
+          updateModel: true,
+          updateRepositories: true,
+          updateRuntime: true,
+          fullReconfigure: true,
+        };
 
     term.heading("2/6", "Environment checks", "RepoOperator checks for the local pieces it can prepare automatically.");
     const workerDetection = await term.spinner("Detect local worker installation", () =>
@@ -185,37 +215,48 @@ async function runOnboard() {
     ]);
 
     term.heading("3/6", "Model connection", "Choose how the worker should reach a model.");
-    const modelConfig = await promptModelConfig(rl);
+    const modelConfig = updatePlan.updateModel
+      ? await promptModelConfig(rl, existingConfig?.model)
+      : existingConfig?.model;
 
     term.heading("4/6", "Repository source", "Choose where projects should be discovered from.");
-    const gitProvider = await promptGitProvider(rl);
-    const gitProviderConfig = await promptGitProviderConfig(rl, gitProvider);
+    const repositoryConfig = updatePlan.updateRepositories
+      ? await promptRepositorySourceConfig(rl, existingConfig)
+      : preserveRepositorySourceConfig(existingConfig);
 
     term.heading("5/6", "Local worker setup", "Choose where local checkouts and runtime files should live.");
-    const localRepoBaseDir = await promptWithDefault(
-      rl,
-      "Local repository base directory",
-      DEFAULT_REPO_BASE_DIR,
-    );
+    const localRepoBaseDir = updatePlan.updateRuntime
+      ? await promptWithDefault(
+          rl,
+          "Local repository base directory",
+          existingConfig?.localRepoBaseDir || DEFAULT_REPO_BASE_DIR,
+        )
+      : existingConfig?.localRepoBaseDir || DEFAULT_REPO_BASE_DIR;
 
     const config = {
+      ...existingConfig,
       version: 2,
-      createdAt: new Date().toISOString(),
+      createdAt: existingConfig?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       worker: {
-        baseUrl: DEFAULT_WORKER_URL,
+        ...(existingConfig?.worker || {}),
+        baseUrl: existingConfig?.worker?.baseUrl || DEFAULT_WORKER_URL,
         installed: workerDetection.installed,
         installMode: workerDetection.installMode,
         detectedPath: workerDetection.detectedPath,
       },
       web: {
-        baseUrl: DEFAULT_WEB_URL,
+        ...(existingConfig?.web || {}),
+        baseUrl: existingConfig?.web?.baseUrl || DEFAULT_WEB_URL,
         installed: webDetection.installed,
         detectedPath: webDetection.detectedPath,
       },
       model: modelConfig,
-      gitProvider: gitProviderConfig,
+      gitProvider: repositoryConfig.gitProvider,
+      repositorySources: repositoryConfig.repositorySources,
       localRepoBaseDir,
       daemon: {
+        ...(existingConfig?.daemon || {}),
         prepared: true,
         runDirectory: RUN_DIR,
         logDirectory: LOG_DIR,
@@ -228,7 +269,7 @@ async function runOnboard() {
     await writeJson(CONFIG_PATH, config);
     await writeJson(STATE_PATH, {
       preparedAt: new Date().toISOString(),
-      expectedWorkerUrl: DEFAULT_WORKER_URL,
+      expectedWorkerUrl: config.worker.baseUrl,
       installMode: workerDetection.installMode,
       workerDetected: workerDetection.installed,
       status: "stopped",
@@ -239,13 +280,28 @@ async function runOnboard() {
     term.line("success", `${PRODUCT_NAME} configuration written`, CONFIG_PATH);
 
     let workerStarted = false;
-    try {
-      await term.spinner("Start local worker", () => startWorker({ interactive: false, quiet: true }));
-      workerStarted = true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      term.line("warning", "Worker start needs attention", message);
-      term.line("info", "Inspect logs", `${CLI_COMMAND} worker logs`);
+    const shouldRestartRuntime = existingConfig
+      ? await promptYesNo(rl, "Restart or reload the local worker now?", true)
+      : true;
+    if (shouldRestartRuntime) {
+      try {
+        await term.spinner(
+          existingConfig ? "Restart local worker" : "Start local worker",
+          async () => {
+            if (existingConfig) {
+              await stopWorker({ interactive: false });
+            }
+            await startWorker({ interactive: false, quiet: true });
+          },
+        );
+        workerStarted = true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        term.line("warning", "Worker start needs attention", message);
+        term.line("info", "Inspect logs", `${CLI_COMMAND} worker logs`);
+      }
+    } else {
+      term.line("info", "Runtime restart skipped", `Run ${CLI_COMMAND} worker restart when you want the worker to reload config.`);
     }
 
     const workerHealth = await term.spinner(
@@ -269,12 +325,13 @@ async function runOnboard() {
       ["Worker URL", config.worker.baseUrl],
       ["Web URL", config.web?.baseUrl || DEFAULT_WEB_URL],
       ["Repository source", formatProviderSummary(config.gitProvider)],
+      ["Saved repository sources", formatRepositorySourcesSummary(config)],
       ["Model", formatModelSummary(config.model)],
       ["Worker health", workerHealth.reachable ? "ok" : "needs attention"],
       ["Model connectivity", modelConnectivity.reachable ? "ok" : "needs attention"],
     ]);
 
-    if (workerStarted && workerHealth.reachable && modelConnectivity.reachable) {
+    if ((!shouldRestartRuntime || workerStarted) && workerHealth.reachable && modelConnectivity.reachable) {
       term.summaryBox("Next steps", [
         `Run ${CLI_COMMAND} up`,
         "Open the printed local web URL",
@@ -1536,7 +1593,181 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function promptGitProviderConfig(rl, provider) {
+async function promptReonboardingPlan(rl) {
+  while (true) {
+    printOptionList("What would you like to update?", [
+      ["1", "Validate only", "Keep current settings and refresh runtime metadata"],
+      ["2", "Model connection", "Keep repositories, update model settings"],
+      ["3", "Repository sources", "Keep model, update or add repository sources"],
+      ["4", "Model and repositories", "Update both primary setup areas"],
+      ["5", "Full reconfiguration", "Review model, repositories, and local runtime paths"],
+    ]);
+    const answer = (await rl.question("Choice [1]: ")).trim() || "1";
+    if (answer === "1") {
+      return { updateModel: false, updateRepositories: false, updateRuntime: false, fullReconfigure: false };
+    }
+    if (answer === "2") {
+      return { updateModel: true, updateRepositories: false, updateRuntime: false, fullReconfigure: false };
+    }
+    if (answer === "3") {
+      return { updateModel: false, updateRepositories: true, updateRuntime: false, fullReconfigure: false };
+    }
+    if (answer === "4") {
+      return { updateModel: true, updateRepositories: true, updateRuntime: false, fullReconfigure: false };
+    }
+    if (answer === "5") {
+      return { updateModel: true, updateRepositories: true, updateRuntime: true, fullReconfigure: true };
+    }
+    term.line("warning", "Invalid choice", "Please choose a number from 1 to 5.");
+  }
+}
+
+async function promptRepositorySourceConfig(rl, existingConfig = null) {
+  const existingSources = normalizeRepositorySources(existingConfig);
+  if (existingSources.length) {
+    term.summaryBox("Saved repository sources", [
+      ["Default", formatProviderSummary(existingConfig.gitProvider)],
+      ["Sources", formatRepositorySourcesSummary(existingConfig)],
+    ]);
+  }
+
+  if (existingSources.length && await promptYesNo(rl, "Keep current default repository source?", true)) {
+    if (await promptYesNo(rl, "Add another repository source during this onboarding run?", false)) {
+      const added = await promptSingleRepositorySource(rl, null);
+      if (added.provider === "none") {
+        return preserveRepositorySourceConfig(existingConfig);
+      }
+      const repositorySources = upsertRepositorySource(existingSources, added);
+      const makeDefault = await promptYesNo(rl, `Make ${formatProviderSummary(added)} the default repository source?`, true);
+      return {
+        gitProvider: makeDefault ? added : existingConfig.gitProvider,
+        repositorySources,
+      };
+    }
+
+    return preserveRepositorySourceConfig(existingConfig);
+  }
+
+  if (existingSources.length) {
+    while (true) {
+      printOptionList("Repository source update", [
+        ["1", "Change default", "Choose one of the saved sources as default"],
+        ["2", "Add source", "Add GitLab, GitHub, or local and make it default"],
+        ["3", "Replace sources", "Start repository source setup fresh"],
+      ]);
+      const answer = (await rl.question("Choice [2]: ")).trim() || "2";
+      if (answer === "1") {
+        const gitProvider = await chooseExistingRepositorySource(rl, existingSources);
+        return { gitProvider, repositorySources: existingSources };
+      }
+      if (answer === "2") {
+        const added = await promptSingleRepositorySource(rl, null);
+        if (added.provider === "none") {
+          return preserveRepositorySourceConfig(existingConfig);
+        }
+        return {
+          gitProvider: added,
+          repositorySources: upsertRepositorySource(existingSources, added),
+        };
+      }
+      if (answer === "3") {
+        const next = await promptSingleRepositorySource(rl, null);
+        return {
+          gitProvider: next,
+          repositorySources: next.provider === "none" ? [] : [next],
+        };
+      }
+      term.line("warning", "Invalid choice", "Please choose 1, 2, or 3.");
+    }
+  }
+
+  const gitProvider = await promptSingleRepositorySource(rl, null);
+  return {
+    gitProvider,
+    repositorySources: gitProvider.provider === "none" ? [] : [gitProvider],
+  };
+}
+
+async function promptSingleRepositorySource(rl, existingProviderConfig) {
+  const gitProvider = await promptGitProvider(rl);
+  const existingForProvider = existingProviderConfig?.provider === gitProvider
+    ? existingProviderConfig
+    : null;
+  return promptGitProviderConfig(rl, gitProvider, existingForProvider);
+}
+
+async function chooseExistingRepositorySource(rl, sources) {
+  while (true) {
+    printOptionList(
+      "Choose the default repository source",
+      sources.map((source, index) => [
+        String(index + 1),
+        formatProviderSummary(source),
+        source.provider === "local" ? "local projects" : "hosted provider",
+      ]),
+    );
+    const answer = (await rl.question("Choice [1]: ")).trim() || "1";
+    const choice = Number(answer);
+    if (Number.isInteger(choice) && choice >= 1 && choice <= sources.length) {
+      return sources[choice - 1];
+    }
+    term.line("warning", "Invalid choice", `Please choose a number from 1 to ${sources.length}.`);
+  }
+}
+
+function preserveRepositorySourceConfig(existingConfig) {
+  const repositorySources = normalizeRepositorySources(existingConfig);
+  const gitProvider = existingConfig?.gitProvider || repositorySources[0] || { provider: "none" };
+  return { gitProvider, repositorySources };
+}
+
+function normalizeRepositorySources(config) {
+  const sources = [];
+  if (Array.isArray(config?.repositorySources)) {
+    for (const source of config.repositorySources) {
+      if (source?.provider && source.provider !== "none") {
+        sources.push(source);
+      }
+    }
+  }
+  if (config?.gitProvider?.provider && config.gitProvider.provider !== "none") {
+    sources.unshift(config.gitProvider);
+  }
+  return dedupeRepositorySources(sources);
+}
+
+function upsertRepositorySource(sources, source) {
+  if (!source?.provider || source.provider === "none") {
+    return dedupeRepositorySources(sources);
+  }
+  return dedupeRepositorySources([source, ...sources]);
+}
+
+function dedupeRepositorySources(sources) {
+  const seen = new Set();
+  const unique = [];
+  for (const source of sources) {
+    const key = source.provider === "local"
+      ? "local"
+      : `${source.provider}:${source.baseUrl || ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(source);
+  }
+  return unique;
+}
+
+function formatRepositorySourcesSummary(config) {
+  const sources = normalizeRepositorySources(config);
+  if (!sources.length) {
+    return "none configured";
+  }
+  return sources.map(formatProviderSummary).join(", ");
+}
+
+async function promptGitProviderConfig(rl, provider, existingProviderConfig = null) {
   if (provider === "gitlab") {
     term.summaryBox("GitLab source", [
       "Use a GitLab personal, project, or group token with repository read access.",
@@ -1545,9 +1776,9 @@ async function promptGitProviderConfig(rl, provider) {
     const baseUrl = await promptWithDefault(
       rl,
       "GitLab base URL",
-      "https://gitlab.com",
+      existingProviderConfig?.baseUrl || "https://gitlab.com",
     );
-    const token = await promptWithDefault(rl, "GitLab token", "");
+    const token = await promptWithDefault(rl, "GitLab token", existingProviderConfig?.token || "");
     return { provider: "gitlab", baseUrl, token };
   }
 
@@ -1559,9 +1790,9 @@ async function promptGitProviderConfig(rl, provider) {
     const baseUrl = await promptWithDefault(
       rl,
       "GitHub base URL",
-      "https://github.com",
+      existingProviderConfig?.baseUrl || "https://github.com",
     );
-    const token = await promptWithDefault(rl, "GitHub token", "");
+    const token = await promptWithDefault(rl, "GitHub token", existingProviderConfig?.token || "");
     return { provider: "github", baseUrl, token };
   }
 
@@ -1577,26 +1808,30 @@ async function promptGitProviderConfig(rl, provider) {
   return { provider: "none" };
 }
 
-async function promptModelConfig(rl) {
-  const connectionMode = await promptModelConnectionMode(rl);
-
-  if (connectionMode === "local-runtime") {
-    return promptLocalRuntimeModelConfig(rl);
+async function promptModelConfig(rl, existingModelConfig = null) {
+  if (existingModelConfig && await promptYesNo(rl, `Keep current model settings (${formatModelSummary(existingModelConfig)})?`, true)) {
+    return existingModelConfig;
   }
 
-  return promptRemoteApiModelConfig(rl);
+  const connectionMode = await promptModelConnectionMode(rl, existingModelConfig?.connectionMode);
+
+  if (connectionMode === "local-runtime") {
+    return promptLocalRuntimeModelConfig(rl, existingModelConfig);
+  }
+
+  return promptRemoteApiModelConfig(rl, existingModelConfig);
 }
 
-async function promptLocalRuntimeModelConfig(rl) {
-  const provider = await promptLocalRuntimeProvider(rl);
+async function promptLocalRuntimeModelConfig(rl, existingModelConfig = null) {
+  const provider = await promptLocalRuntimeProvider(rl, existingModelConfig?.provider);
   if (provider === "ollama") {
-    return promptOllamaModelConfig(rl);
+    return promptOllamaModelConfig(rl, existingModelConfig?.provider === "ollama" ? existingModelConfig : null);
   }
   throw new Error(`Unsupported local runtime provider: ${provider}`);
 }
 
-async function promptRemoteApiModelConfig(rl) {
-  const provider = await promptRemoteApiProvider(rl);
+async function promptRemoteApiModelConfig(rl, existingModelConfig = null) {
+  const provider = await promptRemoteApiProvider(rl, existingModelConfig?.provider);
 
   const providerConfig = MODEL_PROVIDER_CONFIG[provider];
 
@@ -1605,9 +1840,10 @@ async function promptRemoteApiModelConfig(rl) {
     "Secrets are stored locally in ~/.repooperator/config.json.",
   ]);
 
-  let baseUrl = providerConfig.defaultBaseUrl || "";
-  let apiKey = providerConfig.defaultApiKey || "";
-  let model = providerConfig.defaultModel || "";
+  const existingMatchesProvider = existingModelConfig?.provider === provider;
+  let baseUrl = existingMatchesProvider ? existingModelConfig.baseUrl || "" : providerConfig.defaultBaseUrl || "";
+  let apiKey = existingMatchesProvider ? existingModelConfig.apiKey || "" : providerConfig.defaultApiKey || "";
+  let model = existingMatchesProvider ? existingModelConfig.model || "" : providerConfig.defaultModel || "";
 
   if (providerConfig.prompts.includes("baseUrl")) {
     baseUrl = await promptWithDefault(rl, "Base URL", baseUrl);
@@ -1638,7 +1874,7 @@ async function promptRemoteApiModelConfig(rl) {
   };
 }
 
-async function promptOllamaModelConfig(rl) {
+async function promptOllamaModelConfig(rl, existingModelConfig = null) {
   term.summaryBox("Local model runtime: Ollama", [
     "RepoOperator will detect the Ollama command, check the local server, and list available models.",
     `Recommended coding model: ${OLLAMA_RECOMMENDED_MODEL}`,
@@ -1652,7 +1888,7 @@ async function promptOllamaModelConfig(rl) {
     }
   }
 
-  const baseUrl = await promptWithDefault(rl, "Ollama base URL", OLLAMA_DEFAULT_BASE_URL);
+  const baseUrl = await promptWithDefault(rl, "Ollama base URL", existingModelConfig?.baseUrl || OLLAMA_DEFAULT_BASE_URL);
   const serverState = await ensureOllamaServerReady(rl, baseUrl);
   const listedModels = await listOllamaModels();
   const selectedModel = await chooseOllamaModel(
@@ -1670,13 +1906,14 @@ async function promptOllamaModelConfig(rl) {
   };
 }
 
-async function promptModelConnectionMode(rl) {
+async function promptModelConnectionMode(rl, existingConnectionMode = null) {
   while (true) {
     printOptionList("Choose how RepoOperator should connect to a model", [
       ["1", "Local model runtime", "Ollama on this machine"],
       ["2", "Remote model API", "OpenAI-compatible or hosted provider"],
     ]);
-    const answer = (await rl.question("Choice [1]: ")).trim() || "1";
+    const defaultChoice = existingConnectionMode === "remote-api" ? "2" : "1";
+    const answer = (await rl.question(`Choice [${defaultChoice}]: `)).trim() || defaultChoice;
 
     if (answer === "1") {
       return "local-runtime";
@@ -1688,7 +1925,7 @@ async function promptModelConnectionMode(rl) {
   }
 }
 
-async function promptLocalRuntimeProvider(rl) {
+async function promptLocalRuntimeProvider(rl, _existingProvider = null) {
   while (true) {
     printOptionList("Choose a local model runtime", [
       ["1", "Ollama", "Local OpenAI-compatible model server"],
@@ -1702,7 +1939,7 @@ async function promptLocalRuntimeProvider(rl) {
   }
 }
 
-async function promptRemoteApiProvider(rl) {
+async function promptRemoteApiProvider(rl, existingProvider = null) {
   while (true) {
     printOptionList("Choose a remote model API", [
       ["1", "OpenAI-compatible", "Enterprise gateways and compatible APIs"],
@@ -1710,7 +1947,8 @@ async function promptRemoteApiProvider(rl) {
       ["3", "Anthropic", "Anthropic API"],
       ["4", "Gemini", "Gemini OpenAI-compatible endpoint"],
     ]);
-    const answer = (await rl.question("Choice [1]: ")).trim() || "1";
+    const defaultChoice = remoteApiProviderToChoice(existingProvider) || "1";
+    const answer = (await rl.question(`Choice [${defaultChoice}]: `)).trim() || defaultChoice;
 
     if (answer === "1") {
       return "openai-compatible";
@@ -1935,6 +2173,14 @@ async function readConfig() {
   await ensureMigratedRuntimeHome();
   const raw = await fsp.readFile(CONFIG_PATH, "utf-8");
   return normalizeConfig(JSON.parse(raw));
+}
+
+async function readOptionalConfig() {
+  await ensureMigratedRuntimeHome();
+  if (!(await fileExists(CONFIG_PATH))) {
+    return null;
+  }
+  return readConfig();
 }
 
 async function readState() {
@@ -2457,6 +2703,12 @@ function makeCheck(name, ok, detail) {
 
 function redactConfig(config) {
   const normalized = normalizeConfig(config);
+  const redactedRepositorySources = Array.isArray(normalized.repositorySources)
+    ? normalized.repositorySources.map((source) => ({
+        ...source,
+        token: source.token ? redactSecret(source.token) : "",
+      }))
+    : normalized.repositorySources;
   const redacted = {
     ...normalized,
     model: {
@@ -2469,8 +2721,9 @@ function redactConfig(config) {
           token: normalized.gitProvider.token
             ? redactSecret(normalized.gitProvider.token)
             : "",
-        }
+      }
       : normalized.gitProvider,
+    repositorySources: redactedRepositorySources,
   };
   delete redacted.modelBackend;
   return redacted;
@@ -2517,6 +2770,22 @@ function formatModelConnectionMode(modelConfig) {
     return "remote API";
   }
   return modelConfig.connectionMode;
+}
+
+function remoteApiProviderToChoice(provider) {
+  if (provider === "openai-compatible") {
+    return "1";
+  }
+  if (provider === "openai") {
+    return "2";
+  }
+  if (provider === "anthropic") {
+    return "3";
+  }
+  if (provider === "gemini") {
+    return "4";
+  }
+  return null;
 }
 
 function hasRequiredModelFields(modelConfig) {
