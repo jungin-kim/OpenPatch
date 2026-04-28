@@ -74,11 +74,11 @@ Starts the local worker as a managed background process for development. The CLI
 
 ### `repooperator worker stop`
 
-Stops the managed local worker process.
+Stops the managed local worker process, waits briefly for a graceful shutdown, force-stops it if needed, verifies the configured worker port is no longer occupied by that worker, and cleans up stale runtime state files automatically.
 
 ### `repooperator worker restart`
 
-Restarts the managed local worker process.
+Performs a full stop-and-cleanup cycle first, then starts the worker again. If the configured worker port is still occupied by another process, restart fails clearly instead of trying to start on top of it.
 
 ### `repooperator worker status`
 

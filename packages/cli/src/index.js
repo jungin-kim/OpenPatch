@@ -276,17 +276,19 @@ async function runDoctor() {
   const workerBinding = parseWorkerBinding(workerUrl);
   const workerRunning = await isWorkerProcessRunning(runtimeState);
   const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
-  const workerHealth = await checkWorkerHealth(
-    workerUrl,
-    DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
-  );
+  const workerHealth = portState.inUse || workerRunning.running
+    ? await checkWorkerHealth(
+      workerUrl,
+      DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+    )
+    : { reachable: false, message: "Worker is stopped." };
   const modelConnectivity = await checkModelConnectivity(
     config.model,
     DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
   );
-  const urlMatches =
-    Boolean(runtimeState?.workerUrl) &&
-    runtimeState.workerUrl === (config.worker?.baseUrl || DEFAULT_WORKER_URL);
+  const urlMatches = runtimeState?.workerUrl
+    ? runtimeState.workerUrl === (config.worker?.baseUrl || DEFAULT_WORKER_URL)
+    : !workerRunning.running;
 
   checks.push(
     makeCheck(
@@ -328,7 +330,9 @@ async function runDoctor() {
       "Configured worker URL matches runtime state",
       urlMatches,
       urlMatches
-        ? `Configured URL matches ${runtimeState.workerUrl}.`
+        ? runtimeState?.workerUrl
+          ? `Configured URL matches ${runtimeState.workerUrl}.`
+          : "No active runtime state is recorded because the worker is stopped."
         : `Configured URL is '${config.worker?.baseUrl || DEFAULT_WORKER_URL}', runtime state is '${runtimeState?.workerUrl || "not available"}'.`,
     ),
   );
@@ -379,10 +383,12 @@ async function runStatus() {
   const workerBinding = parseWorkerBinding(workerUrl);
   const workerRunning = await isWorkerProcessRunning(runtimeState);
   const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
-  const workerHealth = await checkWorkerHealth(
-    workerUrl,
-    DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
-  );
+  const workerHealth = portState.inUse || workerRunning.running
+    ? await checkWorkerHealth(
+      workerUrl,
+      DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
+    )
+    : { reachable: false, message: "Worker is stopped." };
   const modelConnectivity = await checkModelConnectivity(
     config.model,
     DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
@@ -435,14 +441,8 @@ async function startWorker({ interactive }) {
   }
 
   if (runtimeState?.pid && !running.running) {
-    await removePidFile();
-    runtimeState = {
-      ...(runtimeState || {}),
-      status: "stopped",
-      stoppedAt: new Date().toISOString(),
-      pid: null,
-    };
-    await writeRuntimeState(runtimeState);
+    await clearRuntimeStateFiles();
+    runtimeState = null;
   }
 
   if (!workerInstallation.installed || !workerInstallation.detectedPath) {
@@ -610,34 +610,50 @@ async function startWorker({ interactive }) {
 }
 
 async function stopWorker({ interactive }) {
+  await ensureMigratedRuntimeHome();
+  const config = await readConfig().catch(() => null);
   const runtimeState = await readState();
+  const workerUrl = config?.worker?.baseUrl || runtimeState?.workerUrl || DEFAULT_WORKER_URL;
+  const workerBinding = parseWorkerBinding(workerUrl);
   const running = await isWorkerProcessRunning(runtimeState);
+  const stopResult = await stopWorkerProcess(runtimeState?.pid || null);
+  const portState = await checkPortInUse(
+    workerBinding.host,
+    workerBinding.port,
+    DEFAULT_PORT_CHECK_TIMEOUT_MS,
+  );
+  const workerHealth = portState.inUse
+    ? await checkWorkerHealth(workerUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS)
+    : { reachable: false, message: "Worker is stopped." };
 
-  if (!runtimeState?.pid || !running.running) {
-    if (interactive) {
-      console.log("The local worker is not currently running.");
-    }
-    await writeJson(STATE_PATH, {
-      ...(runtimeState || {}),
-      status: "stopped",
-      stoppedAt: new Date().toISOString(),
-      pid: null,
-    });
-    await removePidFile();
-    return;
+  if (!stopResult.exited) {
+    throw new Error(
+      `${PRODUCT_NAME} could not fully stop the recorded worker process${runtimeState?.pid ? ` ${runtimeState.pid}` : ""}.`,
+    );
   }
 
-  await safeStopWorkerProcess(runtimeState.pid);
-  await writeRuntimeState({
-    ...runtimeState,
-    status: "stopped",
-    stoppedAt: new Date().toISOString(),
-    pid: null,
-  });
-  await removePidFile();
+  if (portState.inUse) {
+    const detail = workerHealth.reachable
+      ? `Another responding worker or service is still listening on ${workerUrl}.`
+      : `Another process is still occupying ${workerUrl}.`;
+    const prefix = stopResult.hadPid
+      ? `${PRODUCT_NAME} stopped the recorded worker process, but the configured worker port is still in use.`
+      : `${PRODUCT_NAME} did not have a running recorded worker process, but the configured worker port is still in use.`;
+    throw new Error(
+      `${prefix} ${detail}`,
+    );
+  }
+
+  await clearRuntimeStateFiles();
 
   if (interactive) {
-    console.log(`${PRODUCT_NAME} local worker stopped.`);
+    if (!runtimeState?.pid || !running.running) {
+      console.log(`${PRODUCT_NAME} local worker was already stopped. Cleaned up stale runtime state.`);
+    } else if (stopResult.forced) {
+      console.log(`${PRODUCT_NAME} local worker did not exit gracefully and was force-stopped.`);
+    } else {
+      console.log(`${PRODUCT_NAME} local worker stopped cleanly.`);
+    }
   }
 }
 
@@ -677,7 +693,9 @@ async function showWorkerStatus() {
   const workerBinding = parseWorkerBinding(workerUrl);
   const workerRunning = await isWorkerProcessRunning(runtimeState);
   const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
-  const workerHealth = await checkWorkerHealth(workerUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS);
+  const workerHealth = portState.inUse || workerRunning.running
+    ? await checkWorkerHealth(workerUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS)
+    : { reachable: false, message: "Worker is stopped." };
 
   console.log(`${PRODUCT_NAME} worker status`);
   console.log("");
@@ -1400,6 +1418,14 @@ async function writeRuntimeState(state) {
   }
 }
 
+async function clearRuntimeStateFiles() {
+  await removeFileIfExists(PID_PATH);
+  await removeFileIfExists(STATE_PATH);
+  await removeFileIfExists(LEGACY_RUN_STATE_PATH);
+  await removeFileIfExists(LEGACY_STATE_PATH);
+  await removeFileIfExists(path.join(LEGACY_RUN_DIR, "worker.pid"));
+}
+
 async function writeJson(filePath, value) {
   await fsp.writeFile(filePath, JSON.stringify(value, null, 2) + "\n", "utf-8");
 }
@@ -1424,7 +1450,9 @@ async function isWorkerProcessRunning(runtimeState) {
   if (!runtimeState?.pid) {
     return {
       running: false,
-      message: "No worker pid is recorded in the local runtime state.",
+      message: runtimeState?.status === "stopped"
+        ? "Worker is stopped."
+        : "No worker pid is recorded in the local runtime state.",
     };
   }
 
@@ -1442,25 +1470,50 @@ async function isWorkerProcessRunning(runtimeState) {
   }
 }
 
-async function safeStopWorkerProcess(pid) {
+async function stopWorkerProcess(pid) {
+  if (!pid) {
+    return {
+      hadPid: false,
+      exited: true,
+      forced: false,
+    };
+  }
+
+  const initiallyRunning = await isWorkerProcessRunning({ pid });
+  if (!initiallyRunning.running) {
+    return {
+      hadPid: true,
+      exited: true,
+      forced: false,
+      stale: true,
+    };
+  }
+
   try {
     process.kill(-pid, "SIGTERM");
   } catch {
     try {
       process.kill(pid, "SIGTERM");
     } catch {
-      return;
+      return {
+        hadPid: true,
+        exited: !(await isWorkerProcessRunning({ pid })).running,
+        forced: false,
+      };
     }
   }
 
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-      await sleep(200);
-    } catch {
-      return;
+    const running = await isWorkerProcessRunning({ pid });
+    if (!running.running) {
+      return {
+        hadPid: true,
+        exited: true,
+        forced: false,
+      };
     }
+    await sleep(200);
   }
 
   try {
@@ -1469,14 +1522,46 @@ async function safeStopWorkerProcess(pid) {
     try {
       process.kill(pid, "SIGKILL");
     } catch {
-      return;
+      const running = await isWorkerProcessRunning({ pid });
+      return {
+        hadPid: true,
+        exited: !running.running,
+        forced: true,
+      };
     }
   }
+
+  const forceDeadline = Date.now() + 2000;
+  while (Date.now() < forceDeadline) {
+    const running = await isWorkerProcessRunning({ pid });
+    if (!running.running) {
+      return {
+        hadPid: true,
+        exited: true,
+        forced: true,
+      };
+    }
+    await sleep(100);
+  }
+
+  return {
+    hadPid: true,
+    exited: false,
+    forced: true,
+  };
 }
 
 async function removePidFile() {
   try {
     await fsp.unlink(PID_PATH);
+  } catch {
+    return;
+  }
+}
+
+async function removeFileIfExists(filePath) {
+  try {
+    await fsp.unlink(filePath);
   } catch {
     return;
   }
@@ -1698,6 +1783,12 @@ function describeWorkerProcessState(workerRunning, runtimeState) {
   if (workerRunning.running) {
     return workerRunning.message;
   }
+  if (runtimeState?.status === "stopped") {
+    return "Worker is stopped and no active runtime state is recorded.";
+  }
+  if (!runtimeState?.pid && !runtimeState?.failureType) {
+    return "Worker is stopped.";
+  }
   if (runtimeState?.failureType === "import_failure") {
     return `Worker is not running because startup failed to import the app. ${runtimeState.lastError || ""}`.trim();
   }
@@ -1716,6 +1807,9 @@ function describeWorkerProcessState(workerRunning, runtimeState) {
 function describeWorkerHealthState(workerHealth, runtimeState, portState) {
   if (workerHealth.reachable) {
     return workerHealth.message;
+  }
+  if (runtimeState?.status === "stopped" || (!runtimeState?.failureType && !runtimeState?.pid && !portState?.inUse)) {
+    return "Worker is stopped.";
   }
   if (runtimeState?.failureType === "port_in_use") {
     return runtimeState.lastError || workerHealth.message;
