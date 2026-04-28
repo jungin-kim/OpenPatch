@@ -7,6 +7,8 @@
 [![GitHub repo](https://img.shields.io/badge/GitHub-RepoOperator-181717?logo=github)](https://github.com/jungin-kim/RepoOperator)
 [![Issues](https://img.shields.io/github/issues/jungin-kim/RepoOperator)](https://github.com/jungin-kim/RepoOperator/issues)
 
+![RepoOperator CLI Screenshot](/docs/repooperator-screenshot.png)
+
 RepoOperator is a local-first repository assistant for opening private codebases, asking read-only questions, and keeping repository access on your machine.
 
 ## Why RepoOperator
