@@ -1,4 +1,4 @@
-// File: /Users/junginkim/Documents/GitHub/OpenPatch/apps/web/src/app/api/worker/health/route.ts
+// File: /Users/junginkim/Documents/GitHub/RepoOperator/apps/web/src/app/api/worker/health/route.ts
 import * as entry from '../../../../../../src/app/api/worker/health/route.js'
 import type { NextRequest } from 'next/server.js'
 
