@@ -11,6 +11,7 @@ import {
   listThreads,
   LocalWorkerClientError,
   openRepository,
+  proposeFileEdit,
   runAgentTask,
   saveThread,
   type AgentRunPayload,
@@ -19,6 +20,11 @@ import {
   type RepoOpenPayload,
   type ThreadRecordPayload,
 } from "@/lib/local-worker-client";
+import {
+  proposalFromPayload,
+  type ChangeProposal,
+  type ProposalStatus,
+} from "./ProposalCard";
 
 import { ChatLayout } from "./ChatLayout";
 import { ChatSidebar } from "./ChatSidebar";
@@ -83,6 +89,8 @@ export function ChatApp() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadStoreState, setThreadStoreState] = useState<ThreadStoreState>("loading");
   const [question, setQuestion] = useState("");
+  const [proposePending, setProposePending] = useState(false);
+  const [writeMode, setWriteMode] = useState<"read-only" | "write-with-approval">("read-only");
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
 
   // ── Health check ─────────────────────────────────────────────────────────
@@ -97,6 +105,7 @@ export function ChatApp() {
       setConfiguredModelConnectionMode(payload.configured_model_connection_mode || "");
       setConfiguredModelProvider(payload.configured_model_provider || "");
       setConfiguredModelName(payload.configured_model_name || "");
+      setWriteMode(payload.write_mode ?? "read-only");
       if (options.syncProvider && nextSource) setGitProvider(nextSource);
       if (payload.recent_projects?.length) {
         setManualProjectPath((cur) => cur || payload.recent_projects?.[0] || "");
@@ -107,6 +116,7 @@ export function ChatApp() {
       setConfiguredModelConnectionMode("");
       setConfiguredModelProvider("");
       setConfiguredModelName("");
+      setWriteMode("read-only");
     }
   }
 
@@ -652,6 +662,86 @@ export function ChatApp() {
     ].slice(0, 20);
   }
 
+  function handleLocalBranchChange(newBranch: string) {
+    if (!repoResult) return;
+    const updated: typeof repoResult = { ...repoResult, branch: newBranch };
+    setRepoResult(updated);
+    // Update the active thread's repo snapshot so the branch is persisted.
+    if (activeThreadId) {
+      updateActiveThread(messages, updated);
+    }
+  }
+
+  async function handleProposeChange(relativePath: string, instruction: string) {
+    if (!repoResult || proposePending) return;
+
+    const userMessage: ChatMessage = {
+      id: `${Date.now()}-user`,
+      role: "user",
+      content: `Propose change to ${relativePath}:\n${instruction}`,
+      timestamp: new Date(),
+    };
+    const messagesWithUser = [...messages, userMessage];
+    setMessages(messagesWithUser);
+    updateActiveThread(messagesWithUser);
+    setProposePending(true);
+
+    try {
+      const payload = await proposeFileEdit({
+        project_path: repoResult.project_path,
+        relative_path: relativePath,
+        instruction,
+      });
+      const proposal: ChangeProposal = proposalFromPayload(payload, {
+        projectPath: repoResult.project_path,
+        branch: repoResult.branch,
+      });
+      const proposalMessage: ChatMessage = {
+        id: `${Date.now()}-proposal`,
+        role: "assistant",
+        content: `Proposed change to \`${relativePath}\`. Review the diff below and apply if it looks correct.`,
+        timestamp: new Date(),
+        proposal,
+      };
+      const messagesWithProposal = [...messagesWithUser, proposalMessage];
+      setMessages(messagesWithProposal);
+      updateActiveThread(messagesWithProposal);
+    } catch (error) {
+      const msg =
+        error instanceof LocalWorkerClientError || error instanceof Error
+          ? error.message
+          : "Unable to generate the file change proposal.";
+      const errorMessage: ChatMessage = {
+        id: `${Date.now()}-error`,
+        role: "assistant",
+        content: `Error generating proposal: ${msg}`,
+        timestamp: new Date(),
+      };
+      const messagesWithError = [...messagesWithUser, errorMessage];
+      setMessages(messagesWithError);
+      updateActiveThread(messagesWithError);
+    } finally {
+      setProposePending(false);
+    }
+  }
+
+  function handleProposalStatusChange(id: string, status: ProposalStatus, _message?: string) {
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.proposal?.id === id
+          ? { ...msg, proposal: { ...msg.proposal, status } }
+          : msg,
+      ),
+    );
+    // Persist the updated proposal status in the thread.
+    if (activeThreadId) {
+      setMessages((current) => {
+        updateActiveThread(current);
+        return current;
+      });
+    }
+  }
+
   function handleRecentProjectSelect(project: ProviderProjectSummary) {
     setGitProvider(project.git_provider);
     setUseAdvanced(project.git_provider === "local");
@@ -683,6 +773,7 @@ export function ChatApp() {
           connectionState={connectionState}
           configuredModelName={configuredModelName}
           configuredModelProvider={configuredModelProvider}
+          writeMode={writeMode}
           gitProvider={gitProvider}
           onGitProviderChange={handleGitProviderChange}
           projects={projects}
@@ -712,6 +803,9 @@ export function ChatApp() {
           repoResult={repoResult}
           questionPending={questionPending}
           gitProvider={gitProvider}
+          onLocalBranchChange={handleLocalBranchChange}
+          writeMode={writeMode}
+          onProposalStatusChange={handleProposalStatusChange}
         />
       }
       composer={
@@ -721,6 +815,9 @@ export function ChatApp() {
           onSubmit={handleQuestionSubmit}
           disabled={!repoResult}
           pending={questionPending}
+          writeMode={writeMode}
+          onProposeChange={handleProposeChange}
+          proposePending={proposePending}
         />
       }
     />

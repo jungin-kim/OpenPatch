@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from openpatch_worker.config import WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
 from openpatch_worker.schemas import AgentProposeFileRequest, AgentProposeFileResponse
 from openpatch_worker.services.common import (
     ensure_git_repository,
@@ -16,6 +17,14 @@ MAX_FILE_CHARS = 12_000
 
 
 def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileResponse:
+    settings = get_settings()
+    if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
+        raise ValueError(
+            "Write operations are disabled. "
+            "Set permissions.writeMode to 'write-with-approval' in your RepoOperator config "
+            "to enable change proposals."
+        )
+
     repo_path = resolve_project_path(request.project_path)
     ensure_git_repository(repo_path)
     target_path = ensure_safe_write_path(repo_path, request.relative_path)

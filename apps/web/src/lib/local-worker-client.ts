@@ -9,6 +9,7 @@ export type WorkerHealthPayload = {
   configured_model_connection_mode?: string | null;
   configured_model_provider?: string | null;
   configured_model_name?: string | null;
+  write_mode?: "read-only" | "write-with-approval";
   recent_projects?: string[];
 };
 
@@ -70,6 +71,48 @@ export type FileReadPayload = {
   content: string;
   truncated: boolean;
   bytes_read: number;
+};
+
+export type LocalBranchSummary = {
+  name: string;
+  is_current: boolean;
+};
+
+export type GitBranchListPayload = {
+  project_path: string;
+  current_branch: string | null;
+  branches: LocalBranchSummary[];
+};
+
+export type GitBranchCreatePayload = {
+  project_path: string;
+  branch: string;
+  from_ref: string;
+  head_sha: string;
+  message: string;
+};
+
+export type GitCheckoutPayload = {
+  project_path: string;
+  branch: string;
+  head_sha: string | null;
+  message: string;
+};
+
+export type AgentProposeFilePayload = {
+  project_path: string;
+  relative_path: string;
+  model: string;
+  context_summary: string;
+  original_content: string;
+  proposed_content: string;
+};
+
+export type FileWritePayload = {
+  project_path: string;
+  relative_path: string;
+  bytes_written: number;
+  message: string;
 };
 
 export type AgentRunPayload = {
@@ -241,6 +284,73 @@ export async function readRepositoryFile(input: {
   });
 
   return parseWorkerResponse<FileReadPayload>(response);
+}
+
+export async function listLocalBranches(input: {
+  project_path: string;
+}): Promise<GitBranchListPayload> {
+  const query = new URLSearchParams({ project_path: input.project_path });
+  const response = await fetch(`/api/worker/git-branches?${query.toString()}`, {
+    cache: "no-store",
+  });
+  return parseWorkerResponse<GitBranchListPayload>(response);
+}
+
+export async function createLocalBranch(input: {
+  project_path: string;
+  branch: string;
+  from_ref?: string;
+  checkout?: boolean;
+}): Promise<GitBranchCreatePayload> {
+  const response = await fetch("/api/worker/git-branch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_path: input.project_path,
+      branch: input.branch,
+      from_ref: input.from_ref ?? "HEAD",
+      checkout: input.checkout ?? true,
+    }),
+  });
+  return parseWorkerResponse<GitBranchCreatePayload>(response);
+}
+
+export async function checkoutLocalBranch(input: {
+  project_path: string;
+  branch: string;
+}): Promise<GitCheckoutPayload> {
+  const response = await fetch("/api/worker/git-checkout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return parseWorkerResponse<GitCheckoutPayload>(response);
+}
+
+export async function proposeFileEdit(input: {
+  project_path: string;
+  relative_path: string;
+  instruction: string;
+}): Promise<AgentProposeFilePayload> {
+  const response = await fetch("/api/worker/propose-file", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return parseWorkerResponse<AgentProposeFilePayload>(response);
+}
+
+export async function writeRepositoryFile(input: {
+  project_path: string;
+  relative_path: string;
+  content: string;
+}): Promise<FileWritePayload> {
+  const response = await fetch("/api/worker/fs-write", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return parseWorkerResponse<FileWritePayload>(response);
 }
 
 export async function listThreads(): Promise<ThreadListPayload> {

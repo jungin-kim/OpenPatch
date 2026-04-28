@@ -1,3 +1,26 @@
+"""
+Agent service — public entry point for /agent/run.
+
+The execution path now uses LangGraph (via ``agent_graph.run_agent_graph``).
+If LangGraph is unavailable for any reason, the service falls back to the
+legacy direct execution path so existing Q&A behavior is never broken.
+
+What moved into LangGraph (agent_graph.py):
+  - classify_request   — query classification + file hint extraction
+  - resolve_repo_context — active-repository validation
+  - retrieve_or_read_files — file retrieval pipeline
+  - answer_read_only   — model call
+  - format_response    — AgentRunResponse assembly
+
+What stayed outside LangGraph (unchanged):
+  - FastAPI routes  (api/routes.py)
+  - Repository open flow  (repo_service.py)
+  - Provider integration  (provider_service.py, git_providers.py)
+  - Thread persistence  (thread_service.py)
+  - CLI lifecycle  (packages/cli)
+  - Web UI state  (apps/web)
+"""
+
 import logging
 
 from openpatch_worker.schemas import AgentRunRequest, AgentRunResponse
@@ -10,6 +33,7 @@ from openpatch_worker.services.model_client import (
 
 logger = logging.getLogger(__name__)
 
+_USE_LANGGRAPH = True  # set to False to force the legacy path for debugging
 
 _SYSTEM_PROMPT = """\
 You are RepoOperator, a read-only repository assistant.
@@ -29,13 +53,44 @@ which additional files should be inspected.
 
 
 def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
+    """Run the agent task, using LangGraph when available.
+
+    Falls back to the legacy direct execution path if the graph raises an
+    unexpected import or runtime error that is not a user-facing ValueError.
+    """
+    if _USE_LANGGRAPH:
+        try:
+            from openpatch_worker.services.agent_graph import run_agent_graph
+
+            logger.debug("agent_service: using LangGraph execution path")
+            return run_agent_graph(request)
+        except (ValueError, RuntimeError):
+            # User-facing errors (bad repo context, model failure) — re-raise
+            # so the route handler can return the correct HTTP status.
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "agent_service: LangGraph path failed with unexpected error %r, "
+                "falling back to legacy path",
+                exc,
+            )
+
+    logger.debug("agent_service: using legacy execution path")
+    return _run_agent_task_legacy(request)
+
+
+# ── Legacy execution path (kept as safe fallback) ─────────────────────────────
+
+
+def _run_agent_task_legacy(request: AgentRunRequest) -> AgentRunResponse:
+    """Original direct execution path, preserved as a fallback."""
     active_repository = _validate_active_repository(request)
     context = build_query_aware_context(request.project_path, request.task)
     client = OpenAICompatibleModelClient()
 
     files_read = context.files_read
     logger.info(
-        "agent_run project=%r task_len=%d query_type=%r files_retrieved=%d files=%r",
+        "agent_run_legacy project=%r task_len=%d query_type=%r files_retrieved=%d files=%r",
         request.project_path,
         len(request.task),
         context.retrieval.query_type,

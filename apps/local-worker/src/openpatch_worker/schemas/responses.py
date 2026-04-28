@@ -10,6 +10,7 @@ class HealthResponse(BaseModel):
     configured_model_connection_mode: str | None = None
     configured_model_provider: str | None = None
     configured_model_name: str | None = None
+    write_mode: str = "read-only"
     recent_projects: list[str] = []
 
 
@@ -175,6 +176,24 @@ class AgentRunResponse(BaseModel):
     is_git_repository: bool
     files_read: list[str] = []
     response: str
+
+
+class LocalBranchSummary(BaseModel):
+    name: str
+    is_current: bool = False
+
+
+class GitBranchListResponse(BaseModel):
+    project_path: str
+    current_branch: str | None
+    branches: list[LocalBranchSummary]
+
+
+class GitCheckoutResponse(BaseModel):
+    project_path: str
+    branch: str
+    head_sha: str | None
+    message: str
 
 
 class AgentProposeFileResponse(BaseModel):

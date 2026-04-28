@@ -88,6 +88,95 @@ Health can also be checked directly:
 curl http://127.0.0.1:8000/health
 ```
 
+## Authentication and Token Setup
+
+RepoOperator needs a personal access token to list and clone repositories from GitHub or GitLab.
+Tokens are stored locally in `~/.repooperator/config.json` and never sent outside your machine.
+
+### GitHub
+
+**Creating a fine-grained personal access token (recommended)**
+
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**.
+2. Click **Generate new token**.
+3. Set a token name and expiration date.
+4. Under **Repository access**, choose the owner or organization whose repositories you want to open.
+   - The **owner/org** value you enter during `repooperator onboard` should be a username or
+     organization name such as `jungin-kim`, **not** a full URL.
+5. Under **Permissions → Repository permissions**, grant at minimum:
+   - **Metadata**: Read (required for repository discovery)
+   - **Contents**: Read (required for reading file contents)
+6. Click **Generate token** and copy it immediately.
+
+**Public GitHub vs GitHub Enterprise**
+
+| Scenario | Base URL |
+|---|---|
+| Public GitHub (github.com) | Leave blank — the default `https://api.github.com` is used automatically. |
+| GitHub Enterprise Server | Enter your instance URL such as `https://github.example.com`. |
+
+During onboarding, if you see a prompt for **GitHub base URL**, enter your Enterprise server URL or
+leave it blank for public GitHub.
+
+**Minimum token permissions for RepoOperator**
+
+| Permission | Access level | Required for |
+|---|---|---|
+| Metadata | Read | Repository listing and discovery |
+| Contents | Read | File reading and repository Q&A |
+
+Write permissions are not required for read-only Q&A. If you plan to use the write-with-approval
+workflow, Contents: Write is additionally needed to apply proposed changes via the GitHub API
+in future releases.
+
+---
+
+### GitLab
+
+**Creating a personal access token**
+
+1. Go to **GitLab → User settings → Access tokens** (or your organization's GitLab instance).
+2. Click **Add new token**.
+3. Set a token name and expiration date.
+4. Select the scopes:
+   - `read_repository` — required for clone and file reading
+   - `read_api` — required for project listing and branch discovery
+5. Click **Create personal access token** and copy it immediately.
+
+**Self-hosted GitLab**
+
+If you use a self-hosted GitLab instance, enter your instance URL during onboarding, for example:
+
+```text
+https://gitlab.example.com
+```
+
+Leave blank only if you use public GitLab (`https://gitlab.com`).
+
+**Minimum token scopes for RepoOperator**
+
+| Scope | Required for |
+|---|---|
+| `read_repository` | Cloning and reading repository contents |
+| `read_api` | Project listing, branch listing, and repository metadata |
+
+---
+
+### Security notes
+
+- **Never commit tokens to source control.** RepoOperator stores them in
+  `~/.repooperator/config.json`, which is local to your machine and should not be committed.
+- **Rotate exposed tokens immediately.** If a token is accidentally shared, revoke it and generate
+  a new one.
+- **Use least privilege.** Grant only the scopes listed above. Avoid using classic GitHub PATs with
+  full `repo` scope unless your provider requires them.
+- **Prefer short-lived tokens.** Set a reasonable expiration date (30–90 days) and rotate on
+  schedule.
+- **Fine-grained tokens are preferred** for GitHub because they can be scoped to specific
+  repositories or organizations and allow read-only permissions without write access.
+
+---
+
 ## Supported Repository Sources
 
 RepoOperator currently supports these repository sources:
@@ -207,6 +296,64 @@ Helpful docs:
 - [Roadmap](docs/roadmap.md)
 - [Troubleshooting](docs/troubleshooting.md)
 
+## Write Mode and Permissions
+
+RepoOperator has a built-in permission model to prevent accidental file modifications.
+
+### Permission modes
+
+| Mode | Behavior |
+|---|---|
+| `read-only` (default) | No file changes are permitted. Proposals and writes are blocked at the backend. |
+| `write-with-approval` | Change proposals are allowed. Files are only modified after you click **Apply** in the UI. |
+
+Auto-apply, auto-commit, and auto-push are never enabled by default.
+
+### Setting write mode
+
+Add the following to `~/.repooperator/config.json`:
+
+```json
+{
+  "permissions": {
+    "writeMode": "write-with-approval"
+  }
+}
+```
+
+Or set the environment variable:
+
+```bash
+export REPOOPERATOR_WRITE_MODE=write-with-approval
+```
+
+The current mode is shown as a badge in the top bar of the web UI.
+
+### Write workflow (write-with-approval mode)
+
+1. Open a repository and switch to a branch you want to work on.
+2. Click **Propose change** in the composer area.
+3. Enter the relative file path and describe the change.
+4. RepoOperator generates a proposed diff and shows it in the chat.
+5. Review the diff before doing anything.
+6. Click **Apply** to write the change to the file, or **Reject** to discard it.
+7. No files are modified until you explicitly click Apply.
+
+Applying changes only modifies files within the current repository and current branch.
+Changes never escape the repository root.
+
+### Branch management
+
+When a git repository is open, the current branch is shown as a clickable pill in the repository
+banner. Clicking it opens the branch panel where you can:
+
+- see all local branches
+- switch to an existing local branch
+- create a new branch from any base branch and check it out immediately
+
+Creating and switching branches modifies the actual local git working tree, so GitHub Desktop and
+other git tools will reflect the change immediately.
+
 ## Current Capabilities
 
 RepoOperator currently supports:
@@ -221,6 +368,11 @@ RepoOperator currently supports:
 - non-interactive clone/fetch for private repositories when provider credentials are configured
 - read-only repository questions through the local worker
 - query-aware repository context retrieval for more useful answers than a README-only flow
+- LangGraph-based agent orchestration with classify → retrieve → answer steps
+- local branch listing, branch creation, and branch switching from the web UI
+- approval-based write workflow: propose a change, review the diff, apply with one click
+- write permission model with `read-only` (default) and `write-with-approval` modes
+- write mode badge in the web UI header showing the active permission level
 
 ## Current Limitations
 

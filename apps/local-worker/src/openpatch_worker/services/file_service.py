@@ -1,3 +1,4 @@
+from openpatch_worker.config import WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
 from openpatch_worker.schemas import (
     FileReadRequest,
     FileReadResponse,
@@ -34,6 +35,14 @@ def read_text_file(request: FileReadRequest) -> FileReadResponse:
 
 
 def write_text_file(request: FileWriteRequest) -> FileWriteResponse:
+    settings = get_settings()
+    if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
+        raise ValueError(
+            "Write operations are disabled. "
+            "Set permissions.writeMode to 'write-with-approval' in your RepoOperator config "
+            "to apply changes."
+        )
+
     repo_path = resolve_project_path(request.project_path)
     target_path = ensure_safe_write_path(repo_path, request.relative_path)
 

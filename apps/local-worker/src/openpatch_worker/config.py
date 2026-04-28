@@ -11,6 +11,11 @@ class ProviderSettings:
     token: str | None
 
 
+WRITE_MODE_READ_ONLY = "read-only"
+WRITE_MODE_WRITE_WITH_APPROVAL = "write-with-approval"
+_VALID_WRITE_MODES = {WRITE_MODE_READ_ONLY, WRITE_MODE_WRITE_WITH_APPROVAL}
+
+
 @dataclass(frozen=True)
 class Settings:
     repo_base_dir: Path
@@ -32,6 +37,7 @@ class Settings:
     configured_model_connection_mode: str | None
     configured_model_provider: str | None
     configured_model_name: str | None
+    write_mode: str  # "read-only" | "write-with-approval"
 
     def get_provider_settings(self, provider: str) -> ProviderSettings:
         normalized = provider.strip().lower()
@@ -105,6 +111,7 @@ def get_settings() -> Settings:
         configured_model_connection_mode=_resolve_configured_model_connection_mode(runtime_config),
         configured_model_provider=_resolve_configured_model_provider(runtime_config),
         configured_model_name=_resolve_configured_model_name(runtime_config),
+        write_mode=_resolve_write_mode(runtime_config),
     )
 
 
@@ -211,3 +218,26 @@ def _resolve_configured_model_name(runtime_config: dict) -> str | None:
     if not isinstance(model_config, dict):
         return None
     return _normalize_optional_value(model_config.get("model"))
+
+
+def _resolve_write_mode(runtime_config: dict) -> str:
+    """Read the write mode from config, defaulting to read-only for safety.
+
+    Config key: ``permissions.writeMode``
+    Valid values: ``"read-only"`` (default), ``"write-with-approval"``
+
+    This setting is intentionally conservative — it must be explicitly set in
+    the config file to unlock write capabilities. Re-onboarding never resets
+    this value because it is loaded fresh from the config file on every request.
+    """
+    env_value = os.getenv("REPOOPERATOR_WRITE_MODE")
+    if env_value and env_value.strip().lower() in _VALID_WRITE_MODES:
+        return env_value.strip().lower()
+
+    permissions = runtime_config.get("permissions")
+    if isinstance(permissions, dict):
+        mode = _normalize_optional_value(permissions.get("writeMode"))
+        if mode and mode.lower() in _VALID_WRITE_MODES:
+            return mode.lower()
+
+    return WRITE_MODE_READ_ONLY

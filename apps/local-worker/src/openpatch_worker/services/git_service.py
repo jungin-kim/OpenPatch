@@ -2,6 +2,9 @@ from openpatch_worker.config import get_settings
 from openpatch_worker.schemas import (
     GitBranchCreateRequest,
     GitBranchCreateResponse,
+    GitBranchListRequest,
+    GitCheckoutRequest,
+    GitCheckoutResponse,
     GitCommitRequest,
     GitCommitResponse,
     GitDiffRequest,
@@ -11,6 +14,7 @@ from openpatch_worker.schemas import (
     GitPushRequest,
     GitPushResponse,
 )
+from openpatch_worker.schemas.responses import GitBranchListResponse, LocalBranchSummary
 from openpatch_worker.services.common import ensure_git_repository, resolve_project_path
 from openpatch_worker.services.git_providers import ProviderGitOptions, resolve_provider_git_options
 from openpatch_worker.services.review_providers import (
@@ -18,6 +22,73 @@ from openpatch_worker.services.review_providers import (
     create_merge_request,
 )
 from openpatch_worker.services.subprocess_utils import run_subprocess
+
+
+def list_local_branches(request: GitBranchListRequest) -> GitBranchListResponse:
+    """Return all local branches and which one is currently checked out."""
+    repo_path = resolve_project_path(request.project_path)
+    ensure_git_repository(repo_path)
+
+    current = _git_stdout(["git", "branch", "--show-current"], repo_path) or None
+
+    result = run_subprocess(
+        command=["git", "branch", "--list", "--format=%(refname:short)"],
+        cwd=repo_path,
+        timeout_seconds=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "git branch failed")
+
+    branches = [
+        LocalBranchSummary(name=name, is_current=(name == current))
+        for name in (line.strip() for line in result.stdout.splitlines())
+        if name
+    ]
+    return GitBranchListResponse(
+        project_path=request.project_path,
+        current_branch=current,
+        branches=branches,
+    )
+
+
+def checkout_branch(request: GitCheckoutRequest) -> GitCheckoutResponse:
+    """Switch to an existing local branch.
+
+    Does not create a new branch — use ``create_branch`` for that.
+    Refuses if there are uncommitted changes that would be overwritten.
+    """
+    repo_path = resolve_project_path(request.project_path)
+    ensure_git_repository(repo_path)
+
+    # Confirm branch exists locally
+    check = run_subprocess(
+        command=["git", "show-ref", "--verify", f"refs/heads/{request.branch}"],
+        cwd=repo_path,
+        timeout_seconds=30,
+    )
+    if check.returncode != 0:
+        raise ValueError(f"Branch '{request.branch}' does not exist locally.")
+
+    result = run_subprocess(
+        command=["git", "checkout", request.branch],
+        cwd=repo_path,
+        timeout_seconds=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"Unable to checkout branch '{request.branch}'")
+
+    head_sha: str | None = None
+    try:
+        head_sha = _git_stdout(["git", "rev-parse", "HEAD"], repo_path)
+    except RuntimeError:
+        pass
+
+    return GitCheckoutResponse(
+        project_path=request.project_path,
+        branch=request.branch,
+        head_sha=head_sha,
+        message=f"Switched to branch '{request.branch}'",
+    )
 
 
 def get_diff(request: GitDiffRequest) -> GitDiffResponse:

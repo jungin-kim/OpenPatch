@@ -382,6 +382,29 @@ class AgentRunRequest(BaseModel):
         return stripped or None
 
 
+class GitBranchListRequest(BaseModel):
+    project_path: str
+
+    @field_validator("project_path")
+    @classmethod
+    def validate_project_path(cls, value: str) -> str:
+        return _normalize_project_path(value)
+
+
+class GitCheckoutRequest(BaseModel):
+    project_path: str
+    branch: str
+
+    @field_validator("project_path", "branch")
+    @classmethod
+    def validate_checkout_values(cls, value: str, info) -> str:
+        if info.field_name == "project_path":
+            return _normalize_project_path(value)
+        if not value.strip():
+            raise ValueError("branch must not be empty")
+        return value.strip()
+
+
 class AgentProposeFileRequest(BaseModel):
     project_path: str = Field(
         ...,

@@ -14,6 +14,10 @@ from openpatch_worker.schemas import (
     FileWriteResponse,
     GitBranchCreateRequest,
     GitBranchCreateResponse,
+    GitBranchListRequest,
+    GitBranchListResponse,
+    GitCheckoutRequest,
+    GitCheckoutResponse,
     GitCommitRequest,
     GitCommitResponse,
     GitDiffRequest,
@@ -44,10 +48,12 @@ from openpatch_worker.services.provider_service import (
     list_recent_project_paths,
 )
 from openpatch_worker.services.git_service import (
+    checkout_branch,
     commit_changes,
     create_branch,
     create_provider_merge_request,
     get_diff,
+    list_local_branches,
     push_branch,
 )
 from openpatch_worker.services.repo_service import open_repository, plan_repository_open
@@ -68,6 +74,7 @@ def health() -> HealthResponse:
         configured_model_connection_mode=settings.configured_model_connection_mode,
         configured_model_provider=settings.configured_model_provider,
         configured_model_name=settings.configured_model_name,
+        write_mode=settings.write_mode,
         recent_projects=list_recent_project_paths(),
     )
 
@@ -172,6 +179,26 @@ def cmd_run(request: CommandRunRequest) -> CommandRunResponse:
 def git_diff(request: GitDiffRequest) -> GitDiffResponse:
     try:
         return get_diff(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/git/branches", response_model=GitBranchListResponse)
+def git_branches(project_path: str) -> GitBranchListResponse:
+    try:
+        return list_local_branches(GitBranchListRequest(project_path=project_path))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/git/checkout", response_model=GitCheckoutResponse)
+def git_checkout(request: GitCheckoutRequest) -> GitCheckoutResponse:
+    try:
+        return checkout_branch(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

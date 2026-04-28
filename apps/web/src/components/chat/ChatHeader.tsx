@@ -10,6 +10,7 @@ interface ChatHeaderProps {
   connectionState: ConnectionState;
   configuredModelName: string;
   configuredModelProvider: string;
+  writeMode: "read-only" | "write-with-approval";
 
   gitProvider: string;
   onGitProviderChange: (value: string) => void;
@@ -63,6 +64,7 @@ export function ChatHeader({
   connectionState,
   configuredModelName,
   configuredModelProvider,
+  writeMode,
   gitProvider,
   onGitProviderChange,
   projects,
@@ -292,6 +294,16 @@ export function ChatHeader({
               {modelLabel}
             </span>
           )}
+          <span
+            className={`write-mode-badge${writeMode === "write-with-approval" ? " write-mode-badge-write" : ""}`}
+            title={
+              writeMode === "write-with-approval"
+                ? "Write-with-approval mode: changes require explicit approval before being applied."
+                : "Read-only mode: no files will be modified."
+            }
+          >
+            {writeMode === "write-with-approval" ? "Write ✓" : "Read-only"}
+          </span>
         </div>
       </div>
 

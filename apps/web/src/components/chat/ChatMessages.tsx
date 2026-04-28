@@ -3,6 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentRunPayload, RepoOpenPayload } from "@/lib/local-worker-client";
 import { MarkdownContent } from "./MarkdownContent";
+import { BranchPanel } from "./BranchPanel";
+import {
+  ProposalCard,
+  type ChangeProposal,
+  type ProposalStatus,
+} from "./ProposalCard";
 
 export type ChatMessage = {
   id: string;
@@ -10,6 +16,7 @@ export type ChatMessage = {
   content: string;
   timestamp: Date;
   metadata?: AgentRunPayload;
+  proposal?: ChangeProposal;
 };
 
 function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
@@ -114,6 +121,9 @@ interface ChatMessagesProps {
   repoResult: RepoOpenPayload | null;
   questionPending: boolean;
   gitProvider: string;
+  onLocalBranchChange?: (branch: string) => void;
+  writeMode?: "read-only" | "write-with-approval";
+  onProposalStatusChange?: (id: string, status: ProposalStatus, message?: string) => void;
 }
 
 export function ChatMessages({
@@ -121,6 +131,9 @@ export function ChatMessages({
   repoResult,
   questionPending,
   gitProvider,
+  onLocalBranchChange,
+  writeMode = "read-only",
+  onProposalStatusChange,
 }: ChatMessagesProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -142,9 +155,17 @@ export function ChatMessages({
         <div className="repo-banner">
           <div className="repo-banner-icon" aria-hidden="true" />
           <div className="repo-banner-content">
-            <div className="repo-banner-title">
-              Repository ready
-              {repoResult.branch ? ` · ${repoResult.branch}` : ""}
+            <div className="repo-banner-title" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span>Repository ready</span>
+              {repoResult.is_git_repository && onLocalBranchChange ? (
+                <BranchPanel
+                  projectPath={repoResult.project_path}
+                  currentBranch={repoResult.branch}
+                  onBranchChange={onLocalBranchChange}
+                />
+              ) : repoResult.branch ? (
+                <span style={{ opacity: 0.75 }}>· {repoResult.branch}</span>
+              ) : null}
             </div>
             <div className="repo-banner-detail">
               {repoResult.local_repo_path} · {providerLabel}
@@ -178,7 +199,13 @@ export function ChatMessages({
                     ? "Context"
                     : "RepoOperator"}
               </span>
-              {msg.role === "assistant" ? (
+              {msg.proposal ? (
+                <ProposalCard
+                  proposal={msg.proposal}
+                  writeMode={writeMode}
+                  onStatusChange={onProposalStatusChange ?? (() => {})}
+                />
+              ) : msg.role === "assistant" ? (
                 <div className="message-bubble message-bubble-md">
                   <MarkdownContent content={msg.content} />
                 </div>
