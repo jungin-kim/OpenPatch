@@ -766,6 +766,22 @@ select {
   font-style: italic;
 }
 
+.sidebar-sync-note {
+  display: block;
+  padding: 0 8px 6px;
+  color: var(--muted);
+  font-size: 0.73rem;
+}
+
+.sidebar-sync-note-connected,
+.sidebar-sync-note-saving {
+  color: var(--accent);
+}
+
+.sidebar-sync-note-unavailable {
+  color: var(--warning);
+}
+
 /* ── Main area ────────────────────────────────────── */
 
 .chat-main {

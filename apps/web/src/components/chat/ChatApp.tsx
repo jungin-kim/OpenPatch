@@ -6,13 +6,16 @@ import {
   getProviderBranches,
   getProviderProjects,
   getWorkerHealth,
+  listThreads,
   LocalWorkerClientError,
   openRepository,
   runAgentTask,
+  saveThread,
   type AgentRunPayload,
   type ProviderBranchSummary,
   type ProviderProjectSummary,
   type RepoOpenPayload,
+  type ThreadRecordPayload,
 } from "@/lib/local-worker-client";
 
 import { ChatLayout } from "./ChatLayout";
@@ -22,6 +25,7 @@ import { ChatMessages, type ChatMessage } from "./ChatMessages";
 import { ChatComposer } from "./ChatComposer";
 
 type ConnectionState = "checking" | "connected" | "unavailable";
+type ThreadStoreState = "loading" | "connected" | "saving" | "unavailable";
 
 export type ChatThread = {
   id: string;
@@ -64,6 +68,7 @@ export function ChatApp() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [threadStoreState, setThreadStoreState] = useState<ThreadStoreState>("loading");
   const [question, setQuestion] = useState("");
 
   // ── Health check ─────────────────────────────────────────────────────────
@@ -94,6 +99,28 @@ export function ChatApp() {
   useEffect(() => {
     void refreshHealthCheck({ syncProvider: true });
   }, []);
+
+  useEffect(() => {
+    if (connectionState !== "connected") return;
+
+    let cancelled = false;
+    async function loadThreadHistory() {
+      setThreadStoreState("loading");
+      try {
+        const payload = await listThreads();
+        if (cancelled) return;
+        setThreads(payload.threads.map(threadFromRecord));
+        setThreadStoreState("connected");
+      } catch {
+        if (!cancelled) setThreadStoreState("unavailable");
+      }
+    }
+
+    void loadThreadHistory();
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionState]);
 
   useEffect(() => {
     if (!activeThreadId || !repoResult) return;
@@ -196,8 +223,63 @@ export function ChatApp() {
   const effectiveBranch = useAdvanced ? manualBranch.trim() : selectedBranch.trim();
   const branchRequired = gitProvider !== "local";
 
-  function appendMessages(updater: (current: ChatMessage[]) => ChatMessage[]) {
-    setMessages(updater);
+  function threadFromRecord(record: ThreadRecordPayload): ChatThread {
+    return {
+      id: record.id,
+      title: record.title,
+      repoResult: record.repo,
+      messages: record.messages.map((message) => ({
+        ...message,
+        timestamp: new Date(message.timestamp),
+        metadata: message.metadata as AgentRunPayload | undefined,
+      })),
+      createdAt: new Date(record.created_at),
+      updatedAt: new Date(record.updated_at),
+    };
+  }
+
+  function threadToRecord(thread: ChatThread): ThreadRecordPayload {
+    return {
+      id: thread.id,
+      title: thread.title,
+      repo: thread.repoResult,
+      messages: thread.messages.map((message) => ({
+        ...message,
+        timestamp: message.timestamp.toISOString(),
+      })),
+      created_at: thread.createdAt.toISOString(),
+      updated_at: thread.updatedAt.toISOString(),
+    };
+  }
+
+  function rememberThread(thread: ChatThread) {
+    setThreads((prev) => [thread, ...prev.filter((item) => item.id !== thread.id)]);
+  }
+
+  async function persistThread(thread: ChatThread) {
+    setThreadStoreState("saving");
+    try {
+      await saveThread(threadToRecord(thread));
+      setThreadStoreState("connected");
+    } catch {
+      setThreadStoreState("unavailable");
+    }
+  }
+
+  function updateActiveThread(nextMessages: ChatMessage[], nextRepoResult = repoResult) {
+    if (!activeThreadId || !nextRepoResult) return;
+    const existingThread = threads.find((thread) => thread.id === activeThreadId);
+    if (!existingThread) return;
+    const updatedThread: ChatThread = {
+      ...existingThread,
+      repoResult: nextRepoResult,
+      messages: nextMessages,
+      updatedAt: new Date(),
+    };
+    setThreads((prev) =>
+      prev.map((thread) => (thread.id === activeThreadId ? updatedThread : thread)),
+    );
+    void persistThread(updatedThread);
   }
 
   function buildThreadTitle(payload: RepoOpenPayload): string {
@@ -249,7 +331,8 @@ export function ChatApp() {
       setRepoResult(payload);
       setMessages(nextMessages);
       setActiveThreadId(nextThread.id);
-      setThreads((prev) => [nextThread, ...prev]);
+      rememberThread(nextThread);
+      void persistThread(nextThread);
       await refreshHealthCheck();
     } catch (error) {
       setRepoResult(null);
@@ -272,7 +355,9 @@ export function ChatApp() {
       content: question.trim(),
       timestamp: new Date(),
     };
-    appendMessages((prev) => [...prev, userMessage]);
+    const messagesWithUser = [...messages, userMessage];
+    setMessages(messagesWithUser);
+    updateActiveThread(messagesWithUser);
     setQuestion("");
     setQuestionPending(true);
 
@@ -283,8 +368,8 @@ export function ChatApp() {
         branch: repoResult.branch || undefined,
         task: userMessage.content,
       });
-      appendMessages((prev) => [
-        ...prev,
+      const messagesWithAssistant: ChatMessage[] = [
+        ...messagesWithUser,
         {
           id: `${Date.now()}-assistant`,
           role: "assistant",
@@ -292,21 +377,25 @@ export function ChatApp() {
           timestamp: new Date(),
           metadata: payload,
         },
-      ]);
+      ];
+      setMessages(messagesWithAssistant);
+      updateActiveThread(messagesWithAssistant);
     } catch (error) {
       const msg =
         error instanceof LocalWorkerClientError || error instanceof Error
           ? error.message
           : "Unable to run the task through the local worker.";
-      appendMessages((prev) => [
-        ...prev,
+      const messagesWithError: ChatMessage[] = [
+        ...messagesWithUser,
         {
           id: `${Date.now()}-error`,
           role: "assistant",
           content: `Error: ${msg}`,
           timestamp: new Date(),
         },
-      ]);
+      ];
+      setMessages(messagesWithError);
+      updateActiveThread(messagesWithError);
     } finally {
       setQuestionPending(false);
     }
@@ -339,7 +428,8 @@ export function ChatApp() {
     };
     setMessages(nextMessages);
     setActiveThreadId(nextThread.id);
-    setThreads((prev) => [nextThread, ...prev]);
+    rememberThread(nextThread);
+    void persistThread(nextThread);
   }
 
   async function handleSelectThread(threadId: string) {
@@ -353,9 +443,18 @@ export function ChatApp() {
         git_provider: thread.repoResult.git_provider,
         branch: thread.repoResult.branch || undefined,
       });
+      const restoredThread = {
+        ...thread,
+        repoResult: reopened,
+        updatedAt: new Date(),
+      };
       setActiveThreadId(thread.id);
       setRepoResult(reopened);
       setMessages(thread.messages);
+      setThreads((prev) =>
+        prev.map((item) => (item.id === thread.id ? restoredThread : item)),
+      );
+      void persistThread(restoredThread);
       setQuestion("");
     } catch (error) {
       setRepoError(
@@ -417,6 +516,7 @@ export function ChatApp() {
           recentProjects={recentProjects}
           threads={threads}
           activeThreadId={activeThreadId}
+          threadStoreState={threadStoreState}
           onNewChat={handleNewChat}
           onSelectThread={handleSelectThread}
         />

@@ -6,6 +6,7 @@ interface ChatSidebarProps {
   recentProjects: ProviderProjectSummary[];
   threads: ChatThread[];
   activeThreadId: string | null;
+  threadStoreState: "loading" | "connected" | "saving" | "unavailable";
   onNewChat: () => void;
   onSelectThread: (threadId: string) => void;
 }
@@ -21,9 +22,19 @@ export function ChatSidebar({
   recentProjects,
   threads,
   activeThreadId,
+  threadStoreState,
   onNewChat,
   onSelectThread,
 }: ChatSidebarProps) {
+  const threadStoreLabel =
+    threadStoreState === "loading"
+      ? "Loading saved threads"
+      : threadStoreState === "saving"
+        ? "Saving thread history"
+        : threadStoreState === "connected"
+          ? "Thread history synced"
+          : "Thread history unavailable";
+
   return (
     <aside className="chat-sidebar">
       <div className="chat-sidebar-header">
@@ -39,6 +50,9 @@ export function ChatSidebar({
         <div className="sidebar-section">
           <span className="sidebar-section-title">Threads</span>
         </div>
+        <span className={`sidebar-sync-note sidebar-sync-note-${threadStoreState}`}>
+          {threadStoreLabel}
+        </span>
 
         {threads.length > 0 ? (
           threads.map((thread) => (

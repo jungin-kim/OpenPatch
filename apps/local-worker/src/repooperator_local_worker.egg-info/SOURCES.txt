@@ -9,6 +9,7 @@ src/openpatch_worker/schemas/__init__.py
 src/openpatch_worker/schemas/requests.py
 src/openpatch_worker/schemas/responses.py
 src/openpatch_worker/services/__init__.py
+src/openpatch_worker/services/active_repository.py
 src/openpatch_worker/services/agent_service.py
 src/openpatch_worker/services/command_runner.py
 src/openpatch_worker/services/common.py
@@ -23,6 +24,7 @@ src/openpatch_worker/services/repo_service.py
 src/openpatch_worker/services/retrieval_service.py
 src/openpatch_worker/services/review_providers.py
 src/openpatch_worker/services/subprocess_utils.py
+src/openpatch_worker/services/thread_service.py
 src/repooperator_local_worker.egg-info/PKG-INFO
 src/repooperator_local_worker.egg-info/SOURCES.txt
 src/repooperator_local_worker.egg-info/dependency_links.txt

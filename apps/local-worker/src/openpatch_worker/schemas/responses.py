@@ -41,6 +41,38 @@ class ProviderBranchesResponse(BaseModel):
     branches: list[ProviderBranchSummary]
 
 
+class ThreadRepositorySummary(BaseModel):
+    project_path: str
+    git_provider: str
+    local_repo_path: str
+    branch: str | None = None
+    head_sha: str | None = None
+    cloned: bool = False
+    is_git_repository: bool = True
+    message: str = ""
+
+
+class ThreadMessageSummary(BaseModel):
+    id: str
+    role: str
+    content: str
+    timestamp: str
+    metadata: dict | None = None
+
+
+class ThreadSummary(BaseModel):
+    id: str
+    title: str
+    repo: ThreadRepositorySummary
+    messages: list[ThreadMessageSummary]
+    created_at: str
+    updated_at: str
+
+
+class ThreadListResponse(BaseModel):
+    threads: list[ThreadSummary]
+
+
 class RepoOpenResponse(BaseModel):
     project_path: str
     git_provider: str

@@ -27,6 +27,9 @@ from openpatch_worker.schemas import (
     ProviderProjectsResponse,
     RepoOpenRequest,
     RepoOpenResponse,
+    ThreadListResponse,
+    ThreadSummary,
+    ThreadUpsertRequest,
 )
 from openpatch_worker.services.edit_service import propose_file_edit
 from openpatch_worker.services.agent_service import run_agent_task
@@ -45,6 +48,7 @@ from openpatch_worker.services.git_service import (
     push_branch,
 )
 from openpatch_worker.services.repo_service import open_repository
+from openpatch_worker.services.thread_service import list_threads, upsert_thread
 
 router = APIRouter()
 
@@ -92,6 +96,19 @@ def provider_branches(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/threads", response_model=ThreadListResponse)
+def threads_list() -> ThreadListResponse:
+    return list_threads()
+
+
+@router.post("/threads", response_model=ThreadSummary)
+def threads_upsert(request: ThreadUpsertRequest) -> ThreadSummary:
+    try:
+        return upsert_thread(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/repo/open", response_model=RepoOpenResponse)

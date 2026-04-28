@@ -15,11 +15,17 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from openpatch_worker.config import get_settings
-from openpatch_worker.schemas.requests import AgentProposeFileRequest, AgentRunRequest, RepoOpenRequest
+from openpatch_worker.schemas.requests import (
+    AgentProposeFileRequest,
+    AgentRunRequest,
+    RepoOpenRequest,
+    ThreadUpsertRequest,
+)
 from openpatch_worker.services.agent_service import run_agent_task
 from openpatch_worker.services.common import get_repooperator_home_dir
 from openpatch_worker.services.git_providers import resolve_provider_git_options
 from openpatch_worker.services.repo_service import open_repository
+from openpatch_worker.services.thread_service import list_threads, upsert_thread
 
 
 class WorkerContractTests(unittest.TestCase):
@@ -375,6 +381,94 @@ class WorkerContractTests(unittest.TestCase):
             self.assertIn("source: local", prompts[-1])
             self.assertIn(str(local_repo.resolve()), prompts[-1])
             self.assertNotIn("group/repo-a", prompts[-1])
+
+    def test_thread_history_persists_across_restart_and_repository_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".repooperator"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "config.json").write_text("{}", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": str(config_dir / "config.json"),
+                    "OPENPATCH_CONFIG_PATH": "",
+                },
+                clear=False,
+            ):
+                upsert_thread(
+                    ThreadUpsertRequest(
+                        id="thread-repo-a",
+                        title="repo-a",
+                        repo={
+                            "project_path": "group/repo-a",
+                            "git_provider": "gitlab",
+                            "local_repo_path": str(config_dir / "repos" / "group" / "repo-a"),
+                            "branch": "main",
+                            "cloned": False,
+                            "is_git_repository": True,
+                            "message": "Repository ready",
+                        },
+                        messages=[
+                            {
+                                "id": "message-a-1",
+                                "role": "system",
+                                "content": "Repository switched. New chat started for gitlab:group/repo-a @ main.",
+                                "timestamp": "2026-04-28T00:00:00.000Z",
+                            },
+                            {
+                                "id": "message-a-2",
+                                "role": "assistant",
+                                "content": "Answer grounded in repo A.",
+                                "timestamp": "2026-04-28T00:01:00.000Z",
+                            },
+                        ],
+                        created_at="2026-04-28T00:00:00.000Z",
+                        updated_at="2026-04-28T00:01:00.000Z",
+                    )
+                )
+
+                restarted_worker_view = list_threads()
+
+                upsert_thread(
+                    ThreadUpsertRequest(
+                        id="thread-repo-b",
+                        title="repo-b",
+                        repo={
+                            "project_path": str(Path(temp_home) / "work" / "repo-b"),
+                            "git_provider": "local",
+                            "local_repo_path": str(Path(temp_home) / "work" / "repo-b"),
+                            "branch": "main",
+                            "cloned": False,
+                            "is_git_repository": True,
+                            "message": "Repository ready",
+                        },
+                        messages=[
+                            {
+                                "id": "message-b-1",
+                                "role": "system",
+                                "content": "Repository switched. New chat started for local:repo-b @ main.",
+                                "timestamp": "2026-04-28T00:02:00.000Z",
+                            }
+                        ],
+                        created_at="2026-04-28T00:02:00.000Z",
+                        updated_at="2026-04-28T00:02:00.000Z",
+                    )
+                )
+
+                switched_repository_view = list_threads()
+
+            self.assertEqual(len(restarted_worker_view.threads), 1)
+            self.assertEqual(restarted_worker_view.threads[0].id, "thread-repo-a")
+            self.assertEqual(restarted_worker_view.threads[0].repo.git_provider, "gitlab")
+            self.assertEqual(restarted_worker_view.threads[0].repo.branch, "main")
+            self.assertEqual(len(restarted_worker_view.threads[0].messages), 2)
+
+            self.assertEqual(len(switched_repository_view.threads), 2)
+            self.assertEqual(switched_repository_view.threads[0].id, "thread-repo-b")
+            self.assertEqual(switched_repository_view.threads[0].repo.git_provider, "local")
+            self.assertEqual(switched_repository_view.threads[1].id, "thread-repo-a")
 
 
 def _init_git_repo(path: Path, readme_title: str) -> None:

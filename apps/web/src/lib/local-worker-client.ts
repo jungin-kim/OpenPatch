@@ -78,6 +78,27 @@ export type AgentRunPayload = {
   response: string;
 };
 
+export type ThreadMessagePayload = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp: string;
+  metadata?: AgentRunPayload | Record<string, unknown> | null;
+};
+
+export type ThreadRecordPayload = {
+  id: string;
+  title: string;
+  repo: RepoOpenPayload;
+  messages: ThreadMessagePayload[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ThreadListPayload = {
+  threads: ThreadRecordPayload[];
+};
+
 export class LocalWorkerClientError extends Error {
   status: number;
 
@@ -178,4 +199,19 @@ export async function readRepositoryFile(input: {
   });
 
   return parseWorkerResponse<FileReadPayload>(response);
+}
+
+export async function listThreads(): Promise<ThreadListPayload> {
+  const response = await fetch("/api/worker/threads", { cache: "no-store" });
+  return parseWorkerResponse<ThreadListPayload>(response);
+}
+
+export async function saveThread(input: ThreadRecordPayload): Promise<ThreadRecordPayload> {
+  const response = await fetch("/api/worker/threads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  return parseWorkerResponse<ThreadRecordPayload>(response);
 }

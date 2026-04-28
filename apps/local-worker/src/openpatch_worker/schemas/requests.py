@@ -29,6 +29,64 @@ class GitProviderMetadata(BaseModel):
     )
 
 
+class ThreadRepositorySnapshot(BaseModel):
+    project_path: str
+    git_provider: str
+    local_repo_path: str
+    branch: str | None = None
+    head_sha: str | None = None
+    cloned: bool = False
+    is_git_repository: bool = True
+    message: str = ""
+
+    @field_validator("git_provider")
+    @classmethod
+    def validate_repository_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in SUPPORTED_REPOSITORY_PROVIDERS:
+            raise ValueError("git_provider must be one of: gitlab, github, local")
+        return normalized
+
+
+class ThreadMessagePayload(BaseModel):
+    id: str
+    role: str
+    content: str
+    timestamp: str
+    metadata: dict | None = None
+
+    @field_validator("id", "content", "timestamp")
+    @classmethod
+    def validate_required_thread_strings(cls, value: str, info) -> str:
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value
+
+    @field_validator("role")
+    @classmethod
+    def validate_thread_role(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"user", "assistant", "system"}:
+            raise ValueError("role must be one of: user, assistant, system")
+        return normalized
+
+
+class ThreadUpsertRequest(BaseModel):
+    id: str
+    title: str
+    repo: ThreadRepositorySnapshot
+    messages: list[ThreadMessagePayload]
+    created_at: str
+    updated_at: str
+
+    @field_validator("id", "title", "created_at", "updated_at")
+    @classmethod
+    def validate_thread_strings(cls, value: str, info) -> str:
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        return value
+
+
 class RepoOpenRequest(BaseModel):
     project_path: str = Field(
         ...,

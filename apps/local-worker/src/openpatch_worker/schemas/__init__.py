@@ -10,6 +10,7 @@ from openpatch_worker.schemas.requests import (
     GitMergeRequestCreateRequest,
     GitPushRequest,
     RepoOpenRequest,
+    ThreadUpsertRequest,
 )
 from openpatch_worker.schemas.responses import (
     AgentProposeFileResponse,
@@ -28,6 +29,8 @@ from openpatch_worker.schemas.responses import (
     ProviderProjectSummary,
     ProviderProjectsResponse,
     RepoOpenResponse,
+    ThreadListResponse,
+    ThreadSummary,
 )
 
 __all__ = [
@@ -58,4 +61,7 @@ __all__ = [
     "ProviderProjectsResponse",
     "RepoOpenRequest",
     "RepoOpenResponse",
+    "ThreadListResponse",
+    "ThreadSummary",
+    "ThreadUpsertRequest",
 ]
