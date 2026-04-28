@@ -1,4 +1,8 @@
 {
+  "/api/worker/provider/branches/route": "app/api/worker/provider/branches/route.js",
   "/api/worker/health/route": "app/api/worker/health/route.js",
+  "/api/worker/repo-open/route": "app/api/worker/repo-open/route.js",
+  "/api/worker/provider/projects/route": "app/api/worker/provider/projects/route.js",
+  "/api/worker/agent-run/route": "app/api/worker/agent-run/route.js",
   "/page": "app/page.js"
 }
