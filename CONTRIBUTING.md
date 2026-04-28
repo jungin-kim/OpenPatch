@@ -1,6 +1,6 @@
-# Contributing To OpenPatch
+# Contributing To RepoOperator
 
-Thanks for considering a contribution to OpenPatch.
+Thanks for considering a contribution to RepoOperator.
 
 This project is being built as a general-purpose, open-source foundation for coding-agent workflows with a hosted UI, a local worker, and a centralized model backend. Early contributions are especially valuable because they help shape the architecture and contributor experience from the beginning.
 
@@ -84,4 +84,4 @@ Until a dedicated code of conduct is added, please interact with other contribut
 
 ## License
 
-By contributing to OpenPatch, you agree that your contributions will be licensed under the MIT License.
+By contributing to RepoOperator, you agree that your contributions will be licensed under the MIT License.

@@ -111,7 +111,7 @@ def _get_openpatch_config_path() -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     repooperator_path = (Path.home() / ".repooperator" / "config.json").resolve()
-    legacy_path = (Path.home() / ".openpatch" / "config.json").resolve()
+    legacy_path = (Path.home() / ".repooperator" / "config.json").resolve()
     if repooperator_path.exists():
         return repooperator_path
     if legacy_path.exists():

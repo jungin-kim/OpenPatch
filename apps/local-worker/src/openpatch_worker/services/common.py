@@ -4,7 +4,7 @@ from openpatch_worker.config import get_settings
 
 
 def get_openpatch_home_dir() -> Path:
-    home_dir = get_settings().openpatch_config_path.parent
+    home_dir = get_settings().repooperator_config_path.parent
     home_dir.mkdir(parents=True, exist_ok=True)
     return home_dir
 

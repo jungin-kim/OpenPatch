@@ -1,8 +1,8 @@
-# OpenPatch Deployment Guide
+# RepoOperator Deployment Guide
 
-This guide covers the first practical deployment and onboarding setup for OpenPatch as it exists today.
+This guide covers the first practical deployment and onboarding setup for RepoOperator as it exists today.
 
-OpenPatch currently consists of:
+RepoOperator currently consists of:
 
 - a local worker that runs on each developer machine
 - a web app that can be run locally for development
