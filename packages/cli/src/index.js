@@ -1827,6 +1827,26 @@ function splitGitHubBaseUrlAndScope(value) {
   }
 }
 
+async function promptGitHubMode(rl, existingProviderConfig = null) {
+  const defaultChoice = existingProviderConfig?.baseUrl && existingProviderConfig.baseUrl !== "https://github.com"
+    ? "2"
+    : "1";
+  while (true) {
+    printOptionList("Choose GitHub hosting", [
+      ["1", "Public GitHub", "Use github.com; no base URL needed"],
+      ["2", "GitHub Enterprise", "Use a company-hosted GitHub URL"],
+    ]);
+    const answer = (await rl.question(`Choice [${defaultChoice}]: `)).trim() || defaultChoice;
+    if (answer === "1") {
+      return "public";
+    }
+    if (answer === "2") {
+      return "enterprise";
+    }
+    term.line("warning", "Invalid choice", "Please choose 1 or 2.");
+  }
+}
+
 async function promptGitProviderConfig(rl, provider, existingProviderConfig = null) {
   if (provider === "gitlab") {
     term.summaryBox("GitLab source", [
@@ -1844,33 +1864,42 @@ async function promptGitProviderConfig(rl, provider, existingProviderConfig = nu
 
   if (provider === "github") {
     term.summaryBox("GitHub source", [
-      "Use a GitHub token that can read the repositories you want to open.",
-      "Base URL is the GitHub host only. For normal GitHub, use https://github.com.",
-      "Do not include an owner, organization, or repository path in the base URL.",
-      "If you want to narrow discovery later, use the optional owner/org scope.",
+      "Choose Public GitHub for github.com or GitHub Enterprise for a company-hosted GitHub URL.",
+      "Public GitHub automatically uses https://github.com.",
+      "Owner or organization filtering is a separate optional scope.",
     ]);
-    const rawBaseUrl = await promptWithDefault(
-      rl,
-      "GitHub base URL (host only)",
-      existingProviderConfig?.baseUrl || "https://github.com",
-    );
-    const splitBaseUrl = splitGitHubBaseUrlAndScope(rawBaseUrl);
-    if (splitBaseUrl.scopeFromPath) {
-      term.line(
-        "warning",
-        "GitHub base URL adjusted",
-        `Using ${splitBaseUrl.baseUrl} as the base URL and ${splitBaseUrl.scopeFromPath} as the owner/org scope.`,
+    const githubMode = await promptGitHubMode(rl, existingProviderConfig);
+    let baseUrl = "https://github.com";
+    let scopeFromPath = "";
+    if (githubMode === "enterprise") {
+      const rawBaseUrl = await promptWithDefault(
+        rl,
+        "GitHub Enterprise base URL (host only)",
+        existingProviderConfig?.baseUrl && existingProviderConfig.baseUrl !== "https://github.com"
+          ? existingProviderConfig.baseUrl
+          : "https://github.example.com",
       );
+      const splitBaseUrl = splitGitHubBaseUrlAndScope(rawBaseUrl);
+      baseUrl = splitBaseUrl.baseUrl;
+      scopeFromPath = splitBaseUrl.scopeFromPath;
+      if (scopeFromPath) {
+        term.line(
+          "warning",
+          "GitHub Enterprise URL adjusted",
+          `Using ${baseUrl} as the base URL and ${scopeFromPath} as the owner/org scope.`,
+        );
+      }
     }
     const owner = await promptWithDefault(
       rl,
       "Optional GitHub owner/org scope",
-      existingProviderConfig?.owner || splitBaseUrl.scopeFromPath || "",
+      existingProviderConfig?.owner || scopeFromPath || "",
     );
     const token = await promptWithDefault(rl, "GitHub token", existingProviderConfig?.token || "");
     return {
       provider: "github",
-      baseUrl: splitBaseUrl.baseUrl,
+      baseUrl,
+      githubMode,
       owner: owner || undefined,
       token,
     };

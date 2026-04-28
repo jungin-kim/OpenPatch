@@ -81,7 +81,7 @@ Onboarding currently supports:
 - None for now
 
 For GitLab and GitHub, RepoOperator stores the provider base URL and token locally in `~/.repooperator/config.json` so the worker can use them without manual environment exports.
-For GitHub, the base URL should normally be `https://github.com`. Owner or organization filtering is handled as a separate optional scope, not as part of the base URL.
+For GitHub, choose Public GitHub to use `https://github.com` automatically. Only GitHub Enterprise asks for a base URL. Owner or organization filtering is handled as a separate optional scope, not as part of the base URL.
 
 ## Product Runtime Commands
 
