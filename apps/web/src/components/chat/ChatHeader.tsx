@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { ProviderBranchSummary, ProviderProjectSummary } from "@/lib/local-worker-client";
+import { type FormEvent, useEffect, useState } from "react";
+import type {
+  PermissionMode,
+  ProviderBranchSummary,
+  ProviderProjectSummary,
+  RepoOpenPayload,
+} from "@/lib/local-worker-client";
 import type { RepositoryOpenProgress } from "./ChatApp";
 
 type ConnectionState = "checking" | "connected" | "unavailable";
@@ -10,7 +15,13 @@ interface ChatHeaderProps {
   connectionState: ConnectionState;
   configuredModelName: string;
   configuredModelProvider: string;
-  writeMode: "read-only" | "write-with-approval";
+  writeMode: PermissionMode;
+  permissionPending: boolean;
+  permissionMessage: string | null;
+  permissionError: string | null;
+  onPermissionModeChange: (mode: PermissionMode) => void;
+  theme: "light" | "dark";
+  onThemeToggle: () => void;
 
   gitProvider: string;
   onGitProviderChange: (value: string) => void;
@@ -25,6 +36,10 @@ interface ChatHeaderProps {
   branchesPending: boolean;
   selectedBranch: string;
   onBranchChange: (branch: string) => void;
+  openedRepository: RepoOpenPayload | null;
+  branchActionPending: boolean;
+  branchActionError: string | null;
+  onCreateBranch: (branchName: string, baseBranch: string) => Promise<void>;
 
   useAdvanced: boolean;
   manualProjectPath: string;
@@ -60,11 +75,56 @@ const localStages = [
   "Finalizing repository context",
 ];
 
+const permissionModes: Array<{
+  mode: PermissionMode;
+  label: string;
+  description: string;
+  disabled?: boolean;
+}> = [
+  {
+    mode: "read-only",
+    label: "Basic permissions",
+    description: "Ask questions without modifying files.",
+  },
+  {
+    mode: "write-with-approval",
+    label: "Auto review",
+    description: "Generate diffs and apply only after approval.",
+  },
+  {
+    mode: "auto-apply",
+    label: "Full access",
+    description: "Coming soon.",
+    disabled: true,
+  },
+];
+
+const BRANCH_RE = /^[a-zA-Z0-9._/\-]+$/;
+
+function validateBranchName(name: string): string | null {
+  if (!name.trim()) return "Branch name is required.";
+  if (name.startsWith("-")) return "Branch name must not start with a hyphen.";
+  if (name.includes("..")) return "Branch name must not contain '..'.";
+  if (name.includes(" ")) return "Branch name must not contain spaces.";
+  if (!BRANCH_RE.test(name)) return "Branch name contains invalid characters.";
+  return null;
+}
+
+function permissionLabel(mode: PermissionMode): string {
+  return permissionModes.find((item) => item.mode === mode)?.label ?? "Basic permissions";
+}
+
 export function ChatHeader({
   connectionState,
   configuredModelName,
   configuredModelProvider,
   writeMode,
+  permissionPending,
+  permissionMessage,
+  permissionError,
+  onPermissionModeChange,
+  theme,
+  onThemeToggle,
   gitProvider,
   onGitProviderChange,
   projects,
@@ -76,6 +136,10 @@ export function ChatHeader({
   branchesPending,
   selectedBranch,
   onBranchChange,
+  openedRepository,
+  branchActionPending,
+  branchActionError,
+  onCreateBranch,
   useAdvanced,
   manualProjectPath,
   manualBranch,
@@ -88,6 +152,11 @@ export function ChatHeader({
   onOpenRepo,
 }: ChatHeaderProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showPermissions, setShowPermissions] = useState(false);
+  const [showBranchCreate, setShowBranchCreate] = useState(false);
+  const [newBranchName, setNewBranchName] = useState("");
+  const [newBranchBase, setNewBranchBase] = useState("");
+  const [branchFormError, setBranchFormError] = useState<string | null>(null);
   const [openElapsedSeconds, setOpenElapsedSeconds] = useState(0);
 
   useEffect(() => {
@@ -125,6 +194,7 @@ export function ChatHeader({
   ];
 
   const branchRequired = gitProvider !== "local";
+  const showBranchControls = branchRequired || Boolean(openedRepository?.is_git_repository);
   const effectiveProject = useAdvanced ? manualProjectPath.trim() : selectedProjectPath;
   const effectiveBranch = useAdvanced ? manualBranch.trim() : selectedBranch;
   const repoOpenMode = repositoryOpenProgress?.mode || "unknown";
@@ -163,10 +233,46 @@ export function ChatHeader({
     connectionState === "connected" &&
     Boolean(effectiveProject) &&
     (!branchRequired || Boolean(effectiveBranch));
+  const canCreateBranch =
+    connectionState === "connected" &&
+    Boolean(openedRepository?.is_git_repository) &&
+    Boolean(openedRepository?.project_path);
+  const displayedBranch = selectedBranch || openedRepository?.branch || "";
+  const branchOptions = branches.some((branch) => branch.name === displayedBranch) || !displayedBranch
+    ? branches
+    : [{ name: displayedBranch, is_default: false }, ...branches];
 
   function handleAdvancedToggle() {
     setShowAdvanced((v) => !v);
     onToggleAdvanced();
+  }
+
+  function handleBranchSelect(value: string) {
+    if (value === "__create_branch__") {
+      setShowBranchCreate(true);
+      setNewBranchBase(displayedBranch || branches[0]?.name || "HEAD");
+      setBranchFormError(null);
+      return;
+    }
+    onBranchChange(value);
+  }
+
+  async function handleCreateBranch(e: FormEvent) {
+    e.preventDefault();
+    const branchName = newBranchName.trim();
+    const validationError = validateBranchName(branchName);
+    if (validationError) {
+      setBranchFormError(validationError);
+      return;
+    }
+    setBranchFormError(null);
+    try {
+      await onCreateBranch(branchName, newBranchBase || displayedBranch || "HEAD");
+      setNewBranchName("");
+      setShowBranchCreate(false);
+    } catch {
+      // The parent owns the detailed git error so it can preserve repository state.
+    }
   }
 
   return (
@@ -215,32 +321,35 @@ export function ChatHeader({
             ))}
           </select>
 
-          {branchRequired && (
+          {showBranchControls && (
             <>
               <span className="header-sep">@</span>
               <select
                 className="header-select"
-                value={selectedBranch}
-                onChange={(e) => onBranchChange(e.target.value)}
+                value={displayedBranch}
+                onChange={(e) => handleBranchSelect(e.target.value)}
                 disabled={
                   branchesPending ||
                   connectionState !== "connected" ||
-                  !selectedProjectPath ||
-                  branches.length === 0
+                  (!selectedProjectPath && !openedRepository?.project_path) ||
+                  (branchOptions.length === 0 && !canCreateBranch)
                 }
                 aria-label="Branch"
               >
-                {branches.length === 0 ? (
+                {branchOptions.length === 0 ? (
                   <option value="">
-                    {branchesPending ? "Loading…" : "No branch"}
+                    {branchesPending ? "Loading…" : canCreateBranch ? "No branch" : "Open repository to create branch"}
                   </option>
                 ) : null}
-                {branches.map((b) => (
+                {branchOptions.map((b) => (
                   <option key={b.name} value={b.name}>
                     {b.name}
                     {b.is_default ? " (default)" : ""}
                   </option>
                 ))}
+                <option value="__create_branch__" disabled={!canCreateBranch}>
+                  + Create new branch
+                </option>
               </select>
             </>
           )}
@@ -294,18 +403,146 @@ export function ChatHeader({
               {modelLabel}
             </span>
           )}
-          <span
-            className={`write-mode-badge${writeMode === "write-with-approval" ? " write-mode-badge-write" : ""}`}
-            title={
-              writeMode === "write-with-approval"
-                ? "Write-with-approval mode: changes require explicit approval before being applied."
-                : "Read-only mode: no files will be modified."
-            }
+          <div className="permission-control">
+            <button
+              className={`permission-trigger${writeMode === "write-with-approval" ? " permission-trigger-review" : ""}`}
+              type="button"
+              aria-label="Permission mode"
+              aria-expanded={showPermissions}
+              onClick={() => setShowPermissions((value) => !value)}
+              disabled={permissionPending}
+              title="Change RepoOperator permission mode"
+            >
+              <span className="permission-trigger-icon" aria-hidden="true">
+                {writeMode === "write-with-approval" ? "◇" : "●"}
+              </span>
+              {permissionPending ? "Updating…" : permissionLabel(writeMode)}
+              <span className="permission-trigger-caret" aria-hidden="true">▾</span>
+            </button>
+            {showPermissions && (
+              <div className="permission-menu" role="menu">
+                {permissionModes.map((item) => (
+                  <button
+                    key={item.mode}
+                    className={`permission-option${item.mode === writeMode ? " permission-option-selected" : ""}`}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={item.mode === writeMode}
+                    disabled={permissionPending || item.disabled}
+                    onClick={() => {
+                      if (item.disabled) return;
+                      setShowPermissions(false);
+                      onPermissionModeChange(item.mode);
+                    }}
+                  >
+                    <span className="permission-option-check" aria-hidden="true">
+                      {item.mode === writeMode ? "✓" : ""}
+                    </span>
+                    <span className="permission-option-copy">
+                      <span className="permission-option-label">
+                        {item.label}
+                        {item.disabled ? " — Coming soon" : ""}
+                      </span>
+                      <span className="permission-option-description">{item.description}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            className="theme-toggle"
+            type="button"
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            onClick={onThemeToggle}
+            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           >
-            {writeMode === "write-with-approval" ? "Write ✓" : "Read-only"}
-          </span>
+            {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+          </button>
         </div>
       </div>
+
+      {(permissionMessage || permissionError) && (
+        <p className={`permission-inline-message${permissionError ? " permission-inline-message-error" : ""}`}>
+          {permissionError || permissionMessage}
+        </p>
+      )}
+
+      {branchActionError && !showBranchCreate && (
+        <p className="header-error">{branchActionError}</p>
+      )}
+
+      {showBranchCreate && (
+        <form className="header-branch-create" onSubmit={(e) => void handleCreateBranch(e)}>
+          <div className="header-advanced-field">
+            <label className="header-advanced-label" htmlFor="top-new-branch">
+              New branch name
+            </label>
+            <input
+              id="top-new-branch"
+              className="header-advanced-input"
+              value={newBranchName}
+              onChange={(e) => {
+                setNewBranchName(e.target.value);
+                setBranchFormError(null);
+              }}
+              placeholder="feature/my-change"
+              disabled={branchActionPending}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className="header-advanced-field">
+            <label className="header-advanced-label" htmlFor="top-new-branch-base">
+              Base branch
+            </label>
+            <select
+              id="top-new-branch-base"
+              className="header-select header-branch-base-select"
+              value={newBranchBase || displayedBranch || "HEAD"}
+              onChange={(e) => setNewBranchBase(e.target.value)}
+              disabled={branchActionPending}
+            >
+              {branchOptions.length > 0 ? (
+                branchOptions.map((branch) => (
+                  <option key={branch.name} value={branch.name}>
+                    {branch.name}
+                  </option>
+                ))
+              ) : (
+                <option value="HEAD">HEAD</option>
+              )}
+            </select>
+          </div>
+          <button
+            className="header-open-btn"
+            type="submit"
+            disabled={branchActionPending || !newBranchName.trim()}
+          >
+            {branchActionPending ? "Creating…" : "Create and switch"}
+          </button>
+          <button
+            className="header-icon-btn"
+            type="button"
+            onClick={() => {
+              setShowBranchCreate(false);
+              setNewBranchName("");
+              setBranchFormError(null);
+            }}
+            disabled={branchActionPending}
+          >
+            Cancel
+          </button>
+          <p className="header-branch-note">
+            {canCreateBranch
+              ? "RepoOperator creates the branch in the opened local checkout and switches to it."
+              : "Open a repository before creating a branch."}
+          </p>
+          {(branchFormError || branchActionError) && (
+            <p className="header-branch-error">{branchFormError || branchActionError}</p>
+          )}
+        </form>
+      )}
 
       {showAdvanced && gitProvider !== "local" && (
         <div className="chat-header-advanced">
@@ -363,5 +600,29 @@ export function ChatHeader({
 
       {repoError && <p className="header-error">{repoError}</p>}
     </div>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2" />
+      <path d="M12 20v2" />
+      <path d="m4.93 4.93 1.41 1.41" />
+      <path d="m17.66 17.66 1.41 1.41" />
+      <path d="M2 12h2" />
+      <path d="M20 12h2" />
+      <path d="m6.34 17.66-1.41 1.41" />
+      <path d="m19.07 4.93-1.41 1.41" />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3a6 6 0 0 0 9 8 9 9 0 1 1-9-8Z" />
+    </svg>
   );
 }

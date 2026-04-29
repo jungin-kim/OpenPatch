@@ -22,7 +22,7 @@ export type ChangeProposal = {
 
 interface ProposalCardProps {
   proposal: ChangeProposal;
-  writeMode: "read-only" | "write-with-approval";
+  writeMode: "read-only" | "write-with-approval" | "auto-apply";
   onStatusChange: (id: string, status: ProposalStatus, message?: string) => void;
 }
 
@@ -144,9 +144,9 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
       {/* Header */}
       <div className="proposal-card-header">
         <div className="proposal-card-header-left">
-          <span className="proposal-card-icon" aria-hidden="true">📝</span>
+          <span className="proposal-card-icon" aria-hidden="true" />
           <div>
-            <div className="proposal-card-title">Proposed change</div>
+            <div className="proposal-card-title">RepoOperator wants to modify 1 file</div>
             <div className="proposal-card-path">{proposal.relativePath}</div>
           </div>
         </div>
@@ -187,13 +187,13 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
         <div className="proposal-card-actions">
           {isReadOnly ? (
             <p className="proposal-readonly-notice">
-              Write operations are disabled. Switch to write-with-approval mode to apply changes.
+              Write operations are disabled. Switch to Auto review to apply changes.
             </p>
           ) : (
             <>
               <p className="proposal-warning">
-                Applying will overwrite <strong>{proposal.relativePath}</strong> on the current branch.
-                Review the diff above before proceeding.
+                Review the diff before applying. RepoOperator will modify only{" "}
+                <strong>{proposal.relativePath}</strong> on the current branch.
               </p>
               <div className="proposal-card-buttons">
                 <button

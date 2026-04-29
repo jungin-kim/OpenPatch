@@ -8,7 +8,7 @@ interface ChatComposerProps {
   onSubmit: () => void;
   disabled: boolean;
   pending: boolean;
-  writeMode?: "read-only" | "write-with-approval";
+  writeMode?: "read-only" | "write-with-approval" | "auto-apply";
   onProposeChange?: (relativePath: string, instruction: string) => void;
   proposePending?: boolean;
 }
@@ -135,8 +135,8 @@ export function ChatComposer({
               {disabled
                 ? "Open a repository to start asking questions."
                 : writeMode === "write-with-approval"
-                  ? "Write-with-approval — changes require your explicit approval."
-                  : "Read-only — no files or branches are modified."}
+                  ? "Auto review — changes require your explicit approval."
+                  : "Basic permissions — no files are modified."}
             </span>
             {showProposeToggle && (
               <button

@@ -39,8 +39,7 @@ def write_text_file(request: FileWriteRequest) -> FileWriteResponse:
     if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
         raise ValueError(
             "Write operations are disabled. "
-            "Set permissions.writeMode to 'write-with-approval' in your RepoOperator config "
-            "to apply changes."
+            "Switch the web UI permission mode to Auto review to apply changes."
         )
 
     repo_path = resolve_project_path(request.project_path)

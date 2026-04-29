@@ -356,28 +356,19 @@ RepoOperator has a built-in permission model to prevent accidental file modifica
 |---|---|
 | `read-only` (default) | No file changes are permitted. Proposals and writes are blocked at the backend. |
 | `write-with-approval` | Change proposals are allowed. Files are only modified after you click **Apply** in the UI. |
+| `auto-apply` | Reserved for future Full access workflows. Not enabled in the current UI. |
 
 Auto-apply, auto-commit, and auto-push are never enabled by default.
 
 ### Setting write mode
 
-Add the following to `~/.repooperator/config.json`:
+Open the web app and use the permission selector in the top bar:
 
-```json
-{
-  "permissions": {
-    "writeMode": "write-with-approval"
-  }
-}
-```
+- **Basic permissions** maps to `read-only`.
+- **Auto review** maps to `write-with-approval`.
+- **Full access** is shown as coming soon until safe auto-apply behavior is complete.
 
-Or set the environment variable:
-
-```bash
-export REPOOPERATOR_WRITE_MODE=write-with-approval
-```
-
-The current mode is shown as a badge in the top bar of the web UI.
+RepoOperator persists the selected mode in `~/.repooperator/config.json` while preserving the rest of your configuration. Advanced users can still override the mode for debugging with `REPOOPERATOR_WRITE_MODE`, but normal usage should go through the web UI.
 
 ### Write workflow (write-with-approval mode)
 

@@ -1,5 +1,7 @@
 "use client";
 
+export type PermissionMode = "read-only" | "write-with-approval" | "auto-apply";
+
 export type WorkerHealthPayload = {
   status: string;
   service: string;
@@ -9,8 +11,14 @@ export type WorkerHealthPayload = {
   configured_model_connection_mode?: string | null;
   configured_model_provider?: string | null;
   configured_model_name?: string | null;
-  write_mode?: "read-only" | "write-with-approval";
+  write_mode?: PermissionMode;
   recent_projects?: string[];
+};
+
+export type PermissionModePayload = {
+  write_mode: PermissionMode;
+  available_modes: PermissionMode[];
+  unsupported_modes?: PermissionMode[];
 };
 
 export type ProviderProjectSummary = {
@@ -181,6 +189,20 @@ async function parseWorkerResponse<T>(response: Response): Promise<T> {
 export async function getWorkerHealth(): Promise<WorkerHealthPayload> {
   const response = await fetch("/api/worker/health", { cache: "no-store" });
   return parseWorkerResponse<WorkerHealthPayload>(response);
+}
+
+export async function getPermissionMode(): Promise<PermissionModePayload> {
+  const response = await fetch("/api/worker/permissions", { cache: "no-store" });
+  return parseWorkerResponse<PermissionModePayload>(response);
+}
+
+export async function updatePermissionMode(writeMode: PermissionMode): Promise<PermissionModePayload> {
+  const response = await fetch("/api/worker/permissions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ write_mode: writeMode }),
+  });
+  return parseWorkerResponse<PermissionModePayload>(response);
 }
 
 export async function getProviderProjects(input: {

@@ -391,6 +391,20 @@ class GitBranchListRequest(BaseModel):
         return _normalize_project_path(value)
 
 
+class PermissionModeRequest(BaseModel):
+    write_mode: str
+
+    @field_validator("write_mode")
+    @classmethod
+    def validate_write_mode(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"read-only", "write-with-approval", "auto-apply"}:
+            raise ValueError(
+                "write_mode must be one of: read-only, write-with-approval, auto-apply"
+            )
+        return normalized
+
+
 class GitCheckoutRequest(BaseModel):
     project_path: str
     branch: str

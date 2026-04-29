@@ -14,6 +14,12 @@ class HealthResponse(BaseModel):
     recent_projects: list[str] = []
 
 
+class PermissionModeResponse(BaseModel):
+    write_mode: str
+    available_modes: list[str]
+    unsupported_modes: list[str] = []
+
+
 class ProviderProjectSummary(BaseModel):
     git_provider: str
     project_path: str

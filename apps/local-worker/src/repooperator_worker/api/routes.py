@@ -24,6 +24,8 @@ from repooperator_worker.schemas import (
     GitDiffResponse,
     GitMergeRequestCreateRequest,
     GitMergeRequestCreateResponse,
+    PermissionModeRequest,
+    PermissionModeResponse,
     GitPushRequest,
     GitPushResponse,
     HealthResponse,
@@ -46,6 +48,10 @@ from repooperator_worker.services.provider_service import (
     list_provider_projects,
     list_recent_projects,
     list_recent_project_paths,
+)
+from repooperator_worker.services.permissions_service import (
+    get_permission_mode,
+    update_permission_mode,
 )
 from repooperator_worker.services.git_service import (
     checkout_branch,
@@ -77,6 +83,19 @@ def health() -> HealthResponse:
         write_mode=settings.write_mode,
         recent_projects=list_recent_project_paths(),
     )
+
+
+@router.get("/permissions", response_model=PermissionModeResponse)
+def permissions_get() -> PermissionModeResponse:
+    return get_permission_mode()
+
+
+@router.post("/permissions", response_model=PermissionModeResponse)
+def permissions_post(request: PermissionModeRequest) -> PermissionModeResponse:
+    try:
+        return update_permission_mode(request.write_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/provider/projects", response_model=ProviderProjectsResponse)

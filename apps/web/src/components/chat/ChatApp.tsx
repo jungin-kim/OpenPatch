@@ -3,18 +3,23 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  checkoutLocalBranch,
+  createLocalBranch,
   getProviderBranches,
   getProviderProjects,
   getRecentProjects,
   getRepositoryOpenPlan,
   getWorkerHealth,
+  listLocalBranches,
   listThreads,
   LocalWorkerClientError,
   openRepository,
   proposeFileEdit,
   runAgentTask,
   saveThread,
+  updatePermissionMode,
   type AgentRunPayload,
+  type PermissionMode,
   type ProviderBranchSummary,
   type ProviderProjectSummary,
   type RepoOpenPayload,
@@ -90,7 +95,13 @@ export function ChatApp() {
   const [threadStoreState, setThreadStoreState] = useState<ThreadStoreState>("loading");
   const [question, setQuestion] = useState("");
   const [proposePending, setProposePending] = useState(false);
-  const [writeMode, setWriteMode] = useState<"read-only" | "write-with-approval">("read-only");
+  const [writeMode, setWriteMode] = useState<PermissionMode>("read-only");
+  const [permissionPending, setPermissionPending] = useState(false);
+  const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [branchActionPending, setBranchActionPending] = useState(false);
+  const [branchActionError, setBranchActionError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
 
   // ── Health check ─────────────────────────────────────────────────────────
@@ -122,6 +133,18 @@ export function ChatApp() {
 
   useEffect(() => {
     void refreshHealthCheck({ syncProvider: true });
+  }, []);
+
+  useEffect(() => {
+    const savedTheme = window.localStorage.getItem("repooperator-theme");
+    const nextTheme =
+      savedTheme === "dark" || savedTheme === "light"
+        ? savedTheme
+        : window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
   }, []);
 
   useEffect(() => {
@@ -398,6 +421,63 @@ export function ChatApp() {
     };
   }
 
+  async function refreshLocalBranchesForRepo(payload: RepoOpenPayload) {
+    if (!payload.is_git_repository) return;
+    try {
+      const localBranchPayload = await listLocalBranches({
+        project_path: payload.project_path,
+      });
+      const localBranches = localBranchPayload.branches.map((branch) => ({
+        name: branch.name,
+        is_default: branch.is_current,
+      }));
+      setBranches(localBranches);
+      const currentBranch = localBranchPayload.current_branch || payload.branch || "";
+      setSelectedBranch(currentBranch);
+      setManualBranch(currentBranch);
+    } catch {
+      // Branch controls remain available from provider data if local branch inspection fails.
+    }
+  }
+
+  function handleThemeToggle() {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    window.localStorage.setItem("repooperator-theme", nextTheme);
+  }
+
+  async function handlePermissionModeChange(mode: PermissionMode) {
+    if (mode === "auto-apply") {
+      setPermissionError("Full access is coming soon and is not enabled.");
+      setPermissionMessage(null);
+      return;
+    }
+    const previousMode = writeMode;
+    setPermissionPending(true);
+    setPermissionError(null);
+    setPermissionMessage(null);
+    try {
+      const payload = await updatePermissionMode(mode);
+      setWriteMode(payload.write_mode);
+      setPermissionMessage(
+        payload.write_mode === "write-with-approval"
+          ? "Auto review enabled. File changes still require Apply."
+          : "Basic permissions enabled. File writes are blocked.",
+      );
+      window.setTimeout(() => setPermissionMessage(null), 3200);
+    } catch (error) {
+      setWriteMode(previousMode);
+      setPermissionError(
+        error instanceof LocalWorkerClientError || error instanceof Error
+          ? error.message
+          : "Unable to update permission mode.",
+      );
+    } finally {
+      setPermissionPending(false);
+    }
+  }
+
   // ── Handlers ─────────────────────────────────────────────────────────────
   async function handleOpenRepo() {
     if (!effectiveProjectPath || (branchRequired && !effectiveBranch)) {
@@ -453,6 +533,7 @@ export function ChatApp() {
       void persistThread(nextThread);
       setRecentProjectHistory((prev) => mergeRecentProject(prev, payload));
       clearRepositoryOpenProgress(requestId);
+      await refreshLocalBranchesForRepo(payload);
       await refreshHealthCheck();
     } catch (error) {
       if (!isActiveRepositoryOpenRequest(requestId)) return;
@@ -582,6 +663,7 @@ export function ChatApp() {
       setActiveThreadId(thread.id);
       setRepoResult(reopened);
       setMessages(thread.messages);
+      await refreshLocalBranchesForRepo(reopened);
       setThreads((prev) =>
         prev.map((item) => (item.id === thread.id ? restoredThread : item)),
       );
@@ -619,11 +701,39 @@ export function ChatApp() {
     setRepoResult(null);
   }
 
-  function handleBranchChange(branch: string) {
+  async function handleBranchChange(branch: string) {
     setUseAdvanced(false);
     setSelectedBranch(branch);
     setManualBranch(branch);
-    setRepoResult(null);
+    setBranchActionError(null);
+    if (!repoResult?.is_git_repository) {
+      setRepoResult(null);
+      return;
+    }
+    if (branch === repoResult.branch) return;
+    setBranchActionPending(true);
+    try {
+      const result = await checkoutLocalBranch({
+        project_path: repoResult.project_path,
+        branch,
+      });
+      const updated: RepoOpenPayload = {
+        ...repoResult,
+        branch: result.branch,
+        head_sha: result.head_sha || repoResult.head_sha,
+      };
+      setRepoResult(updated);
+      updateActiveThread(messages, updated);
+      await refreshLocalBranchesForRepo(updated);
+    } catch (error) {
+      setBranchActionError(
+        error instanceof LocalWorkerClientError || error instanceof Error
+          ? error.message
+          : "Unable to switch branch.",
+      );
+    } finally {
+      setBranchActionPending(false);
+    }
   }
 
   function handleToggleAdvanced() {
@@ -662,18 +772,56 @@ export function ChatApp() {
     ].slice(0, 20);
   }
 
-  function handleLocalBranchChange(newBranch: string) {
-    if (!repoResult) return;
-    const updated: typeof repoResult = { ...repoResult, branch: newBranch };
-    setRepoResult(updated);
-    // Update the active thread's repo snapshot so the branch is persisted.
-    if (activeThreadId) {
+  async function handleCreateBranch(branchName: string, baseBranch: string) {
+    if (!repoResult) {
+      setBranchActionError("Open a repository before creating a branch.");
+      return;
+    }
+    setBranchActionPending(true);
+    setBranchActionError(null);
+    try {
+      const result = await createLocalBranch({
+        project_path: repoResult.project_path,
+        branch: branchName,
+        from_ref: baseBranch || repoResult.branch || "HEAD",
+        checkout: true,
+      });
+      const updated: RepoOpenPayload = {
+        ...repoResult,
+        branch: result.branch,
+        head_sha: result.head_sha,
+      };
+      setRepoResult(updated);
+      setSelectedBranch(result.branch);
+      setManualBranch(result.branch);
       updateActiveThread(messages, updated);
+      await refreshLocalBranchesForRepo(updated);
+    } catch (error) {
+      setBranchActionError(
+        error instanceof LocalWorkerClientError || error instanceof Error
+          ? error.message
+          : "Unable to create the branch.",
+      );
+      throw error;
+    } finally {
+      setBranchActionPending(false);
     }
   }
 
   async function handleProposeChange(relativePath: string, instruction: string) {
     if (!repoResult || proposePending) return;
+    if (writeMode !== "write-with-approval") {
+      const errorMessage: ChatMessage = {
+        id: `${Date.now()}-permission`,
+        role: "assistant",
+        content: "Switch the permission mode to Auto review before generating file change proposals.",
+        timestamp: new Date(),
+      };
+      const nextMessages = [...messages, errorMessage];
+      setMessages(nextMessages);
+      updateActiveThread(nextMessages);
+      return;
+    }
 
     const userMessage: ChatMessage = {
       id: `${Date.now()}-user`,
@@ -774,6 +922,12 @@ export function ChatApp() {
           configuredModelName={configuredModelName}
           configuredModelProvider={configuredModelProvider}
           writeMode={writeMode}
+          permissionPending={permissionPending}
+          permissionMessage={permissionMessage}
+          permissionError={permissionError}
+          onPermissionModeChange={handlePermissionModeChange}
+          theme={theme}
+          onThemeToggle={handleThemeToggle}
           gitProvider={gitProvider}
           onGitProviderChange={handleGitProviderChange}
           projects={projects}
@@ -784,7 +938,11 @@ export function ChatApp() {
           branches={branches}
           branchesPending={branchesPending}
           selectedBranch={selectedBranch}
-          onBranchChange={handleBranchChange}
+          onBranchChange={(branch) => void handleBranchChange(branch)}
+          openedRepository={repoResult}
+          branchActionPending={branchActionPending}
+          branchActionError={branchActionError}
+          onCreateBranch={handleCreateBranch}
           useAdvanced={useAdvanced}
           manualProjectPath={manualProjectPath}
           manualBranch={manualBranch}
@@ -803,7 +961,6 @@ export function ChatApp() {
           repoResult={repoResult}
           questionPending={questionPending}
           gitProvider={gitProvider}
-          onLocalBranchChange={handleLocalBranchChange}
           writeMode={writeMode}
           onProposalStatusChange={handleProposalStatusChange}
         />

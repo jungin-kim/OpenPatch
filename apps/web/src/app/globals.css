@@ -2,6 +2,7 @@
   --background: #f4f5ef;
   --surface: rgba(255, 255, 255, 0.82);
   --surface-strong: #ffffff;
+  --surface-hover: rgba(31, 106, 83, 0.08);
   --border: rgba(30, 36, 28, 0.12);
   --border-strong: rgba(30, 36, 28, 0.2);
   --text: #172018;
@@ -16,6 +17,22 @@
   --page-width: 1120px;
   --font-sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+}
+
+:root[data-theme="dark"] {
+  --background: #111512;
+  --surface: rgba(24, 29, 25, 0.88);
+  --surface-strong: #1d241f;
+  --surface-hover: rgba(107, 186, 146, 0.12);
+  --border: rgba(222, 232, 217, 0.12);
+  --border-strong: rgba(222, 232, 217, 0.22);
+  --text: #edf3eb;
+  --muted: #a4aea3;
+  --accent: #75c79e;
+  --accent-soft: rgba(117, 199, 158, 0.14);
+  --warning: #e1bb75;
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
+  color-scheme: dark;
 }
 
 * {
@@ -35,6 +52,13 @@ body {
     linear-gradient(180deg, #f8f7f2 0%, var(--background) 100%);
   color: var(--text);
   font-family: var(--font-sans);
+}
+
+:root[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at top left, rgba(52, 111, 84, 0.2), transparent 32%),
+    radial-gradient(circle at top right, rgba(123, 102, 48, 0.14), transparent 28%),
+    linear-gradient(180deg, #151916 0%, var(--background) 100%);
 }
 
 a {
@@ -958,6 +982,174 @@ select {
   white-space: nowrap;
 }
 
+.permission-control {
+  position: relative;
+}
+
+.permission-trigger,
+.theme-toggle {
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.68);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s, color 0.14s;
+}
+
+.permission-trigger {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.permission-trigger:hover,
+.theme-toggle:hover {
+  background: var(--surface-strong);
+  border-color: var(--border-strong);
+}
+
+.permission-trigger:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.permission-trigger-review {
+  border-color: rgba(31, 106, 83, 0.32);
+  background: rgba(31, 106, 83, 0.1);
+  color: var(--accent);
+}
+
+.permission-trigger-icon {
+  width: 12px;
+  text-align: center;
+  color: currentColor;
+  font-size: 0.66rem;
+}
+
+.permission-trigger-caret {
+  color: var(--muted);
+  font-size: 0.66rem;
+}
+
+.permission-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 140;
+  width: min(300px, calc(100vw - 32px));
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-strong);
+  box-shadow: var(--shadow);
+}
+
+.permission-option {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.permission-option:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.permission-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.permission-option-selected {
+  background: var(--accent-soft);
+}
+
+.permission-option-check {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.permission-option-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.permission-option-label {
+  font-size: 0.84rem;
+  font-weight: 750;
+}
+
+.permission-option-description {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.25;
+}
+
+.theme-toggle {
+  width: 30px;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+  color: var(--muted);
+}
+
+.permission-inline-message {
+  margin: 0;
+  padding: 7px 14px;
+  border-top: 1px solid rgba(31, 106, 83, 0.16);
+  background: rgba(31, 106, 83, 0.07);
+  color: var(--accent);
+  font-size: 0.82rem;
+}
+
+.permission-inline-message-error {
+  border-top-color: rgba(159, 74, 63, 0.18);
+  background: rgba(159, 74, 63, 0.08);
+  color: #a34539;
+}
+
+.header-branch-create {
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--border);
+  background: rgba(249, 250, 245, 0.9);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.header-branch-base-select {
+  width: 220px;
+  max-width: 220px;
+}
+
+.header-branch-note,
+.header-branch-error {
+  width: 100%;
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.header-branch-error {
+  color: #a34539;
+  font-weight: 650;
+}
+
 .chat-header-advanced {
   padding: 10px 14px 12px;
   border-top: 1px solid var(--border);
@@ -1571,9 +1763,25 @@ select {
 }
 
 .proposal-card-icon {
-  font-size: 1.1rem;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
-  margin-top: 1px;
+  margin-top: 2px;
+  border: 2px solid var(--accent);
+  border-radius: 5px;
+  position: relative;
+}
+
+.proposal-card-icon::after {
+  content: "";
+  position: absolute;
+  width: 6px;
+  height: 2px;
+  right: -4px;
+  bottom: 1px;
+  border-radius: 999px;
+  background: var(--accent);
+  transform: rotate(-38deg);
 }
 
 .proposal-card-title {
@@ -2050,6 +2258,69 @@ select {
 
 .branch-create-submit:not(:disabled):hover {
   opacity: 0.88;
+}
+
+:root[data-theme="dark"] .chat-header,
+:root[data-theme="dark"] .chat-header-advanced,
+:root[data-theme="dark"] .header-branch-create,
+:root[data-theme="dark"] .chat-composer-area,
+:root[data-theme="dark"] .composer-form,
+:root[data-theme="dark"] .chat-sidebar,
+:root[data-theme="dark"] .thread-item,
+:root[data-theme="dark"] .recent-project-btn,
+:root[data-theme="dark"] .message-bubble,
+:root[data-theme="dark"] .proposal-card,
+:root[data-theme="dark"] .tool-card,
+:root[data-theme="dark"] .repo-banner {
+  background: var(--surface);
+}
+
+:root[data-theme="dark"] .header-select,
+:root[data-theme="dark"] .header-advanced-input,
+:root[data-theme="dark"] .permission-trigger,
+:root[data-theme="dark"] .theme-toggle,
+:root[data-theme="dark"] .header-icon-btn,
+:root[data-theme="dark"] .model-chip,
+:root[data-theme="dark"] .branch-create-input,
+:root[data-theme="dark"] .branch-create-select,
+:root[data-theme="dark"] .composer-propose-path,
+:root[data-theme="dark"] .composer-textarea {
+  background: rgba(31, 38, 33, 0.9);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+:root[data-theme="dark"] .header-icon-btn:hover,
+:root[data-theme="dark"] .permission-trigger:hover,
+:root[data-theme="dark"] .theme-toggle:hover {
+  background: rgba(45, 54, 47, 0.98);
+}
+
+:root[data-theme="dark"] .permission-trigger-review {
+  background: rgba(117, 199, 158, 0.14);
+  border-color: rgba(117, 199, 158, 0.34);
+}
+
+:root[data-theme="dark"] .repo-open-progress {
+  background: rgba(117, 199, 158, 0.09);
+  border-top-color: rgba(117, 199, 158, 0.2);
+}
+
+:root[data-theme="dark"] .proposal-diff-titlebar,
+:root[data-theme="dark"] .tool-card-header {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+:root[data-theme="dark"] .proposal-diff-line-add {
+  background: rgba(63, 168, 105, 0.14);
+}
+
+:root[data-theme="dark"] .proposal-diff-line-del {
+  background: rgba(192, 57, 43, 0.14);
+}
+
+:root[data-theme="dark"] .proposal-btn-reject {
+  background: transparent;
 }
 
 /* ── Responsive ───────────────────────────────────── */

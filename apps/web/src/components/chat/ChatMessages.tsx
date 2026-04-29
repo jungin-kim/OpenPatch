@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentRunPayload, RepoOpenPayload } from "@/lib/local-worker-client";
 import { MarkdownContent } from "./MarkdownContent";
-import { BranchPanel } from "./BranchPanel";
 import {
   ProposalCard,
   type ChangeProposal,
@@ -121,8 +120,7 @@ interface ChatMessagesProps {
   repoResult: RepoOpenPayload | null;
   questionPending: boolean;
   gitProvider: string;
-  onLocalBranchChange?: (branch: string) => void;
-  writeMode?: "read-only" | "write-with-approval";
+  writeMode?: "read-only" | "write-with-approval" | "auto-apply";
   onProposalStatusChange?: (id: string, status: ProposalStatus, message?: string) => void;
 }
 
@@ -131,7 +129,6 @@ export function ChatMessages({
   repoResult,
   questionPending,
   gitProvider,
-  onLocalBranchChange,
   writeMode = "read-only",
   onProposalStatusChange,
 }: ChatMessagesProps) {
@@ -157,13 +154,7 @@ export function ChatMessages({
           <div className="repo-banner-content">
             <div className="repo-banner-title" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <span>Repository ready</span>
-              {repoResult.is_git_repository && onLocalBranchChange ? (
-                <BranchPanel
-                  projectPath={repoResult.project_path}
-                  currentBranch={repoResult.branch}
-                  onBranchChange={onLocalBranchChange}
-                />
-              ) : repoResult.branch ? (
+              {repoResult.branch ? (
                 <span style={{ opacity: 0.75 }}>· {repoResult.branch}</span>
               ) : null}
             </div>

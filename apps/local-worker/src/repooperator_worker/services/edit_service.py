@@ -21,8 +21,7 @@ def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileRespo
     if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
         raise ValueError(
             "Write operations are disabled. "
-            "Set permissions.writeMode to 'write-with-approval' in your RepoOperator config "
-            "to enable change proposals."
+            "Switch the web UI permission mode to Auto review to enable change proposals."
         )
 
     repo_path = resolve_project_path(request.project_path)

@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,10 @@ from repooperator_worker.schemas.requests import (
 from repooperator_worker.services.agent_service import run_agent_task
 from repooperator_worker.services.common import get_repooperator_home_dir
 from repooperator_worker.services.git_providers import resolve_provider_git_options
+from repooperator_worker.services.permissions_service import (
+    get_permission_mode,
+    update_permission_mode,
+)
 from repooperator_worker.services.repo_service import open_repository, plan_repository_open
 from repooperator_worker.services.repo_open_requests import (
     clear_repository_open_request,
@@ -270,6 +275,68 @@ class WorkerContractTests(unittest.TestCase):
                 provider_options.clone_url,
                 "https://github.example.com/octo/demo-repo.git",
             )
+
+    def test_permission_mode_update_preserves_existing_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".repooperator"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_path = config_dir / "config.json"
+            config_path.write_text(
+                """
+                {
+                  "model": {
+                    "provider": "ollama",
+                    "model": "qwen2.5-coder:7b"
+                  },
+                  "gitProvider": {
+                    "provider": "github",
+                    "token": "secret-token"
+                  }
+                }
+                """.strip(),
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": "",
+                    "REPOOPERATOR_WRITE_MODE": "",
+                },
+                clear=False,
+            ):
+                payload = update_permission_mode("write-with-approval")
+                settings = get_settings()
+
+            self.assertEqual(payload.write_mode, "write-with-approval")
+            self.assertEqual(settings.write_mode, "write-with-approval")
+            updated = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(updated["model"]["model"], "qwen2.5-coder:7b")
+            self.assertEqual(updated["gitProvider"]["token"], "secret-token")
+            self.assertEqual(updated["permissions"]["writeMode"], "write-with-approval")
+
+    def test_permission_mode_rejects_full_access_until_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_dir = Path(temp_home) / ".repooperator"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_path = config_dir / "config.json"
+            config_path.write_text("{}", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": "",
+                    "REPOOPERATOR_WRITE_MODE": "",
+                },
+                clear=False,
+            ):
+                with self.assertRaises(ValueError):
+                    update_permission_mode("auto-apply")
+                payload = get_permission_mode()
+
+            self.assertEqual(payload.write_mode, "read-only")
 
     def test_runtime_config_prefers_environment_override_for_gitlab(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
