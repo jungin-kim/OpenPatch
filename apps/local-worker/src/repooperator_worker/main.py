@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from openpatch_worker.api.routes import router
+from repooperator_worker.api.routes import router
 
 
 def create_app() -> FastAPI:

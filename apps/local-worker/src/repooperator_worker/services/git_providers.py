@@ -2,7 +2,7 @@ import base64
 import logging
 from dataclasses import dataclass
 
-from openpatch_worker.config import ProviderSettings, Settings
+from repooperator_worker.config import ProviderSettings, Settings
 
 logger = logging.getLogger(__name__)
 

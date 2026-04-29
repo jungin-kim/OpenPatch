@@ -2,8 +2,8 @@ import json
 from dataclasses import dataclass
 from urllib import error, parse, request
 
-from openpatch_worker.config import Settings
-from openpatch_worker.schemas import (
+from repooperator_worker.config import Settings
+from repooperator_worker.schemas import (
     GitMergeRequestCreateRequest,
     GitMergeRequestCreateResponse,
 )

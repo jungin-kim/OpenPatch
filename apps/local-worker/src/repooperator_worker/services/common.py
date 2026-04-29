@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from openpatch_worker.config import get_settings
+from repooperator_worker.config import get_settings
 
 
 def get_repooperator_home_dir() -> Path:

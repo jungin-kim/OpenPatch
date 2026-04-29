@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 
-from openpatch_worker.config import get_settings
-from openpatch_worker.schemas import (
+from repooperator_worker.config import get_settings
+from repooperator_worker.schemas import (
     AgentProposeFileRequest,
     AgentProposeFileResponse,
     AgentRunRequest,
@@ -37,17 +37,17 @@ from openpatch_worker.schemas import (
     ThreadSummary,
     ThreadUpsertRequest,
 )
-from openpatch_worker.services.edit_service import propose_file_edit
-from openpatch_worker.services.agent_service import run_agent_task
-from openpatch_worker.services.command_runner import run_command
-from openpatch_worker.services.file_service import read_text_file, write_text_file
-from openpatch_worker.services.provider_service import (
+from repooperator_worker.services.edit_service import propose_file_edit
+from repooperator_worker.services.agent_service import run_agent_task
+from repooperator_worker.services.command_runner import run_command
+from repooperator_worker.services.file_service import read_text_file, write_text_file
+from repooperator_worker.services.provider_service import (
     list_provider_branches,
     list_provider_projects,
     list_recent_projects,
     list_recent_project_paths,
 )
-from openpatch_worker.services.git_service import (
+from repooperator_worker.services.git_service import (
     checkout_branch,
     commit_changes,
     create_branch,
@@ -56,8 +56,8 @@ from openpatch_worker.services.git_service import (
     list_local_branches,
     push_branch,
 )
-from openpatch_worker.services.repo_service import open_repository, plan_repository_open
-from openpatch_worker.services.thread_service import list_threads, upsert_thread
+from repooperator_worker.services.repo_service import open_repository, plan_repository_open
+from repooperator_worker.services.thread_service import list_threads, upsert_thread
 
 router = APIRouter()
 

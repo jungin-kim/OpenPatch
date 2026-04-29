@@ -2,21 +2,21 @@ from pathlib import Path
 import logging
 import os
 
-from openpatch_worker.config import get_settings
-from openpatch_worker.schemas import RepoOpenPlanResponse, RepoOpenRequest, RepoOpenResponse
-from openpatch_worker.services.active_repository import ActiveRepository, set_active_repository
-from openpatch_worker.services.common import get_repo_base_dir, is_git_repository, resolve_project_path
-from openpatch_worker.services.git_providers import (
+from repooperator_worker.config import get_settings
+from repooperator_worker.schemas import RepoOpenPlanResponse, RepoOpenRequest, RepoOpenResponse
+from repooperator_worker.services.active_repository import ActiveRepository, set_active_repository
+from repooperator_worker.services.common import get_repo_base_dir, is_git_repository, resolve_project_path
+from repooperator_worker.services.git_providers import (
     ProviderGitOptions,
     resolve_provider_git_options,
 )
-from openpatch_worker.services.provider_service import record_recent_project
-from openpatch_worker.services.repo_open_requests import (
+from repooperator_worker.services.provider_service import record_recent_project
+from repooperator_worker.services.repo_open_requests import (
     clear_repository_open_request,
     is_repository_open_request_current,
     mark_repository_open_request_current,
 )
-from openpatch_worker.services.subprocess_utils import run_subprocess
+from repooperator_worker.services.subprocess_utils import run_subprocess
 
 logger = logging.getLogger(__name__)
 

@@ -15,20 +15,20 @@ from typing import Any, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from openpatch_worker.schemas import AgentRunRequest, AgentRunResponse
-from openpatch_worker.services.active_repository import (
+from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
+from repooperator_worker.services.active_repository import (
     ActiveRepository,
     get_active_repository,
 )
-from openpatch_worker.services.context_service import (
+from repooperator_worker.services.context_service import (
     QueryAwareContext,
     build_query_aware_context,
 )
-from openpatch_worker.services.model_client import (
+from repooperator_worker.services.model_client import (
     ModelGenerationRequest,
     OpenAICompatibleModelClient,
 )
-from openpatch_worker.services.retrieval_service import classify_query
+from repooperator_worker.services.retrieval_service import classify_query
 
 logger = logging.getLogger(__name__)
 

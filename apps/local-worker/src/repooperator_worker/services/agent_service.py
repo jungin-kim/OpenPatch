@@ -23,10 +23,10 @@ What stayed outside LangGraph (unchanged):
 
 import logging
 
-from openpatch_worker.schemas import AgentRunRequest, AgentRunResponse
-from openpatch_worker.services.active_repository import ActiveRepository, get_active_repository
-from openpatch_worker.services.context_service import build_query_aware_context
-from openpatch_worker.services.model_client import (
+from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
+from repooperator_worker.services.active_repository import ActiveRepository, get_active_repository
+from repooperator_worker.services.context_service import build_query_aware_context
+from repooperator_worker.services.model_client import (
     ModelGenerationRequest,
     OpenAICompatibleModelClient,
 )
@@ -60,7 +60,7 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
     """
     if _USE_LANGGRAPH:
         try:
-            from openpatch_worker.services.agent_graph import run_agent_graph
+            from repooperator_worker.services.agent_graph import run_agent_graph
 
             logger.debug("agent_service: using LangGraph execution path")
             return run_agent_graph(request)

@@ -1,11 +1,11 @@
-from openpatch_worker.config import WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
-from openpatch_worker.schemas import (
+from repooperator_worker.config import WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
+from repooperator_worker.schemas import (
     FileReadRequest,
     FileReadResponse,
     FileWriteRequest,
     FileWriteResponse,
 )
-from openpatch_worker.services.common import (
+from repooperator_worker.services.common import (
     ensure_relative_to_repo,
     ensure_safe_write_path,
     resolve_project_path,

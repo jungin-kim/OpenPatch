@@ -1,4 +1,4 @@
-from openpatch_worker.schemas.requests import (
+from repooperator_worker.schemas.requests import (
     AgentProposeFileRequest,
     AgentRunRequest,
     CommandRunRequest,
@@ -14,7 +14,7 @@ from openpatch_worker.schemas.requests import (
     RepoOpenRequest,
     ThreadUpsertRequest,
 )
-from openpatch_worker.schemas.responses import (
+from repooperator_worker.schemas.responses import (
     AgentProposeFileResponse,
     AgentRunResponse,
     CommandRunResponse,

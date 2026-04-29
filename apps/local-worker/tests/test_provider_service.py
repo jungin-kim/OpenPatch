@@ -11,7 +11,7 @@ SRC_DIR = TESTS_DIR.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from openpatch_worker.services.provider_service import (
+from repooperator_worker.services.provider_service import (
     _build_github_api_base,
     _build_gitlab_api_base,
     list_recent_project_paths,
@@ -194,7 +194,6 @@ class ProviderServiceTests(unittest.TestCase):
                 {
                     "HOME": temp_home,
                     "REPOOPERATOR_CONFIG_PATH": str(config_path),
-                    "OPENPATCH_CONFIG_PATH": "",
                     "GITHUB_BASE_URL": "",
                     "GITHUB_TOKEN": "",
                     "GITLAB_BASE_URL": "",
@@ -202,7 +201,7 @@ class ProviderServiceTests(unittest.TestCase):
                 },
                 clear=False,
             ), patch(
-                "openpatch_worker.services.provider_service._request_provider_json",
+                "repooperator_worker.services.provider_service._request_provider_json",
                 side_effect=fake_provider_json,
             ):
                 gitlab_payload = list_provider_projects("gitlab")

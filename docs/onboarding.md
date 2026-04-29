@@ -37,8 +37,6 @@ The normalized product contract for this flow is:
 - keep canonical runtime configuration in `~/.repooperator/config.json`
 - treat environment variables as advanced overrides, not the standard setup path
 
-If `~/.repooperator` does not exist yet but `~/.openpatch` does, the CLI will migrate the existing local config and runtime files into the new RepoOperator home automatically.
-
 The onboarding flow will:
 
 1. create the local RepoOperator config directory
@@ -300,7 +298,7 @@ GitHub follows the same repository-open flow with `git_provider: "github"` and m
 
 - Run `repooperator worker logs` to inspect recent worker output.
 - The CLI startup diagnostics print the absolute worker `src` path and `PYTHONPATH`.
-- If the worker app still cannot be imported, confirm the repo-source worker exists under `apps/local-worker/src/openpatch_worker`.
+- If the worker app still cannot be imported, confirm the repo-source worker exists under `apps/local-worker/src/repooperator_worker`.
 
 ### Port Already In Use
 

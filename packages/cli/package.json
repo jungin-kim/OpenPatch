@@ -1,10 +1,19 @@
 {
   "name": "repooperator",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": false,
   "description": "RepoOperator onboarding and local product runtime CLI.",
   "bin": {
     "repooperator": "bin/repooperator.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "runtime/",
+    "scripts/"
+  ],
+  "scripts": {
+    "prepack": "node scripts/prepare-runtime.js"
   },
   "engines": {
     "node": ">=20"

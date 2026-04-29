@@ -22,4 +22,4 @@ fi
 
 export LOCAL_REPO_BASE_DIR="${LOCAL_REPO_BASE_DIR:-$HOME/.repooperator/repos}"
 
-exec uvicorn openpatch_worker.main:app --reload --host 127.0.0.1 --port 8000
+exec uvicorn repooperator_worker.main:app --reload --host 127.0.0.1 --port 8000

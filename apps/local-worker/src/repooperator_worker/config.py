@@ -66,11 +66,11 @@ def get_settings() -> Settings:
     return Settings(
         repo_base_dir=repo_base_dir,
         default_command_timeout_seconds=int(
-            os.getenv("OPENPATCH_COMMAND_TIMEOUT_SECONDS", "30")
+            os.getenv("REPOOPERATOR_COMMAND_TIMEOUT_SECONDS", "30")
         ),
-        git_clone_timeout_seconds=int(os.getenv("OPENPATCH_GIT_CLONE_TIMEOUT_SECONDS", "300")),
-        git_fetch_timeout_seconds=int(os.getenv("OPENPATCH_GIT_FETCH_TIMEOUT_SECONDS", "120")),
-        git_push_timeout_seconds=int(os.getenv("OPENPATCH_GIT_PUSH_TIMEOUT_SECONDS", "180")),
+        git_clone_timeout_seconds=int(os.getenv("REPOOPERATOR_GIT_CLONE_TIMEOUT_SECONDS", "300")),
+        git_fetch_timeout_seconds=int(os.getenv("REPOOPERATOR_GIT_FETCH_TIMEOUT_SECONDS", "120")),
+        git_push_timeout_seconds=int(os.getenv("REPOOPERATOR_GIT_PUSH_TIMEOUT_SECONDS", "180")),
         gitlab_base_url=_resolve_provider_value(
             env_value=os.getenv("GITLAB_BASE_URL"),
             runtime_config=runtime_config,
@@ -103,7 +103,7 @@ def get_settings() -> Settings:
         openai_api_key=_normalize_optional_value(os.getenv("OPENAI_API_KEY")),
         openai_model=_normalize_optional_value(os.getenv("OPENAI_MODEL")),
         model_request_timeout_seconds=int(
-            os.getenv("OPENPATCH_MODEL_REQUEST_TIMEOUT_SECONDS", "60")
+            os.getenv("REPOOPERATOR_MODEL_REQUEST_TIMEOUT_SECONDS", "60")
         ),
         repooperator_config_path=repooperator_config_path,
         repooperator_home_dir=repooperator_config_path.parent,
@@ -116,15 +116,10 @@ def get_settings() -> Settings:
 
 
 def _get_repooperator_config_path() -> Path:
-    configured = os.getenv("REPOOPERATOR_CONFIG_PATH") or os.getenv("OPENPATCH_CONFIG_PATH")
+    configured = os.getenv("REPOOPERATOR_CONFIG_PATH")
     if configured:
         return Path(configured).expanduser().resolve()
     repooperator_path = (Path.home() / ".repooperator" / "config.json").resolve()
-    legacy_path = (Path.home() / ".openpatch" / "config.json").resolve()
-    if repooperator_path.exists():
-        return repooperator_path
-    if legacy_path.exists():
-        return legacy_path
     return repooperator_path
 
 

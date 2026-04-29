@@ -1,14 +1,14 @@
 from pathlib import Path
 
-from openpatch_worker.config import WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
-from openpatch_worker.schemas import AgentProposeFileRequest, AgentProposeFileResponse
-from openpatch_worker.services.common import (
+from repooperator_worker.config import WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
+from repooperator_worker.schemas import AgentProposeFileRequest, AgentProposeFileResponse
+from repooperator_worker.services.common import (
     ensure_git_repository,
     ensure_safe_write_path,
     resolve_project_path,
 )
-from openpatch_worker.services.context_service import build_minimal_repo_context
-from openpatch_worker.services.model_client import (
+from repooperator_worker.services.context_service import build_minimal_repo_context
+from repooperator_worker.services.model_client import (
     ModelGenerationRequest,
     OpenAICompatibleModelClient,
 )

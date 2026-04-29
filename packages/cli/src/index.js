@@ -11,25 +11,23 @@ const term = require("./terminal");
 const PRODUCT_NAME = "RepoOperator";
 const CLI_COMMAND = "repooperator";
 const CONFIG_DIR = path.join(os.homedir(), ".repooperator");
-const LEGACY_CONFIG_DIR = path.join(os.homedir(), ".openpatch");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
-const LEGACY_CONFIG_PATH = path.join(LEGACY_CONFIG_DIR, "config.json");
 const RUN_DIR = path.join(CONFIG_DIR, "run");
-const LEGACY_RUN_DIR = path.join(LEGACY_CONFIG_DIR, "run");
 const LOG_DIR = path.join(CONFIG_DIR, "logs");
-const LEGACY_LOG_DIR = path.join(LEGACY_CONFIG_DIR, "logs");
 const STATE_PATH = path.join(RUN_DIR, "worker-state.json");
 const WEB_STATE_PATH = path.join(RUN_DIR, "web-state.json");
-const LEGACY_STATE_PATH = path.join(LEGACY_CONFIG_DIR, "daemon", "state.json");
-const LEGACY_RUN_STATE_PATH = path.join(LEGACY_RUN_DIR, "worker-state.json");
 const PID_PATH = path.join(RUN_DIR, "worker.pid");
 const WEB_PID_PATH = path.join(RUN_DIR, "web.pid");
 const WORKER_LOG_PATH = path.join(LOG_DIR, "worker.log");
 const WEB_LOG_PATH = path.join(LOG_DIR, "web.log");
 const OLLAMA_LOG_PATH = path.join(LOG_DIR, "ollama.log");
 const DEFAULT_WORKER_URL = "http://127.0.0.1:8000";
-const DEFAULT_WEB_URL = "http://127.0.0.1:3000";
+const DEFAULT_WEB_URL = "http://localhost:3000";
 const DEFAULT_REPO_BASE_DIR = path.join(os.homedir(), ".repooperator", "repos");
+const RUNTIME_DIR = path.join(CONFIG_DIR, "runtime");
+const RUNTIME_WORKER_DIR = path.join(RUNTIME_DIR, "local-worker");
+const RUNTIME_VENV_DIR = path.join(RUNTIME_DIR, "worker-venv");
+const RUNTIME_WEB_DIR = path.join(RUNTIME_DIR, "web");
 const DEFAULT_WORKER_HEALTH_TIMEOUT_MS = 1500;
 const DEFAULT_WORKER_START_TIMEOUT_MS = 8000;
 const DEFAULT_WEB_HEALTH_TIMEOUT_MS = 2000;
@@ -100,6 +98,9 @@ async function runCli() {
     case "down":
       await runDown();
       return;
+    case "_setup-runtime":
+      await runSetupRuntime();
+      return;
     case "config":
       await runConfigCommand(subcommand);
       return;
@@ -156,6 +157,7 @@ async function runWorkerCommand(subcommand) {
 
 async function runOnboard() {
   await ensureBaseDirectories();
+  await ensureRuntimeInstalled();
   const rl = readline.createInterface({ input: stdin, output: stdout });
 
   try {
@@ -200,7 +202,7 @@ async function runOnboard() {
 
     term.heading("2/6", "Environment checks", "RepoOperator checks for the local pieces it can prepare automatically.");
     const workerDetection = await term.spinner("Detect local worker installation", () =>
-      detectLocalWorkerInstallation(process.cwd()),
+      resolveWorkerInstallation({}, process.cwd()),
     );
     const webDetection = await term.spinner("Detect web app installation", () =>
       resolveWebInstallation({}, process.cwd()),
@@ -392,8 +394,33 @@ async function restartWorkerForOnboarding() {
 }
 
 async function runDoctor() {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   const checks = [];
+  const cliPackageRoot = path.resolve(__dirname, "..");
+  checks.push(makeCheck("CLI install location", true, cliPackageRoot));
+  checks.push(makeCheck("Config path", true, CONFIG_PATH));
+  checks.push(makeCheck("Runtime path", true, RUNTIME_DIR));
+  checks.push(makeCheck("Worker venv path", true, RUNTIME_VENV_DIR));
+
+  const workerVenvPython = path.join(RUNTIME_VENV_DIR, "bin", "python");
+  const webPackageJson = path.join(RUNTIME_WEB_DIR, "package.json");
+  const webNextBin = path.join(RUNTIME_WEB_DIR, "node_modules", ".bin", "next");
+  checks.push(makeCheck(
+    "Worker python exists",
+    await fileExists(workerVenvPython),
+    await fileExists(workerVenvPython) ? workerVenvPython : `Missing at ${workerVenvPython}`,
+  ));
+  checks.push(makeCheck(
+    "Web package.json exists",
+    await fileExists(webPackageJson),
+    await fileExists(webPackageJson) ? webPackageJson : `Missing at ${webPackageJson}`,
+  ));
+  checks.push(makeCheck(
+    "Web next binary exists",
+    await fileExists(webNextBin),
+    await fileExists(webNextBin) ? webNextBin : `Missing at ${webNextBin}`,
+  ));
+
   const configExists = await fileExists(CONFIG_PATH);
   checks.push(
     makeCheck(
@@ -411,17 +438,26 @@ async function runDoctor() {
 
   const config = await readConfig();
   const workerDetection = await resolveWorkerInstallation(config, process.cwd());
+  const webDetection = await resolveWebInstallation(config, process.cwd());
   const runtimeState = await readState();
+  const webState = await readWebState();
   const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
+  const webUrl = config.web?.baseUrl || DEFAULT_WEB_URL;
   const workerBinding = parseWorkerBinding(workerUrl);
+  const webBinding = parseLocalHttpBinding(webUrl, "web UI URL");
   const workerRunning = await isWorkerProcessRunning(runtimeState);
+  const webRunning = await isProcessRunning(webState?.pid);
   const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
+  const webPortState = await checkPortInUse(webBinding.host, webBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
   const workerHealth = portState.inUse || workerRunning.running
     ? await checkWorkerHealth(
       workerUrl,
       DEFAULT_WORKER_HEALTH_TIMEOUT_MS,
     )
     : { reachable: false, message: "Worker is stopped." };
+  const webHealth = webPortState.inUse || webRunning.running
+    ? await checkWebHealth(webUrl, DEFAULT_WEB_HEALTH_TIMEOUT_MS)
+    : { reachable: false, message: "Web UI is stopped." };
   const modelConnectivity = await checkModelConnectivity(
     config.model,
     DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS,
@@ -433,9 +469,16 @@ async function runDoctor() {
 
   checks.push(
     makeCheck(
-      "Local worker installation detected",
+      "Selected worker installation path",
       workerDetection.installed,
       workerDetection.summary,
+    ),
+  );
+  checks.push(
+    makeCheck(
+      "Selected web installation path",
+      webDetection.installed,
+      webDetection.summary,
     ),
   );
   checks.push(
@@ -457,6 +500,13 @@ async function runDoctor() {
       "Worker port availability",
       !portState.inUse || workerHealth.reachable,
       describePortState(portState, workerUrl, workerHealth.reachable),
+    ),
+  );
+  checks.push(
+    makeCheck(
+      "Web availability",
+      webHealth.reachable,
+      webHealth.message,
     ),
   );
   checks.push(
@@ -509,7 +559,7 @@ async function runDoctor() {
 }
 
 async function runStatus() {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   const configExists = await fileExists(CONFIG_PATH);
   if (!configExists) {
     term.summaryBox(`${PRODUCT_NAME} status`, [
@@ -565,6 +615,7 @@ async function runStatus() {
 
 async function runUp() {
   await ensureBaseDirectories();
+  await ensureRuntimeInstalled();
   const config = await requireConfig();
   const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
   const webUrl = config.web?.baseUrl || DEFAULT_WEB_URL;
@@ -599,7 +650,7 @@ async function runUp() {
 }
 
 async function runDown() {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   term.heading("Runtime", "Stopping local product runtime");
   await term.spinner("Stop web UI", () => stopWeb({ interactive: false }));
   await term.spinner("Stop local worker", () => stopWorker({ interactive: false }));
@@ -644,7 +695,27 @@ async function startWorker({ interactive, quiet = false }) {
   const workerLaunch = await resolveWorkerLaunchConfig(workerInstallation.detectedPath);
   const portState = await checkPortInUse(workerBinding.host, workerBinding.port, DEFAULT_PORT_CHECK_TIMEOUT_MS);
   if (portState.inUse) {
-    const occupiedMessage = `Configured worker URL ${workerUrl} is already in use. Stop the existing process or choose a different worker port.`;
+    const existingHealth = await checkWorkerHealth(workerUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS);
+    if (existingHealth.reachable) {
+      await writeRuntimeState({
+        ...(runtimeState || {}),
+        status: "running",
+        healthyAt: new Date().toISOString(),
+        workerUrl,
+        pidFile: PID_PATH,
+        logPath: WORKER_LOG_PATH,
+        note: "Reusing an existing healthy RepoOperator worker.",
+      });
+      if (interactive) {
+        term.summaryBox("Local worker", [
+          ["Status", "already running"],
+          ["Worker URL", workerUrl],
+          ["Detail", existingHealth.message],
+        ]);
+      }
+      return;
+    }
+    const occupiedMessage = `Configured worker URL ${workerUrl} is already in use by a non-RepoOperator process. Stop it or choose a different worker port.`;
     await writeRuntimeState({
       ...(runtimeState || {}),
       status: "failed",
@@ -662,7 +733,7 @@ async function startWorker({ interactive, quiet = false }) {
   const commandArgs = [
     "-m",
     "uvicorn",
-    "openpatch_worker.main:app",
+    "repooperator_worker.main:app",
     "--host",
     workerBinding.host,
     "--port",
@@ -674,7 +745,6 @@ async function startWorker({ interactive, quiet = false }) {
     ...process.env,
     PYTHONPATH: buildPythonPathEnv(workerLaunch.srcPath, process.env.PYTHONPATH),
     REPOOPERATOR_CONFIG_PATH: CONFIG_PATH,
-    OPENPATCH_CONFIG_PATH: CONFIG_PATH,
     LOCAL_REPO_BASE_DIR: config.localRepoBaseDir || DEFAULT_REPO_BASE_DIR,
     OPENAI_BASE_URL: config.model?.baseUrl || "",
     OPENAI_API_KEY: config.model?.apiKey || "",
@@ -804,7 +874,7 @@ async function startWorker({ interactive, quiet = false }) {
 }
 
 async function stopWorker({ interactive }) {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   const config = await readConfig().catch(() => null);
   const runtimeState = await readState();
   const workerUrl = config?.worker?.baseUrl || runtimeState?.workerUrl || DEFAULT_WORKER_URL;
@@ -827,15 +897,29 @@ async function stopWorker({ interactive }) {
   }
 
   if (portState.inUse) {
-    const detail = workerHealth.reachable
-      ? `Another responding worker or service is still listening on ${workerUrl}.`
+    const portPid = await findPidOnPort(workerBinding.port);
+    const processLooksLikeWorker = portPid ? await isRepoOperatorWorkerProcess(portPid) : false;
+    if (workerHealth.reachable || processLooksLikeWorker) {
+      const cleanupPid = portPid || runtimeState?.pid;
+      if (cleanupPid) {
+        const cleanupResult = await stopWorkerProcess(cleanupPid);
+        if (cleanupResult.exited) {
+          await clearRuntimeStateFiles();
+          if (interactive) {
+            term.summaryBox("Local worker stopped", [
+              ["Status", "stopped stale RepoOperator worker"],
+              ["PID", String(cleanupPid)],
+            ]);
+          }
+          return;
+        }
+        throw new Error(`Found a RepoOperator worker on ${workerUrl}, but could not stop PID ${cleanupPid}.`);
+      }
+    }
+    const detail = portPid
+      ? `Port ${workerBinding.port} is occupied by PID ${portPid}, which does not appear to be a RepoOperator worker.`
       : `Another process is still occupying ${workerUrl}.`;
-    const prefix = stopResult.hadPid
-      ? `${PRODUCT_NAME} stopped the recorded worker process, but the configured worker port is still in use.`
-      : `${PRODUCT_NAME} did not have a running recorded worker process, but the configured worker port is still in use.`;
-    throw new Error(
-      `${prefix} ${detail}`,
-    );
+    throw new Error(`${PRODUCT_NAME} did not stop that process. ${detail}`);
   }
 
   await clearRuntimeStateFiles();
@@ -870,6 +954,22 @@ async function restartWorker() {
     ["Worker URL", workerUrl],
     ["Logs", WORKER_LOG_PATH],
   ]);
+}
+
+async function appendWebLaunchLog({ webPath, command, cwd, pathPrefix, webUrl, workerUrl }) {
+  await ensureLogFileExists(WEB_LOG_PATH);
+  const lines = [
+    "",
+    `[${new Date().toISOString()}] RepoOperator web launch`,
+    `selected web path: ${webPath}`,
+    `cwd: ${cwd}`,
+    `command: ${command}`,
+    `PATH prefix: ${pathPrefix}`,
+    `web URL: ${webUrl}`,
+    `worker URL: ${workerUrl}`,
+    "",
+  ];
+  await fsp.appendFile(WEB_LOG_PATH, lines.join("\n"), "utf-8");
 }
 
 async function startWeb({ interactive, quiet = false, workerUrl, webUrl }) {
@@ -944,10 +1044,20 @@ async function startWeb({ interactive, quiet = false, workerUrl, webUrl }) {
     String(webBinding.port),
   ];
   const launchedCommand = `npm ${commandArgs.join(" ")}`;
+  const webBinDir = path.join(webInstallation.detectedPath, "node_modules", ".bin");
   const env = {
     ...process.env,
     NEXT_PUBLIC_LOCAL_WORKER_BASE_URL: workerUrl,
+    PATH: `${webBinDir}${path.delimiter}${process.env.PATH || ""}`,
   };
+  await appendWebLaunchLog({
+    webPath: webInstallation.detectedPath,
+    command: launchedCommand,
+    cwd: webInstallation.detectedPath,
+    pathPrefix: webBinDir,
+    webUrl,
+    workerUrl,
+  });
 
   if (interactive && !quiet) {
     term.heading("Web UI", "Starting web app");
@@ -1048,7 +1158,7 @@ async function startWeb({ interactive, quiet = false, workerUrl, webUrl }) {
 }
 
 async function stopWeb({ interactive }) {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   const webState = await readWebState();
   const config = await readConfig().catch(() => null);
   const webUrl = config?.web?.baseUrl || webState?.webUrl || DEFAULT_WEB_URL;
@@ -1060,6 +1170,9 @@ async function stopWeb({ interactive }) {
     webBinding.port,
     DEFAULT_PORT_CHECK_TIMEOUT_MS,
   );
+  const webHealth = portState.inUse
+    ? await checkWebHealth(webUrl, DEFAULT_WEB_HEALTH_TIMEOUT_MS)
+    : { reachable: false, message: "Web UI is stopped." };
 
   if (!stopResult.exited) {
     throw new Error(
@@ -1067,10 +1180,30 @@ async function stopWeb({ interactive }) {
     );
   }
 
-  if (portState.inUse && stopResult.hadPid) {
-    throw new Error(
-      `${PRODUCT_NAME} stopped the recorded web UI process, but another process is still occupying ${webUrl}.`,
-    );
+  if (portState.inUse) {
+    const portPid = await findPidOnPort(webBinding.port);
+    const processLooksLikeWeb = portPid ? await isRepoOperatorWebProcess(portPid) : false;
+    if (webHealth.reachable || processLooksLikeWeb) {
+      const cleanupPid = portPid || webState?.pid;
+      if (cleanupPid) {
+        const cleanupResult = await stopWorkerProcess(cleanupPid);
+        if (cleanupResult.exited) {
+          await clearWebRuntimeStateFiles();
+          if (interactive) {
+            term.summaryBox("Web UI stopped", [
+              ["Status", "stopped stale RepoOperator web process"],
+              ["PID", String(cleanupPid)],
+            ]);
+          }
+          return;
+        }
+        throw new Error(`Found a RepoOperator web process on ${webUrl}, but could not stop PID ${cleanupPid}.`);
+      }
+    }
+    const detail = portPid
+      ? `Port ${webBinding.port} is occupied by PID ${portPid}, which does not appear to be the RepoOperator web UI.`
+      : `Another process is still occupying ${webUrl}.`;
+    throw new Error(`${PRODUCT_NAME} did not stop that process. ${detail}`);
   }
 
   await clearWebRuntimeStateFiles();
@@ -1109,7 +1242,7 @@ async function showWorkerLogs() {
 }
 
 async function showWorkerStatus() {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   const configExists = await fileExists(CONFIG_PATH);
   if (!configExists) {
     term.summaryBox(`${PRODUCT_NAME} worker status`, [
@@ -1150,57 +1283,206 @@ async function showWorkerStatus() {
 }
 
 async function ensureBaseDirectories() {
-  await ensureMigratedRuntimeHome();
   await fsp.mkdir(CONFIG_DIR, { recursive: true });
   await fsp.mkdir(RUN_DIR, { recursive: true });
   await fsp.mkdir(LOG_DIR, { recursive: true });
 }
 
-let migrationChecked = false;
+// ---------------------------------------------------------------------------
+// Runtime bootstrap
+// ---------------------------------------------------------------------------
 
-async function ensureMigratedRuntimeHome() {
-  if (migrationChecked) {
-    return;
-  }
-
-  await fsp.mkdir(CONFIG_DIR, { recursive: true });
-  await fsp.mkdir(RUN_DIR, { recursive: true });
-  await fsp.mkdir(LOG_DIR, { recursive: true });
-
-  const repooperatorExists =
-    (await fileExists(CONFIG_PATH))
-    || (await fileExists(STATE_PATH))
-    || (await fileExists(PID_PATH))
-    || (await fileExists(WORKER_LOG_PATH));
-  const legacyExists =
-    (await fileExists(LEGACY_CONFIG_PATH))
-    || (await fileExists(LEGACY_RUN_STATE_PATH))
-    || (await fileExists(LEGACY_STATE_PATH))
-    || (await fileExists(path.join(LEGACY_RUN_DIR, "worker.pid")))
-    || (await fileExists(path.join(LEGACY_LOG_DIR, "worker.log")));
-
-  if (!repooperatorExists && legacyExists) {
-    await copyFileIfMissing(LEGACY_CONFIG_PATH, CONFIG_PATH);
-    await copyFileIfMissing(LEGACY_RUN_STATE_PATH, STATE_PATH);
-    await copyFileIfMissing(LEGACY_STATE_PATH, STATE_PATH);
-    await copyFileIfMissing(path.join(LEGACY_RUN_DIR, "worker.pid"), PID_PATH);
-    await copyFileIfMissing(path.join(LEGACY_LOG_DIR, "worker.log"), WORKER_LOG_PATH);
-    await copyFileIfMissing(path.join(LEGACY_LOG_DIR, "ollama.log"), OLLAMA_LOG_PATH);
-  }
-
-  migrationChecked = true;
+function isDevelopmentMode() {
+  return process.env.REPOOPERATOR_DEV === "1";
 }
 
-async function copyFileIfMissing(sourcePath, targetPath) {
-  if (!(await fileExists(sourcePath)) || (await fileExists(targetPath))) {
+function isCliRunningFromMonorepoSource() {
+  const monorepoWorker = path.resolve(__dirname, "../../../apps/local-worker/pyproject.toml");
+  const monorepoWeb = path.resolve(__dirname, "../../../apps/web/package.json");
+  return fs.existsSync(monorepoWorker) && fs.existsSync(monorepoWeb);
+}
+
+function allowRepoSourceRuntime() {
+  return isDevelopmentMode() || isCliRunningFromMonorepoSource();
+}
+
+function getBundledWorkerSourceDir() {
+  const packageRuntimePath = path.resolve(__dirname, "../runtime/local-worker");
+  if (fs.existsSync(path.join(packageRuntimePath, "pyproject.toml"))) {
+    return packageRuntimePath;
+  }
+
+  const monorepoPath = path.resolve(__dirname, "../../../apps/local-worker");
+  if (fs.existsSync(path.join(monorepoPath, "pyproject.toml"))) {
+    return monorepoPath;
+  }
+
+  return null;
+}
+
+function getBundledWebSourceDir() {
+  const packageRuntimePath = path.resolve(__dirname, "../runtime/web");
+  if (fs.existsSync(path.join(packageRuntimePath, "package.json"))) {
+    return packageRuntimePath;
+  }
+
+  const monorepoPath = path.resolve(__dirname, "../../../apps/web");
+  if (fs.existsSync(path.join(monorepoPath, "package.json"))) {
+    return monorepoPath;
+  }
+
+  return null;
+}
+
+async function isWorkerRuntimeInstalled() {
+  return fileExists(path.join(RUNTIME_VENV_DIR, "bin", "python"))
+    && fileExists(path.join(RUNTIME_WORKER_DIR, "src", "repooperator_worker", "main.py"));
+}
+
+async function isWebRuntimeInstalled() {
+  return fileExists(path.join(RUNTIME_WEB_DIR, "package.json"))
+    && fileExists(path.join(RUNTIME_WEB_DIR, "node_modules", ".bin", "next"));
+}
+
+async function copyRuntimeDirectory(src, dest) {
+  if (path.resolve(src) === path.resolve(dest)) {
     return;
   }
-  await fsp.mkdir(path.dirname(targetPath), { recursive: true });
-  await fsp.copyFile(sourcePath, targetPath);
+  await fsp.cp(src, dest, {
+    recursive: true,
+    force: true,
+    filter: (source) => {
+      const base = path.basename(source);
+      return ![
+        "node_modules",
+        ".venv",
+        ".git",
+        "__pycache__",
+        ".next",
+        "dist",
+        "build",
+      ].includes(base) && !base.endsWith(".egg-info") && !base.endsWith(".tgz");
+    },
+  });
+}
+
+async function installWorkerRuntime() {
+  const sourceDir = getBundledWorkerSourceDir();
+  if (!sourceDir) {
+    throw new Error(`${PRODUCT_NAME} could not find bundled local worker sources. Reinstall the repooperator npm package.`);
+  }
+  if (!(await commandExists("python3"))) {
+    throw new Error("Python 3 is required for the local worker. Install Python 3.11+ and rerun onboarding.");
+  }
+
+  await fsp.mkdir(RUNTIME_DIR, { recursive: true });
+  await fsp.rm(RUNTIME_WORKER_DIR, { recursive: true, force: true });
+  await copyRuntimeDirectory(sourceDir, RUNTIME_WORKER_DIR);
+
+  const venvPython = path.join(RUNTIME_VENV_DIR, "bin", "python");
+  if (!(await fileExists(venvPython))) {
+    const venvResult = await runCommandCapture("python3", ["-m", "venv", RUNTIME_VENV_DIR]);
+    if (venvResult.returncode !== 0) {
+      throw new Error(`Failed to create worker virtual environment at ${RUNTIME_VENV_DIR}.\n${venvResult.stderr}`);
+    }
+  }
+
+  const pipResult = await runCommandCapture(venvPython, ["-m", "pip", "install", "-U", "pip"]);
+  if (pipResult.returncode !== 0) {
+    throw new Error(`Failed to upgrade pip in worker virtual environment.\n${pipResult.stderr}`);
+  }
+
+  const installResult = await runCommandCapture(venvPython, ["-m", "pip", "install", "-e", RUNTIME_WORKER_DIR]);
+  if (installResult.returncode !== 0) {
+    throw new Error(`Failed to install local worker runtime.\n${installResult.stderr}`);
+  }
+}
+
+async function installWebRuntime() {
+  const sourceDir = getBundledWebSourceDir();
+  if (!sourceDir) {
+    throw new Error(`${PRODUCT_NAME} could not find bundled web sources. Reinstall the repooperator npm package.`);
+  }
+  if (!(await commandExists("npm"))) {
+    throw new Error("npm is required for the web UI. Install Node.js and rerun onboarding.");
+  }
+
+  await fsp.mkdir(RUNTIME_DIR, { recursive: true });
+  await fsp.rm(RUNTIME_WEB_DIR, { recursive: true, force: true });
+  await copyRuntimeDirectory(sourceDir, RUNTIME_WEB_DIR);
+  const installResult = await runCommandCapture("npm", ["install"], { cwd: RUNTIME_WEB_DIR });
+  if (installResult.returncode !== 0) {
+    throw new Error(`Failed to install web runtime dependencies.\n${installResult.stderr}`);
+  }
+}
+
+async function ensureRuntimeInstalled() {
+  await ensureBaseDirectories();
+
+  const workerPackageExists = await fileExists(path.join(RUNTIME_WORKER_DIR, "pyproject.toml"));
+  const workerInstalled = workerPackageExists && await isWorkerRuntimeInstalled();
+  const webPackageExists = await fileExists(path.join(RUNTIME_WEB_DIR, "package.json"));
+  const webInstalled = await isWebRuntimeInstalled();
+
+  if (workerInstalled && webInstalled) {
+    return;
+  }
+
+  term.line("info", "Runtime setup", "Preparing the local worker and web UI runtime.");
+  await fsp.mkdir(RUNTIME_DIR, { recursive: true });
+
+  if (!workerInstalled) {
+    await term.spinner("Prepare local worker runtime", () => installWorkerRuntime());
+    term.line("success", "Worker runtime ready", RUNTIME_VENV_DIR);
+  }
+
+  if (!webInstalled) {
+    if (webPackageExists) {
+      await term.spinner("Repair web runtime dependencies", async () => {
+        const result = await runCommandCapture("npm", ["install"], { cwd: RUNTIME_WEB_DIR });
+        if (result.returncode !== 0) {
+          throw new Error(`Failed to repair web runtime dependencies.\n${result.stderr}`);
+        }
+      });
+    } else {
+      await term.spinner("Prepare web runtime", () => installWebRuntime());
+    }
+    term.line("success", "Web runtime ready", RUNTIME_WEB_DIR);
+  }
+}
+
+async function runSetupRuntime() {
+  await ensureRuntimeInstalled();
+  term.summaryBox("Runtime ready", [
+    ["Runtime path", RUNTIME_DIR],
+    ["Worker venv", RUNTIME_VENV_DIR],
+    ["Web path", RUNTIME_WEB_DIR],
+  ]);
 }
 
 async function resolveWorkerInstallation(config, startDir) {
-  if (config?.worker?.detectedPath && (await fileExists(path.join(config.worker.detectedPath, "pyproject.toml")))) {
+  if (process.env.REPOOPERATOR_WORKER_PATH) {
+    const envPath = process.env.REPOOPERATOR_WORKER_PATH;
+    if (await fileExists(path.join(envPath, "pyproject.toml"))) {
+      return {
+        installed: true,
+        installMode: "env-override",
+        detectedPath: envPath,
+        summary: `Using REPOOPERATOR_WORKER_PATH at ${envPath}`,
+      };
+    }
+  }
+
+  if (await fileExists(path.join(RUNTIME_WORKER_DIR, "pyproject.toml"))) {
+    return {
+      installed: true,
+      installMode: "runtime",
+      detectedPath: RUNTIME_WORKER_DIR,
+      summary: `Runtime-installed local worker at ${RUNTIME_WORKER_DIR}`,
+    };
+  }
+
+  if (allowRepoSourceRuntime() && config?.worker?.detectedPath && (await fileExists(path.join(config.worker.detectedPath, "pyproject.toml")))) {
     return {
       installed: true,
       installMode: config.worker.installMode || "repo-source",
@@ -1208,7 +1490,17 @@ async function resolveWorkerInstallation(config, startDir) {
       summary: `Detected a repo-source local worker at ${config.worker.detectedPath}`,
     };
   }
-  return detectLocalWorkerInstallation(startDir);
+
+  if (allowRepoSourceRuntime()) {
+    return detectLocalWorkerInstallation(startDir);
+  }
+
+  return {
+    installed: false,
+    installMode: "not-detected",
+    detectedPath: null,
+    summary: "No runtime-installed local worker was detected. Re-run onboarding to repair the runtime.",
+  };
 }
 
 async function detectLocalWorkerInstallation(startDir) {
@@ -1231,7 +1523,29 @@ async function detectLocalWorkerInstallation(startDir) {
 }
 
 async function resolveWebInstallation(config, startDir) {
-  if (config?.web?.detectedPath && (await fileExists(path.join(config.web.detectedPath, "package.json")))) {
+  if (process.env.REPOOPERATOR_WEB_PATH) {
+    const envPath = process.env.REPOOPERATOR_WEB_PATH;
+    if (await fileExists(path.join(envPath, "package.json"))) {
+      return {
+        installed: true,
+        detectedPath: envPath,
+        summary: `Using REPOOPERATOR_WEB_PATH at ${envPath}`,
+      };
+    }
+  }
+
+  if (await fileExists(path.join(RUNTIME_WEB_DIR, "package.json"))) {
+    const nextExists = await fileExists(path.join(RUNTIME_WEB_DIR, "node_modules", ".bin", "next"));
+    return {
+      installed: nextExists,
+      detectedPath: RUNTIME_WEB_DIR,
+      summary: nextExists
+        ? `Runtime-installed web UI at ${RUNTIME_WEB_DIR}`
+        : `Runtime web UI exists at ${RUNTIME_WEB_DIR}, but node_modules/.bin/next is missing.`,
+    };
+  }
+
+  if (allowRepoSourceRuntime() && config?.web?.detectedPath && (await fileExists(path.join(config.web.detectedPath, "package.json")))) {
     return {
       installed: true,
       detectedPath: config.web.detectedPath,
@@ -1239,30 +1553,32 @@ async function resolveWebInstallation(config, startDir) {
     };
   }
 
-  const repoRoot = await findRepoRootWithWeb(startDir);
-  if (repoRoot) {
-    return {
-      installed: true,
-      detectedPath: path.join(repoRoot, "apps", "web"),
-      summary: `Detected a repo-source web UI at ${path.join(repoRoot, "apps", "web")}`,
-    };
-  }
-
-  if (config?.worker?.detectedPath) {
-    const candidate = path.resolve(config.worker.detectedPath, "..", "web");
-    if (await fileExists(path.join(candidate, "package.json"))) {
+  if (allowRepoSourceRuntime()) {
+    const repoRoot = await findRepoRootWithWeb(startDir);
+    if (repoRoot) {
       return {
         installed: true,
-        detectedPath: candidate,
-        summary: `Detected a repo-source web UI at ${candidate}`,
+        detectedPath: path.join(repoRoot, "apps", "web"),
+        summary: `Detected a repo-source web UI at ${path.join(repoRoot, "apps", "web")}`,
       };
+    }
+
+    if (config?.worker?.detectedPath) {
+      const candidate = path.resolve(config.worker.detectedPath, "..", "web");
+      if (await fileExists(path.join(candidate, "package.json"))) {
+        return {
+          installed: true,
+          detectedPath: candidate,
+          summary: `Detected a repo-source web UI at ${candidate}`,
+        };
+      }
     }
   }
 
   return {
     installed: false,
     detectedPath: null,
-    summary: "No web UI installation was detected in the current repository tree.",
+    summary: "No runtime-installed web UI was detected. Re-run onboarding to repair the runtime.",
   };
 }
 
@@ -1301,31 +1617,28 @@ async function findRepoRootWithWeb(startDir) {
 }
 
 async function resolveWorkerRuntime(workerPath) {
-  const venvPath = path.join(workerPath, ".venv");
-  const pythonPath = path.join(venvPath, "bin", "python");
-
   if (!(await commandExists("python3"))) {
     throw new Error("Python is missing. Install Python 3.11+ before starting the local worker.");
   }
 
-  if (!(await fileExists(venvPath))) {
-    throw new Error(
-      `Worker virtual environment is missing at ${venvPath}. Create it with \`cd ${workerPath} && python3 -m venv .venv && source .venv/bin/activate && pip install -e .\`.`,
-    );
+  const runtimePythonPath = path.join(RUNTIME_VENV_DIR, "bin", "python");
+  if (await fileExists(runtimePythonPath)) {
+    return { pythonPath: runtimePythonPath };
   }
 
-  if (!(await fileExists(pythonPath))) {
-    throw new Error(
-      `Worker Python executable is missing at ${pythonPath}. Recreate the virtual environment in ${workerPath}.`,
-    );
+  const localPythonPath = path.join(workerPath, ".venv", "bin", "python");
+  if (await fileExists(localPythonPath)) {
+    return { pythonPath: localPythonPath };
   }
 
-  return { pythonPath };
+  throw new Error(
+    `Worker Python executable is missing. Re-run \`${CLI_COMMAND} onboard\` to repair the runtime.`,
+  );
 }
 
 async function resolveWorkerLaunchConfig(workerPath) {
   const srcPath = path.join(workerPath, "src");
-  const moduleEntry = path.join(srcPath, "openpatch_worker", "main.py");
+  const moduleEntry = path.join(srcPath, "repooperator_worker", "main.py");
 
   if (!(await fileExists(moduleEntry))) {
     throw new Error(
@@ -2271,7 +2584,7 @@ async function showConfig() {
 }
 
 async function requireConfig() {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   if (!(await fileExists(CONFIG_PATH))) {
     throw new Error(`${PRODUCT_NAME} is not configured yet. Run \`${CLI_COMMAND} onboard\` first.`);
   }
@@ -2279,13 +2592,13 @@ async function requireConfig() {
 }
 
 async function readConfig() {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   const raw = await fsp.readFile(CONFIG_PATH, "utf-8");
   return normalizeConfig(JSON.parse(raw));
 }
 
 async function readOptionalConfig() {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   if (!(await fileExists(CONFIG_PATH))) {
     return null;
   }
@@ -2293,24 +2606,16 @@ async function readOptionalConfig() {
 }
 
 async function readState() {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   if (await fileExists(STATE_PATH)) {
     const raw = await fsp.readFile(STATE_PATH, "utf-8");
-    return JSON.parse(raw);
-  }
-  if (await fileExists(LEGACY_RUN_STATE_PATH)) {
-    const raw = await fsp.readFile(LEGACY_RUN_STATE_PATH, "utf-8");
-    return JSON.parse(raw);
-  }
-  if (await fileExists(LEGACY_STATE_PATH)) {
-    const raw = await fsp.readFile(LEGACY_STATE_PATH, "utf-8");
     return JSON.parse(raw);
   }
   return null;
 }
 
 async function readWebState() {
-  await ensureMigratedRuntimeHome();
+  await ensureBaseDirectories();
   if (await fileExists(WEB_STATE_PATH)) {
     const raw = await fsp.readFile(WEB_STATE_PATH, "utf-8");
     return JSON.parse(raw);
@@ -2344,9 +2649,6 @@ async function writeWebRuntimeState(state) {
 async function clearRuntimeStateFiles() {
   await removeFileIfExists(PID_PATH);
   await removeFileIfExists(STATE_PATH);
-  await removeFileIfExists(LEGACY_RUN_STATE_PATH);
-  await removeFileIfExists(LEGACY_STATE_PATH);
-  await removeFileIfExists(path.join(LEGACY_RUN_DIR, "worker.pid"));
 }
 
 async function clearWebRuntimeStateFiles() {
@@ -2507,6 +2809,33 @@ async function safeStopWorkerProcess(pid) {
   } catch {
     return;
   }
+}
+
+async function findPidOnPort(port) {
+  const result = await runCommandCapture("lsof", ["-t", `-iTCP:${port}`, "-sTCP:LISTEN"]);
+  if (result.returncode !== 0) {
+    return null;
+  }
+  const pid = Number(result.stdout.trim().split(/\r?\n/).find(Boolean));
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+async function isRepoOperatorWorkerProcess(pid) {
+  const result = await runCommandCapture("ps", ["-p", String(pid), "-o", "args="]);
+  if (result.returncode !== 0) {
+    return false;
+  }
+  const args = result.stdout.toLowerCase();
+  return args.includes("repooperator_worker") || (args.includes("uvicorn") && args.includes("repooperator"));
+}
+
+async function isRepoOperatorWebProcess(pid) {
+  const result = await runCommandCapture("ps", ["-p", String(pid), "-o", "args="]);
+  if (result.returncode !== 0) {
+    return false;
+  }
+  const args = result.stdout.toLowerCase();
+  return args.includes("next dev") || args.includes("repooperator-web") || args.includes(".repooperator/runtime/web");
 }
 
 async function removePidFile() {
@@ -2803,7 +3132,7 @@ function describePortState(portState, workerUrl, workerHealthy) {
 
 function classifyWorkerStartupFailure(startupHealth, logTail) {
   const tail = logTail || "";
-  if (tail.includes("ModuleNotFoundError") || tail.includes("No module named 'openpatch_worker'")) {
+  if (tail.includes("ModuleNotFoundError") || tail.includes("No module named 'repooperator_worker'")) {
     return "import_failure";
   }
   if (tail.includes("address already in use")) {

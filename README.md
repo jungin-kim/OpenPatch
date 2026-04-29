@@ -35,7 +35,6 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 - Remote model API support for OpenAI-compatible and enterprise-style APIs
 - Read-only repository Q&A through the local worker
 - Runtime config stored under `~/.repooperator`
-- Practical migration support from older `~/.openpatch` config paths
 
 ## Quickstart
 
@@ -45,7 +44,7 @@ Install the CLI:
 npm install -g repooperator
 ```
 
-Run onboarding once:
+Run onboarding once (automatically prepares the local runtime on first install):
 
 ```bash
 repooperator onboard
@@ -58,6 +57,23 @@ repooperator up
 ```
 
 Open the printed local web URL, choose a repository, and ask a read-only question.
+
+> **No GitHub clone required.** `repooperator onboard` downloads and prepares all runtime
+> dependencies into `~/.repooperator/runtime/` automatically. You do not need to clone the
+> RepoOperator source repository as a normal user.
+
+If something looks wrong, run the diagnostics command:
+
+```bash
+repooperator doctor
+```
+
+To reset everything and start fresh:
+
+```bash
+rm -rf ~/.repooperator
+repooperator onboard
+```
 
 ## First End-To-End Local Flow
 
@@ -228,7 +244,7 @@ npm run dev
 Then open:
 
 ```text
-http://127.0.0.1:3000
+http://localhost:3000
 ```
 
 ## CLI Commands
@@ -236,12 +252,12 @@ http://127.0.0.1:3000
 Core commands:
 
 ```bash
-repooperator onboard
-repooperator up
-repooperator down
-repooperator doctor
-repooperator status
-repooperator config show
+repooperator onboard       # Guided first-run setup (auto-prepares runtime on first install)
+repooperator up            # Start worker and web UI (self-heals missing runtime)
+repooperator down          # Stop worker and web UI
+repooperator doctor        # Run local diagnostics (reports runtime, worker, web, model state)
+repooperator status        # Show runtime status
+repooperator config show   # Print redacted config
 ```
 
 Worker maintenance commands:
@@ -262,6 +278,40 @@ repooperator up
 ```
 
 Use `worker` commands when you need lower-level runtime inspection or maintenance.
+
+## Source Install (Contributors Only)
+
+Normal users do **not** need to clone this repository. The npm package bundles the local worker
+and web sources inside it and installs them automatically.
+
+If you are contributing to RepoOperator, clone the repo and work from source:
+
+```bash
+git clone https://github.com/jungin-kim/RepoOperator.git
+cd RepoOperator
+
+# Install worker deps
+cd apps/local-worker
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Install web deps
+cd ../web
+npm install
+npm run dev
+
+# Run CLI from source
+cd ../../packages/cli
+node bin/repooperator.js onboard
+```
+
+You can override the paths the CLI uses with environment variables:
+
+```bash
+export REPOOPERATOR_WORKER_PATH=/path/to/apps/local-worker
+export REPOOPERATOR_WEB_PATH=/path/to/apps/web
+```
 
 ## Architecture Overview
 
@@ -396,7 +446,7 @@ Near-term priorities:
 - show which files were used in each answer more consistently
 - expand GitHub provider coverage
 - add stronger web end-to-end coverage
-- continue the OpenPatch-to-RepoOperator cleanup where legacy names remain in internal module paths
+- keep the npm-installed local runtime flow reliable across platforms
 
 Longer-term direction:
 

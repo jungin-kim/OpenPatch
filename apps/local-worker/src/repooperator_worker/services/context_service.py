@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from openpatch_worker.services.common import is_git_repository, resolve_project_path
-from openpatch_worker.services.retrieval_service import RetrievalResult, retrieve_context
-from openpatch_worker.services.subprocess_utils import run_subprocess
+from repooperator_worker.services.common import is_git_repository, resolve_project_path
+from repooperator_worker.services.retrieval_service import RetrievalResult, retrieve_context
+from repooperator_worker.services.subprocess_utils import run_subprocess
 
 MAX_README_CHARS = 4_000
 MAX_DIFF_CHARS = 6_000

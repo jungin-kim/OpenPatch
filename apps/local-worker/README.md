@@ -19,10 +19,10 @@ This worker provides the first Phase 1 endpoints:
 
 The worker is intentionally small and modular:
 
-- API routes live in `openpatch_worker/api`
-- repository, filesystem, command, and git logic live in `openpatch_worker/services`
-- environment-based settings live in `openpatch_worker/config.py`
-- request and response schemas live in `openpatch_worker/schemas`
+- API routes live in `repooperator_worker/api`
+- repository, filesystem, command, and git logic live in `repooperator_worker/services`
+- environment-based settings live in `repooperator_worker/config.py`
+- request and response schemas live in `repooperator_worker/schemas`
 
 ## Local Development
 
@@ -47,7 +47,7 @@ export LOCAL_REPO_BASE_DIR="$HOME/.repooperator/repos"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 export OPENAI_API_KEY="your-api-key"
 export OPENAI_MODEL="gpt-4.1-mini"
-uvicorn openpatch_worker.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn repooperator_worker.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ### Quick Check
@@ -85,7 +85,7 @@ GitLab setup:
 
 ```bash
 cat ~/.repooperator/config.json
-uvicorn openpatch_worker.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn repooperator_worker.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 In the product flow, git provider settings come from `~/.repooperator/config.json` first, with environment variables remaining available as advanced overrides.

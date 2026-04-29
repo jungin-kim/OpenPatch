@@ -3,7 +3,7 @@ import socket
 from dataclasses import dataclass
 from urllib import error, request
 
-from openpatch_worker.config import get_settings
+from repooperator_worker.config import get_settings
 
 
 @dataclass(frozen=True)

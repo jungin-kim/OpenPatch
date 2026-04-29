@@ -32,8 +32,8 @@ npm install
 
 ```bash
 export NEXT_PUBLIC_LOCAL_WORKER_BASE_URL="http://127.0.0.1:8000"
-export OPENPATCH_WORKER_PROXY_TIMEOUT_MS="5000"
-export OPENPATCH_WORKER_PROXY_AGENT_TIMEOUT_MS="60000"
+export REPOOPERATOR_WORKER_PROXY_TIMEOUT_MS="5000"
+export REPOOPERATOR_WORKER_PROXY_AGENT_TIMEOUT_MS="60000"
 npm run dev
 ```
 
@@ -77,7 +77,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 - This keeps local development easy while avoiding direct browser-to-worker CORS setup in the first version.
 - The current interface assumes the worker runs on the local machine, typically at `http://127.0.0.1:8000`.
 - Health-style worker requests keep a short timeout, while `/agent/run` now uses a longer inference timeout that is suitable for local Ollama usage by default.
-- You can override proxy timeouts with `OPENPATCH_WORKER_PROXY_TIMEOUT_MS` and `OPENPATCH_WORKER_PROXY_AGENT_TIMEOUT_MS`.
+- You can override proxy timeouts with `REPOOPERATOR_WORKER_PROXY_TIMEOUT_MS` and `REPOOPERATOR_WORKER_PROXY_AGENT_TIMEOUT_MS`.
 - The alpha UI now defaults to guided repository selection instead of manual `project_path` and branch entry.
 - Search filters loaded projects; it is not required before projects appear.
 - Local projects are a first-class source and support direct absolute-path entry plus recent-project suggestions.

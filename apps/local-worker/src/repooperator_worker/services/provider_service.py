@@ -5,15 +5,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib import error, parse, request
 
-from openpatch_worker.config import get_settings
-from openpatch_worker.schemas import (
+from repooperator_worker.config import get_settings
+from repooperator_worker.schemas import (
     ProviderBranchSummary,
     ProviderBranchesResponse,
     ProviderProjectSummary,
     ProviderProjectsResponse,
 )
-from openpatch_worker.services.common import get_repooperator_home_dir, is_git_repository
-from openpatch_worker.services.subprocess_utils import run_subprocess
+from repooperator_worker.services.common import get_repooperator_home_dir, is_git_repository
+from repooperator_worker.services.subprocess_utils import run_subprocess
 
 SUPPORTED_PROVIDER_LISTING = {"gitlab", "github", "local"}
 RECENT_PROJECTS_FILE_NAME = "recent-projects.json"

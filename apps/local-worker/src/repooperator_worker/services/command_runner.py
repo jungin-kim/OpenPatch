@@ -1,10 +1,10 @@
 import os
 import subprocess
 
-from openpatch_worker.config import get_settings
-from openpatch_worker.schemas import CommandRunRequest, CommandRunResponse
-from openpatch_worker.services.common import resolve_project_path
-from openpatch_worker.services.subprocess_utils import run_subprocess
+from repooperator_worker.config import get_settings
+from repooperator_worker.schemas import CommandRunRequest, CommandRunResponse
+from repooperator_worker.services.common import resolve_project_path
+from repooperator_worker.services.subprocess_utils import run_subprocess
 
 
 def run_command(request: CommandRunRequest) -> CommandRunResponse:

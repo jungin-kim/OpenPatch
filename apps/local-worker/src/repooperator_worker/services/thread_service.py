@@ -4,12 +4,12 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from openpatch_worker.schemas import (
+from repooperator_worker.schemas import (
     ThreadListResponse,
     ThreadSummary,
     ThreadUpsertRequest,
 )
-from openpatch_worker.services.common import get_repooperator_home_dir
+from repooperator_worker.services.common import get_repooperator_home_dir
 
 
 THREAD_ID_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")

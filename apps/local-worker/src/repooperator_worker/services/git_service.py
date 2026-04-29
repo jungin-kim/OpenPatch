@@ -1,5 +1,5 @@
-from openpatch_worker.config import get_settings
-from openpatch_worker.schemas import (
+from repooperator_worker.config import get_settings
+from repooperator_worker.schemas import (
     GitBranchCreateRequest,
     GitBranchCreateResponse,
     GitBranchListRequest,
@@ -14,14 +14,14 @@ from openpatch_worker.schemas import (
     GitPushRequest,
     GitPushResponse,
 )
-from openpatch_worker.schemas.responses import GitBranchListResponse, LocalBranchSummary
-from openpatch_worker.services.common import ensure_git_repository, resolve_project_path
-from openpatch_worker.services.git_providers import ProviderGitOptions, resolve_provider_git_options
-from openpatch_worker.services.review_providers import (
+from repooperator_worker.schemas.responses import GitBranchListResponse, LocalBranchSummary
+from repooperator_worker.services.common import ensure_git_repository, resolve_project_path
+from repooperator_worker.services.git_providers import ProviderGitOptions, resolve_provider_git_options
+from repooperator_worker.services.review_providers import (
     MergeRequestProviderContext,
     create_merge_request,
 )
-from openpatch_worker.services.subprocess_utils import run_subprocess
+from repooperator_worker.services.subprocess_utils import run_subprocess
 
 
 def list_local_branches(request: GitBranchListRequest) -> GitBranchListResponse:

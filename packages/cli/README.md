@@ -34,7 +34,6 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 - Remote model API support for OpenAI-compatible and enterprise-style APIs
 - Read-only repository Q&A through the local worker
 - Runtime config stored under `~/.repooperator`
-- Practical migration support from older `~/.openpatch` config paths
 
 ## Quickstart
 
@@ -138,7 +137,7 @@ npm run dev
 Then open:
 
 ```text
-http://127.0.0.1:3000
+http://localhost:3000
 ```
 
 ## CLI Commands
@@ -243,7 +242,7 @@ Near-term priorities:
 - show which files were used in each answer more consistently
 - expand GitHub provider coverage
 - add stronger web end-to-end coverage
-- continue the OpenPatch-to-RepoOperator cleanup where legacy names remain in internal module paths
+- keep the npm-installed local runtime flow reliable across platforms
 
 Longer-term direction:
 

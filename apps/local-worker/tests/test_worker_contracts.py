@@ -14,23 +14,23 @@ SRC_DIR = TESTS_DIR.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from openpatch_worker.config import get_settings
-from openpatch_worker.schemas.requests import (
+from repooperator_worker.config import get_settings
+from repooperator_worker.schemas.requests import (
     AgentProposeFileRequest,
     AgentRunRequest,
     RepoOpenRequest,
     ThreadUpsertRequest,
 )
-from openpatch_worker.services.agent_service import run_agent_task
-from openpatch_worker.services.common import get_repooperator_home_dir
-from openpatch_worker.services.git_providers import resolve_provider_git_options
-from openpatch_worker.services.repo_service import open_repository, plan_repository_open
-from openpatch_worker.services.repo_open_requests import (
+from repooperator_worker.services.agent_service import run_agent_task
+from repooperator_worker.services.common import get_repooperator_home_dir
+from repooperator_worker.services.git_providers import resolve_provider_git_options
+from repooperator_worker.services.repo_service import open_repository, plan_repository_open
+from repooperator_worker.services.repo_open_requests import (
     clear_repository_open_request,
     is_repository_open_request_current,
     mark_repository_open_request_current,
 )
-from openpatch_worker.services.thread_service import list_threads, upsert_thread
+from repooperator_worker.services.thread_service import list_threads, upsert_thread
 
 
 class WorkerContractTests(unittest.TestCase):
@@ -90,7 +90,6 @@ class WorkerContractTests(unittest.TestCase):
                 {
                     "HOME": temp_home,
                     "REPOOPERATOR_CONFIG_PATH": "",
-                    "OPENPATCH_CONFIG_PATH": "",
                 },
                 clear=False,
             ):
@@ -142,7 +141,6 @@ class WorkerContractTests(unittest.TestCase):
                 {
                     "HOME": temp_home,
                     "REPOOPERATOR_CONFIG_PATH": "",
-                    "OPENPATCH_CONFIG_PATH": "",
                 },
                 clear=False,
             ):
@@ -195,7 +193,6 @@ class WorkerContractTests(unittest.TestCase):
                 {
                     "HOME": temp_home,
                     "REPOOPERATOR_CONFIG_PATH": "",
-                    "OPENPATCH_CONFIG_PATH": "",
                     "GITHUB_BASE_URL": "",
                     "GITHUB_TOKEN": "",
                     "GITLAB_BASE_URL": "",
@@ -252,7 +249,6 @@ class WorkerContractTests(unittest.TestCase):
                 {
                     "HOME": temp_home,
                     "REPOOPERATOR_CONFIG_PATH": "",
-                    "OPENPATCH_CONFIG_PATH": "",
                     "GITHUB_BASE_URL": "",
                     "GITHUB_TOKEN": "",
                     "GITLAB_BASE_URL": "",
@@ -297,7 +293,6 @@ class WorkerContractTests(unittest.TestCase):
                 {
                     "HOME": temp_home,
                     "REPOOPERATOR_CONFIG_PATH": "",
-                    "OPENPATCH_CONFIG_PATH": "",
                     "GITLAB_BASE_URL": "https://gitlab.override.example.com",
                     "GITLAB_TOKEN": "override-token",
                 },
@@ -339,7 +334,6 @@ class WorkerContractTests(unittest.TestCase):
                 {
                     "HOME": temp_home,
                     "REPOOPERATOR_CONFIG_PATH": str(config_path),
-                    "OPENPATCH_CONFIG_PATH": str(Path(temp_home) / "old" / "config.json"),
                 },
                 clear=False,
             ):
@@ -349,17 +343,17 @@ class WorkerContractTests(unittest.TestCase):
             self.assertEqual(settings.repooperator_home_dir, config_path.parent.resolve())
             self.assertEqual(settings.gitlab_base_url, "https://gitlab.env.example.com")
 
-    def test_runtime_config_supports_legacy_openpatch_config_path_env(self) -> None:
+    def test_runtime_config_uses_repooperator_config_path_env(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
-            config_path = Path(temp_home) / ".openpatch" / "config.json"
+            config_path = Path(temp_home) / ".repooperator" / "config.json"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             config_path.write_text(
                 """
                 {
                   "gitProvider": {
                     "provider": "github",
-                    "baseUrl": "https://github.legacy.example.com",
-                    "token": "legacy-token"
+                    "baseUrl": "https://github.repooperator.example.com",
+                    "token": "repooperator-token"
                   }
                 }
                 """.strip(),
@@ -370,8 +364,7 @@ class WorkerContractTests(unittest.TestCase):
                 os.environ,
                 {
                     "HOME": temp_home,
-                    "OPENPATCH_CONFIG_PATH": str(config_path),
-                    "REPOOPERATOR_CONFIG_PATH": "",
+                    "REPOOPERATOR_CONFIG_PATH": str(config_path),
                 },
                 clear=False,
             ):
@@ -379,13 +372,13 @@ class WorkerContractTests(unittest.TestCase):
 
             self.assertEqual(settings.repooperator_config_path, config_path.resolve())
             self.assertEqual(settings.repooperator_home_dir, config_path.parent.resolve())
-            self.assertEqual(settings.github_base_url, "https://github.legacy.example.com")
+            self.assertEqual(settings.github_base_url, "https://github.repooperator.example.com")
 
-    def test_runtime_config_falls_back_to_legacy_openpatch_home(self) -> None:
+    def test_runtime_config_falls_back_to_repooperator_home(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
-            legacy_config = Path(temp_home) / ".openpatch" / "config.json"
-            legacy_config.parent.mkdir(parents=True, exist_ok=True)
-            legacy_config.write_text(
+            config_path = Path(temp_home) / ".repooperator" / "config.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
                 """
                 {
                   "gitProvider": {
@@ -400,8 +393,8 @@ class WorkerContractTests(unittest.TestCase):
                 settings = get_settings()
                 home_dir = get_repooperator_home_dir()
 
-            self.assertEqual(settings.repooperator_config_path, legacy_config.resolve())
-            self.assertEqual(home_dir, legacy_config.parent.resolve())
+            self.assertEqual(settings.repooperator_config_path, config_path.resolve())
+            self.assertEqual(home_dir, config_path.parent.resolve())
 
     def test_repository_switch_replaces_active_agent_context(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
@@ -445,10 +438,10 @@ class WorkerContractTests(unittest.TestCase):
                 },
                 clear=False,
             ), patch(
-                "openpatch_worker.services.repo_service._fetch_repository",
+                "repooperator_worker.services.repo_service._fetch_repository",
                 return_value=None,
             ), patch(
-                "openpatch_worker.services.agent_service.OpenAICompatibleModelClient.generate_text",
+                "repooperator_worker.services.agent_service.OpenAICompatibleModelClient.generate_text",
                 fake_generate_text,
             ):
                 opened_gitlab = open_repository(
@@ -527,7 +520,6 @@ class WorkerContractTests(unittest.TestCase):
                     "HOME": temp_home,
                     "REPOOPERATOR_CONFIG_PATH": str(config_path),
                     "LOCAL_REPO_BASE_DIR": str(repo_base),
-                    "OPENPATCH_CONFIG_PATH": "",
                 },
                 clear=False,
             ):
@@ -576,7 +568,6 @@ class WorkerContractTests(unittest.TestCase):
                 {
                     "HOME": temp_home,
                     "REPOOPERATOR_CONFIG_PATH": str(config_dir / "config.json"),
-                    "OPENPATCH_CONFIG_PATH": "",
                 },
                 clear=False,
             ):
