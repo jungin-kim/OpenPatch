@@ -334,6 +334,26 @@ class GitMergeRequestCreateRequest(BaseModel):
         return stripped or None
 
 
+class ConversationMessage(BaseModel):
+    role: str
+    content: str
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"user", "assistant", "system"}:
+            raise ValueError("role must be one of: user, assistant, system")
+        return normalized
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("content must not be empty")
+        return value
+
+
 class AgentRunRequest(BaseModel):
     project_path: str = Field(
         ...,
@@ -347,6 +367,10 @@ class AgentRunRequest(BaseModel):
     branch: str | None = Field(
         default=None,
         description="Branch that was active when the repository was opened.",
+    )
+    conversation_history: list[ConversationMessage] = Field(
+        default_factory=list,
+        description="Recent conversation turns (user + assistant) for write confirmation context.",
     )
 
     @field_validator("project_path")

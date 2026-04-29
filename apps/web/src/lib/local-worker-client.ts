@@ -141,7 +141,7 @@ export type AgentRunPayload = {
   files_read: string[];
   response: string;
   // Write-intent routing fields
-  response_type?: "assistant_answer" | "change_proposal";
+  response_type?: "assistant_answer" | "change_proposal" | "permission_required";
   proposal_relative_path?: string | null;
   proposal_original_content?: string | null;
   proposal_proposed_content?: string | null;
@@ -286,11 +286,17 @@ export async function getRepositoryOpenPlan(input: {
   return parseWorkerResponse<RepoOpenPlanPayload>(response);
 }
 
+export type ConversationMessage = {
+  role: "user" | "assistant" | "system";
+  content: string;
+};
+
 export async function runAgentTask(input: {
   project_path: string;
   git_provider?: string;
   branch?: string;
   task: string;
+  conversation_history?: ConversationMessage[];
 }): Promise<AgentRunPayload> {
   const response = await fetch("/api/worker/agent-run", {
     method: "POST",

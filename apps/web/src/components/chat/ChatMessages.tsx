@@ -196,6 +196,16 @@ export function ChatMessages({
                   writeMode={writeMode}
                   onStatusChange={onProposalStatusChange ?? (() => {})}
                 />
+              ) : msg.role === "assistant" && msg.metadata?.response_type === "permission_required" ? (
+                <div className="message-bubble message-bubble-permission">
+                  <div className="permission-callout">
+                    <span className="permission-callout-icon" aria-hidden="true">🔒</span>
+                    <div>
+                      <div className="permission-callout-title">Write permission required</div>
+                      <div className="permission-callout-body">{msg.content}</div>
+                    </div>
+                  </div>
+                </div>
               ) : msg.role === "assistant" ? (
                 <div className="message-bubble message-bubble-md">
                   <MarkdownContent content={msg.content} />

@@ -1412,6 +1412,42 @@ select {
   font-size: 0.86rem;
 }
 
+.message-bubble-permission {
+  max-width: 88%;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+.permission-callout {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid rgba(192, 57, 43, 0.3);
+  background: rgba(192, 57, 43, 0.06);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+.permission-callout-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.permission-callout-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: #c0392b;
+  margin-bottom: 4px;
+}
+
+.permission-callout-body {
+  font-size: 0.86rem;
+  color: var(--foreground);
+  line-height: 1.5;
+}
+
 .message-timestamp {
   font-size: 0.74rem;
   color: var(--muted);

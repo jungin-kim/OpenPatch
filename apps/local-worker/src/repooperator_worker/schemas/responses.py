@@ -183,7 +183,7 @@ class AgentRunResponse(BaseModel):
     files_read: list[str] = []
     response: str
     # Write-intent routing fields (populated when response_type != "assistant_answer")
-    response_type: str = "assistant_answer"  # "assistant_answer" | "change_proposal"
+    response_type: str = "assistant_answer"  # "assistant_answer" | "change_proposal" | "permission_required"
     proposal_relative_path: str | None = None
     proposal_original_content: str | None = None
     proposal_proposed_content: str | None = None

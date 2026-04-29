@@ -18,6 +18,7 @@ import {
   saveThread,
   updatePermissionMode,
   type AgentRunPayload,
+  type ConversationMessage,
   type PermissionMode,
   type ProviderBranchSummary,
   type ProviderProjectSummary,
@@ -561,12 +562,20 @@ export function ChatApp() {
     setQuestion("");
     setQuestionPending(true);
 
+    // Build conversation history from the last 10 messages (user + assistant only)
+    // so the backend can resolve write confirmations against prior suggestions.
+    const conversationHistory: ConversationMessage[] = messagesWithUser
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-10)
+      .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+
     try {
       const payload = await runAgentTask({
         project_path: repoResult.project_path,
         git_provider: repoResult.git_provider,
         branch: repoResult.branch || undefined,
         task: userMessage.content,
+        conversation_history: conversationHistory,
       });
 
       let assistantMessage: ChatMessage;

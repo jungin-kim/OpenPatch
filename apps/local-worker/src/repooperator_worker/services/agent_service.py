@@ -45,6 +45,22 @@ _WRITE_INTENT_KEYWORDS = frozenset({
     "바꿔줘", "만들어줘", "구현해줘", "추가해줘", "삭제해줘",
 })
 
+# Short confirmation phrases that mean "yes, apply the previous suggestion".
+# These are short enough that they won't reliably hit _WRITE_INTENT_KEYWORDS on
+# their own, but combined with a previous assistant suggestion they should
+# trigger proposal generation.
+_WRITE_CONFIRMATION_PHRASES = frozenset({
+    # Korean
+    "응", "그래", "ㅇㅇ", "넵", "네",
+    "바꿔줘", "수정해줘", "수정해달라", "수정해달라니까",
+    "적용해줘", "그대로 해줘", "그대로해줘", "해줘", "해",
+    "고쳐줘", "변경해줘", "바꿔", "적용해",
+    # English
+    "yes", "yep", "yup", "yeah", "ok", "okay", "sure", "go ahead",
+    "apply that", "apply it", "do it", "make that change", "make the change",
+    "apply", "do that", "just do it",
+})
+
 _FILE_HINT_RE = re.compile(r'\b([\w./\\-]+\.[a-zA-Z]{1,6})\b', re.ASCII)
 
 _SYSTEM_PROMPT = """\
@@ -62,6 +78,50 @@ which additional files should be inspected.
 - Do not speculate about code that is not shown in the context.
 - Mention which files you drew from when it adds clarity (e.g. "In main.py, …").
 - Keep answers focused and practical."""
+
+
+def _is_confirmation_phrase(task: str) -> bool:
+    """Return True if the task is a short write confirmation with no new content."""
+    stripped = task.strip().lower().rstrip("!?.")
+    # Exact match against known confirmation phrases
+    if stripped in _WRITE_CONFIRMATION_PHRASES:
+        return True
+    # Short messages (≤ 15 chars) that contain a confirmation keyword but no file
+    # hints are very likely confirmations ("응 바꿔줘", "수정해달라니까", …).
+    if len(stripped) <= 20:
+        tokens = re.findall(r'\w+', stripped)
+        has_confirmation = any(tok in _WRITE_CONFIRMATION_PHRASES for tok in tokens)
+        non_ascii_has_confirmation = any(ph in stripped for ph in _WRITE_CONFIRMATION_PHRASES if not ph.isascii())
+        if has_confirmation or non_ascii_has_confirmation:
+            return True
+    return False
+
+
+def _extract_pending_context_from_history(
+    history: list,
+) -> tuple[list[str], str]:
+    """Scan conversation history for the most recent assistant suggestion with file hints.
+
+    Returns (file_hints, suggestion_text).  file_hints may be empty if the
+    assistant's previous message contained no recognisable filenames.
+    """
+    from repooperator_worker.services.retrieval_service import SOURCE_EXTENSIONS
+
+    for msg in reversed(history):
+        if getattr(msg, "role", None) != "assistant":
+            continue
+        content = getattr(msg, "content", "") or ""
+        # Extract file hints from the assistant's previous response
+        hints: list[str] = []
+        for match in _FILE_HINT_RE.finditer(content):
+            candidate = match.group(1)
+            suffix = Path(candidate).suffix.lower()
+            if suffix in SOURCE_EXTENSIONS and not candidate.lower().startswith("http"):
+                hints.append(candidate)
+        # Even without file hints return the text so the caller can decide
+        return hints, content
+
+    return [], ""
 
 
 def detect_write_intent(task: str) -> tuple[bool, list[str]]:
@@ -161,6 +221,101 @@ def _build_minimal_run_response(request: AgentRunRequest, *, response: str, resp
     )
 
 
+def _find_original_user_instruction(history: list) -> str | None:
+    """Return the most recent user message that looks like a write instruction.
+
+    Walks history in reverse to find the user turn that preceded the assistant's
+    suggestion, so the proposal uses the original intent rather than the terse
+    confirmation phrase.
+    """
+    for msg in reversed(history):
+        if getattr(msg, "role", None) != "user":
+            continue
+        content = getattr(msg, "content", "") or ""
+        # Skip the confirmation phrase itself (it will be the last user message)
+        if _is_confirmation_phrase(content):
+            continue
+        # If this user message had write intent, use it as the instruction
+        has_keyword, _ = detect_write_intent(content)
+        if has_keyword:
+            return content
+        # Return the first non-confirmation user message regardless
+        return content
+    return None
+
+
+def _generate_proposal(
+    request: AgentRunRequest,
+    resolved_path: str,
+    instruction: str,
+) -> AgentRunResponse:
+    """Generate a change proposal for a resolved file path and return the response."""
+    from repooperator_worker.schemas import AgentProposeFileRequest
+    from repooperator_worker.services.edit_service import propose_file_edit
+
+    proposal = propose_file_edit(
+        AgentProposeFileRequest(
+            project_path=request.project_path,
+            relative_path=resolved_path,
+            instruction=instruction,
+        )
+    )
+    base = _build_minimal_run_response(
+        request,
+        response=f"Proposed change to `{resolved_path}`. Review the diff and apply if it looks correct.",
+        response_type="change_proposal",
+    )
+    return base.model_copy(update={
+        "model": proposal.model,
+        "proposal_relative_path": proposal.relative_path,
+        "proposal_original_content": proposal.original_content,
+        "proposal_proposed_content": proposal.proposed_content,
+        "proposal_context_summary": proposal.context_summary,
+        "files_read": [proposal.relative_path],
+    })
+
+
+def _route_write_request(
+    request: AgentRunRequest,
+    file_hints: list[str],
+    instruction: str,
+) -> AgentRunResponse:
+    """Resolve target file and generate a proposal, or return a clarification."""
+    resolved_path, candidates = _resolve_write_target(request.project_path, file_hints)
+
+    if not resolved_path and candidates:
+        candidate_list = "\n".join(f"- `{c}`" for c in candidates)
+        return _build_minimal_run_response(
+            request,
+            response=f"I found multiple files that could match. Which one should I modify?\n\n{candidate_list}",
+        )
+
+    if not resolved_path and not file_hints:
+        return _build_minimal_run_response(
+            request,
+            response=(
+                "Which file should I modify? "
+                "Mention the file name in your request and I will generate a diff for review."
+            ),
+        )
+
+    if not resolved_path:
+        hint_list = ", ".join(f"`{h}`" for h in file_hints)
+        return _build_minimal_run_response(
+            request,
+            response=f"I could not find {hint_list} in this repository. Check the file name and try again.",
+        )
+
+    try:
+        return _generate_proposal(request, resolved_path, instruction)
+    except (ValueError, RuntimeError) as exc:
+        logger.warning("agent_service: proposal generation failed: %r", exc)
+        return _build_minimal_run_response(
+            request,
+            response=f"Unable to generate a proposal: {exc}",
+        )
+
+
 def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
     """Run the agent task, using LangGraph when available.
 
@@ -168,16 +323,58 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
     - In read-only mode: the user is told to switch to Auto review.
     - In write-with-approval mode: a change proposal is generated inline.
 
+    Write confirmations ("응 바꿔줘", "go ahead", …) are resolved against the
+    most recent assistant suggestion in conversation_history.
+
     Falls back to the legacy direct execution path if LangGraph raises an
     unexpected import or runtime error that is not a user-facing ValueError.
     """
     settings = get_settings()
+
+    # ── Step 1: Write confirmation check ─────────────────────────────────────
+    # Detect short follow-up phrases that mean "apply what you just suggested".
+    is_confirmation = _is_confirmation_phrase(request.task)
+    if is_confirmation and request.conversation_history:
+        pending_hints, pending_text = _extract_pending_context_from_history(
+            request.conversation_history
+        )
+        logger.info(
+            "agent_service: write confirmation detected, pending_hints=%r",
+            pending_hints,
+        )
+
+        if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
+            return _build_minimal_run_response(
+                request,
+                response=(
+                    "This looks like a change request. "
+                    "Switch the permission mode to **Auto review** to let RepoOperator "
+                    "propose a diff for your approval."
+                ),
+                response_type="permission_required",
+            )
+
+        if pending_hints:
+            # Reconstruct the original user instruction from history
+            original_instruction = _find_original_user_instruction(request.conversation_history)
+            instruction = original_instruction or pending_text
+            return _route_write_request(request, pending_hints, instruction)
+
+        # No file hints in history — ask what to modify
+        return _build_minimal_run_response(
+            request,
+            response=(
+                "What should I modify? Please mention the file name and describe the change."
+            ),
+        )
+
+    # ── Step 2: Direct write intent ──────────────────────────────────────────
     is_write, file_hints = detect_write_intent(request.task)
 
     if is_write:
         if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
             logger.info(
-                "agent_service: write intent detected but mode=%r — returning write_blocked",
+                "agent_service: write intent detected but mode=%r — returning permission_required",
                 settings.write_mode,
             )
             return _build_minimal_run_response(
@@ -187,74 +384,14 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
                     "Switch the permission mode to **Auto review** to let RepoOperator "
                     "propose a diff for your approval."
                 ),
+                response_type="permission_required",
             )
 
-        # Auto review — try to generate a proposal
         logger.info(
             "agent_service: write intent detected, mode=write-with-approval, hints=%r",
             file_hints,
         )
-        resolved_path, candidates = _resolve_write_target(request.project_path, file_hints)
-
-        if not resolved_path and candidates:
-            candidate_list = "\n".join(f"- `{c}`" for c in candidates)
-            return _build_minimal_run_response(
-                request,
-                response=(
-                    f"I found multiple files that could match. Which one should I modify?\n\n{candidate_list}"
-                ),
-            )
-
-        if not resolved_path and not file_hints:
-            return _build_minimal_run_response(
-                request,
-                response=(
-                    "Which file should I modify? "
-                    "Mention the file name in your request and I will generate a diff for review."
-                ),
-            )
-
-        if not resolved_path:
-            hint_list = ", ".join(f"`{h}`" for h in file_hints)
-            return _build_minimal_run_response(
-                request,
-                response=(
-                    f"I could not find {hint_list} in this repository. "
-                    "Check the file name and try again."
-                ),
-            )
-
-        # File resolved — generate proposal
-        try:
-            from repooperator_worker.schemas import AgentProposeFileRequest
-            from repooperator_worker.services.edit_service import propose_file_edit
-
-            proposal = propose_file_edit(
-                AgentProposeFileRequest(
-                    project_path=request.project_path,
-                    relative_path=resolved_path,
-                    instruction=request.task,
-                )
-            )
-            base = _build_minimal_run_response(
-                request,
-                response=f"Proposed change to `{resolved_path}`. Review the diff and apply if it looks correct.",
-                response_type="change_proposal",
-            )
-            return base.model_copy(update={
-                "model": proposal.model,
-                "proposal_relative_path": proposal.relative_path,
-                "proposal_original_content": proposal.original_content,
-                "proposal_proposed_content": proposal.proposed_content,
-                "proposal_context_summary": proposal.context_summary,
-                "files_read": [proposal.relative_path],
-            })
-        except (ValueError, RuntimeError) as exc:
-            logger.warning("agent_service: proposal generation failed: %r", exc)
-            return _build_minimal_run_response(
-                request,
-                response=f"Unable to generate a proposal: {exc}",
-            )
+        return _route_write_request(request, file_hints, request.task)
 
     if _USE_LANGGRAPH:
         try:
