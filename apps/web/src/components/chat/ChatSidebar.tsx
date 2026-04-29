@@ -106,6 +106,13 @@ export function ChatSidebar({
 
         <div className="sidebar-section">
           <Link
+            href="/debug"
+            className="sidebar-item"
+            style={{ display: "block", color: "var(--muted)", fontSize: "0.84rem", marginBottom: 6 }}
+          >
+            Debug dashboard
+          </Link>
+          <Link
             href="/"
             className="sidebar-item"
             style={{ display: "block", color: "var(--muted)", fontSize: "0.84rem" }}

@@ -263,7 +263,7 @@ RepoOperator supports two model connection modes:
 
 | Mode | Providers | Notes |
 | --- | --- | --- |
-| Local self-served runtime | Ollama | First-class local path. The default suggested model is `qwen2.5-coder:7b`. |
+| Local self-served runtime | Ollama, vLLM | Ollama is first-class for laptop use. vLLM uses an OpenAI-compatible endpoint on this machine or a trusted LAN host. |
 | Remote model API | OpenAI-compatible, OpenAI, Anthropic, Gemini | Intended for enterprise API gateways and hosted model providers. |
 
 For a local Ollama setup, onboarding uses:
@@ -271,6 +271,20 @@ For a local Ollama setup, onboarding uses:
 ```text
 http://127.0.0.1:11434/v1
 ```
+
+For vLLM, start your runtime separately and point RepoOperator at its OpenAI-compatible base URL:
+
+```bash
+vllm serve <model> --host 0.0.0.0 --port 8001 --api-key <optional-token>
+```
+
+Default vLLM base URL:
+
+```text
+http://127.0.0.1:8001/v1
+```
+
+Only expose unauthenticated vLLM endpoints on trusted local or private networks.
 
 ## Web App
 

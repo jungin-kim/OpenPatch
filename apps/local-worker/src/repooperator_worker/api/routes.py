@@ -64,6 +64,12 @@ from repooperator_worker.services.git_service import (
 )
 from repooperator_worker.services.repo_service import open_repository, plan_repository_open
 from repooperator_worker.services.thread_service import list_threads, upsert_thread
+from repooperator_worker.services.debug_service import (
+    discover_skills,
+    get_debug_runtime_status,
+    integration_status,
+    list_memory_items,
+)
 
 router = APIRouter()
 
@@ -80,6 +86,7 @@ def health() -> HealthResponse:
         configured_model_connection_mode=settings.configured_model_connection_mode,
         configured_model_provider=settings.configured_model_provider,
         configured_model_name=settings.configured_model_name,
+        configured_model_base_url=settings.openai_base_url,
         write_mode=settings.write_mode,
         recent_projects=list_recent_project_paths(),
     )
@@ -96,6 +103,26 @@ def permissions_post(request: PermissionModeRequest) -> PermissionModeResponse:
         return update_permission_mode(request.write_mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/debug/runtime")
+def debug_runtime() -> dict:
+    return get_debug_runtime_status()
+
+
+@router.get("/debug/memory")
+def debug_memory() -> dict:
+    return list_memory_items()
+
+
+@router.get("/debug/skills")
+def debug_skills() -> dict:
+    return discover_skills()
+
+
+@router.get("/debug/integrations")
+def debug_integrations() -> dict:
+    return integration_status()
 
 
 @router.get("/provider/projects", response_model=ProviderProjectsResponse)

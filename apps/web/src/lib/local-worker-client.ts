@@ -11,6 +11,7 @@ export type WorkerHealthPayload = {
   configured_model_connection_mode?: string | null;
   configured_model_provider?: string | null;
   configured_model_name?: string | null;
+  configured_model_base_url?: string | null;
   write_mode?: PermissionMode;
   recent_projects?: string[];
 };
@@ -141,11 +142,17 @@ export type AgentRunPayload = {
   files_read: string[];
   response: string;
   // Write-intent routing fields
-  response_type?: "assistant_answer" | "change_proposal" | "permission_required";
+  response_type?: "assistant_answer" | "change_proposal" | "permission_required" | "clarification" | "proposal_error";
   proposal_relative_path?: string | null;
   proposal_original_content?: string | null;
   proposal_proposed_content?: string | null;
   proposal_context_summary?: string | null;
+  clarification_candidates?: string[];
+  selected_target_file?: string | null;
+  intent_classification?: string | null;
+  graph_path?: string | null;
+  agent_flow?: string | null;
+  proposal_error_details?: string | null;
 };
 
 export type ThreadMessagePayload = {
@@ -289,6 +296,7 @@ export async function getRepositoryOpenPlan(input: {
 export type ConversationMessage = {
   role: "user" | "assistant" | "system";
   content: string;
+  metadata?: Record<string, unknown> | AgentRunPayload | null;
 };
 
 export async function runAgentTask(input: {

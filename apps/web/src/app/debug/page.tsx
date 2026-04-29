@@ -1,238 +1,205 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
-type HealthData = {
-  status: string;
-  service: string;
-  repo_base_dir: string;
-  configured_git_provider?: string | null;
-  configured_model_connection_mode?: string | null;
-  configured_model_provider?: string | null;
-  configured_model_name?: string | null;
-  write_mode?: string;
-  recent_projects?: string[];
+type RuntimeDebug = {
+  worker?: { status?: string; service?: string };
+  model?: { provider?: string | null; connection_mode?: string | null; name?: string | null; base_url?: string | null };
+  permissions?: { write_mode?: string };
+  repository?: { source?: string | null; project_path?: string | null; branch?: string | null };
+  agent?: { orchestration_mode?: string };
+  recent_runs?: Array<Record<string, unknown>>;
 };
 
-function StatusBadge({ value, ok }: { value: string; ok: boolean }) {
-  return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "2px 10px",
-        borderRadius: 4,
-        fontSize: 12,
-        fontWeight: 600,
-        background: ok ? "var(--color-success-bg, #d1fae5)" : "var(--color-error-bg, #fee2e2)",
-        color: ok ? "var(--color-success-text, #065f46)" : "var(--color-error-text, #991b1b)",
-      }}
-    >
-      {value}
-    </span>
-  );
-}
+type MemoryDebug = {
+  items: Array<{ id: string; type: string; content: string; source: string; created_at: string }>;
+  graph: { nodes: unknown[]; edges: unknown[] };
+};
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        background: "var(--color-surface, #fff)",
-        border: "1px solid var(--color-border, #e5e7eb)",
-        borderRadius: 8,
-        padding: "16px 20px",
-        marginBottom: 16,
-      }}
-    >
-      <h2
-        style={{
-          fontSize: 14,
-          fontWeight: 600,
-          color: "var(--color-text-secondary, #6b7280)",
-          textTransform: "uppercase",
-          letterSpacing: "0.05em",
-          margin: "0 0 12px",
-        }}
-      >
-        {title}
-      </h2>
-      {children}
-    </div>
-  );
-}
+type SkillsDebug = {
+  skills: Array<{ name: string; source_path: string; description: string; enabled: boolean }>;
+};
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: "6px 0",
-        borderBottom: "1px solid var(--color-border, #f3f4f6)",
-      }}
-    >
-      <span style={{ fontSize: 13, color: "var(--color-text-secondary, #6b7280)" }}>{label}</span>
-      <span style={{ fontSize: 13, fontFamily: "monospace" }}>{value}</span>
-    </div>
-  );
-}
+type IntegrationsDebug = {
+  integrations: Array<{ provider: string; status: string; account?: string | null; tools_count: number; message?: string }>;
+};
 
-function PlaceholderSection({ title, description }: { title: string; description: string }) {
-  return (
-    <Card title={title}>
-      <div
-        style={{
-          padding: "20px 0",
-          textAlign: "center",
-          color: "var(--color-text-secondary, #9ca3af)",
-          fontSize: 13,
-        }}
-      >
-        <div style={{ fontSize: 24, marginBottom: 8 }}>⋯</div>
-        <div>{description}</div>
-        <div
-          style={{
-            marginTop: 6,
-            fontSize: 11,
-            background: "var(--color-surface-alt, #f9fafb)",
-            border: "1px dashed var(--color-border, #e5e7eb)",
-            borderRadius: 4,
-            padding: "4px 8px",
-            display: "inline-block",
-          }}
-        >
-          Placeholder — not yet implemented
-        </div>
-      </div>
-    </Card>
-  );
+const tabs = ["Dashboard", "Agents", "Memory", "Skills", "Integrations", "Events / Runs", "Settings"] as const;
+type DebugTab = typeof tabs[number];
+
+async function loadJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`${url} returned ${response.status}`);
+  return (await response.json()) as T;
 }
 
 export default function DebugPage() {
-  const [health, setHealth] = useState<HealthData | null>(null);
+  const [activeTab, setActiveTab] = useState<DebugTab>("Dashboard");
+  const [runtime, setRuntime] = useState<RuntimeDebug | null>(null);
+  const [memory, setMemory] = useState<MemoryDebug | null>(null);
+  const [skills, setSkills] = useState<SkillsDebug | null>(null);
+  const [integrations, setIntegrations] = useState<IntegrationsDebug | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch("/api/worker/health", { cache: "no-store" });
-        if (!res.ok) {
-          setError(`Worker returned ${res.status}`);
-          return;
-        }
-        const data = (await res.json()) as HealthData;
-        setHealth(data);
-      } catch {
-        setError("Unable to reach the local worker. Make sure it is running.");
-      } finally {
-        setLoading(false);
+        const [runtimePayload, memoryPayload, skillsPayload, integrationsPayload] = await Promise.all([
+          loadJson<RuntimeDebug>("/api/worker/debug/runtime"),
+          loadJson<MemoryDebug>("/api/worker/debug/memory"),
+          loadJson<SkillsDebug>("/api/worker/debug/skills"),
+          loadJson<IntegrationsDebug>("/api/worker/debug/integrations"),
+        ]);
+        setRuntime(runtimePayload);
+        setMemory(memoryPayload);
+        setSkills(skillsPayload);
+        setIntegrations(integrationsPayload);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unable to load debug data.");
       }
     }
     void load();
   }, []);
 
-  const workerOk = health?.status === "ok";
-  const hasModel = Boolean(health?.configured_model_name);
-
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "var(--color-bg, #f9fafb)",
-        padding: "32px 24px",
-        fontFamily: "var(--font-sans, system-ui, sans-serif)",
-      }}
-    >
-      <div style={{ maxWidth: 720, margin: "0 auto" }}>
-        {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-          <a
-            href="/app"
-            style={{
-              fontSize: 13,
-              color: "var(--color-text-secondary, #6b7280)",
-              textDecoration: "none",
-            }}
+    <div className="debug-shell">
+      <aside className="debug-sidebar">
+        <div className="debug-brand">RepoOperator Debug</div>
+        {tabs.map((tab) => (
+          <button
+            key={tab}
+            className={`debug-tab${activeTab === tab ? " debug-tab-active" : ""}`}
+            type="button"
+            onClick={() => setActiveTab(tab)}
           >
-            ← Back to workspace
-          </a>
-          <span style={{ color: "var(--color-border, #d1d5db)" }}>|</span>
-          <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Debug Dashboard</h1>
-          <StatusBadge value={loading ? "Loading…" : workerOk ? "Worker online" : "Worker offline"} ok={!loading && workerOk} />
-        </div>
-
-        {error && (
-          <div
-            style={{
-              background: "var(--color-error-bg, #fee2e2)",
-              color: "var(--color-error-text, #991b1b)",
-              borderRadius: 6,
-              padding: "10px 14px",
-              marginBottom: 16,
-              fontSize: 13,
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        {/* Worker Status */}
-        <Card title="Worker Status">
-          <Row label="Status" value={<StatusBadge value={health?.status ?? "—"} ok={workerOk} />} />
-          <Row label="Service" value={health?.service ?? "—"} />
-          <Row label="Repo base dir" value={health?.repo_base_dir ?? "—"} />
-          <Row label="Write mode" value={health?.write_mode ?? "—"} />
-        </Card>
-
-        {/* Model */}
-        <Card title="Model Configuration">
-          <Row label="Provider" value={health?.configured_model_provider ?? "—"} />
-          <Row label="Connection mode" value={health?.configured_model_connection_mode ?? "—"} />
-          <Row label="Model name" value={<StatusBadge value={health?.configured_model_name ?? "not configured"} ok={hasModel} />} />
-        </Card>
-
-        {/* Repository */}
-        <Card title="Repository Source">
-          <Row label="Git provider" value={health?.configured_git_provider ?? "—"} />
-          <Row
-            label="Recent projects"
-            value={
-              health?.recent_projects?.length
-                ? `${health.recent_projects.length} project(s)`
-                : "none"
-            }
-          />
-          {health?.recent_projects?.slice(0, 3).map((p) => (
-            <Row key={p} label="" value={<span style={{ fontFamily: "monospace", fontSize: 11 }}>{p}</span>} />
-          ))}
-        </Card>
-
-        {/* Placeholders for future sections */}
-        <PlaceholderSection
-          title="Agent Runs"
-          description="Timeline of recent agent executions, proposals, and applied changes."
-        />
-
-        <PlaceholderSection
-          title="Memory"
-          description="Persistent memory store — table and graph views. Requires memory backend."
-        />
-
-        <PlaceholderSection
-          title="Skills"
-          description="Installed skills from skills.md registry — name, path, enabled state."
-        />
-
-        <PlaceholderSection
-          title="Integrations"
-          description="Connected integrations (Composio, GitHub Apps, etc.) — status and tools count."
-        />
-
-        <div style={{ textAlign: "center", marginTop: 24, fontSize: 12, color: "var(--color-text-secondary, #9ca3af)" }}>
-          RepoOperator Debug Dashboard — placeholders are planned features, not active yet.
-        </div>
-      </div>
+            {tab}
+          </button>
+        ))}
+        <Link className="debug-back-link" href="/app">Back to app</Link>
+      </aside>
+      <main className="debug-main">
+        <header className="debug-header">
+          <h1>{activeTab}</h1>
+          <span className={`debug-status${runtime?.worker?.status === "ok" ? " debug-status-ok" : ""}`}>
+            {runtime?.worker?.status === "ok" ? "Worker online" : "Worker unavailable"}
+          </span>
+        </header>
+        {error && <div className="debug-error">{error}</div>}
+        {activeTab === "Dashboard" && <Dashboard runtime={runtime} />}
+        {activeTab === "Agents" && <Agents runtime={runtime} />}
+        {activeTab === "Memory" && <MemoryPanel memory={memory} />}
+        {activeTab === "Skills" && <SkillsPanel skills={skills} />}
+        {activeTab === "Integrations" && <IntegrationsPanel integrations={integrations} />}
+        {activeTab === "Events / Runs" && <RunsPanel runtime={runtime} />}
+        {activeTab === "Settings" && <SettingsPanel runtime={runtime} />}
+      </main>
     </div>
   );
+}
+
+function Dashboard({ runtime }: { runtime: RuntimeDebug | null }) {
+  return (
+    <div className="debug-grid">
+      <Card title="Worker">
+        <Row label="Status" value={runtime?.worker?.status ?? "-"} />
+        <Row label="Service" value={runtime?.worker?.service ?? "-"} />
+      </Card>
+      <Card title="Model">
+        <Row label="Provider" value={runtime?.model?.provider ?? "-"} />
+        <Row label="Model" value={runtime?.model?.name ?? "-"} />
+        <Row label="Base URL" value={runtime?.model?.base_url ?? "-"} />
+      </Card>
+      <Card title="Repository">
+        <Row label="Source" value={runtime?.repository?.source ?? "-"} />
+        <Row label="Project" value={runtime?.repository?.project_path ?? "-"} />
+        <Row label="Branch" value={runtime?.repository?.branch ?? "-"} />
+      </Card>
+      <Card title="Permissions">
+        <Row label="Write mode" value={runtime?.permissions?.write_mode ?? "-"} />
+      </Card>
+    </div>
+  );
+}
+
+function Agents({ runtime }: { runtime: RuntimeDebug | null }) {
+  return (
+    <Card title="Agent Orchestration">
+      <Row label="Mode" value={runtime?.agent?.orchestration_mode ?? "LangGraph"} />
+      <Row label="Write router" value="LangGraph intent and proposal flow" />
+    </Card>
+  );
+}
+
+function MemoryPanel({ memory }: { memory: MemoryDebug | null }) {
+  return (
+    <>
+      <Card title="Memory Table">
+        <table className="debug-table">
+          <thead><tr><th>id</th><th>type</th><th>content</th><th>source</th><th>created_at</th></tr></thead>
+          <tbody>
+            {memory?.items.length ? memory.items.map((item) => (
+              <tr key={item.id}><td>{item.id}</td><td>{item.type}</td><td>{item.content}</td><td>{item.source}</td><td>{item.created_at}</td></tr>
+            )) : <tr><td colSpan={5}>No memory records yet.</td></tr>}
+          </tbody>
+        </table>
+      </Card>
+      <Card title="Memory Graph">
+        <div className="debug-placeholder">Graph view placeholder: {memory?.graph.nodes.length ?? 0} nodes, {memory?.graph.edges.length ?? 0} edges.</div>
+      </Card>
+    </>
+  );
+}
+
+function SkillsPanel({ skills }: { skills: SkillsDebug | null }) {
+  return (
+    <Card title="Discovered Skills">
+      {skills?.skills.length ? skills.skills.map((skill) => (
+        <div className="debug-list-item" key={`${skill.source_path}:${skill.name}`}>
+          <strong>{skill.name}</strong>
+          <span>{skill.description || "No description"}</span>
+          <code>{skill.source_path}</code>
+        </div>
+      )) : <div className="debug-placeholder">No skills.md files discovered.</div>}
+    </Card>
+  );
+}
+
+function IntegrationsPanel({ integrations }: { integrations: IntegrationsDebug | null }) {
+  return (
+    <Card title="Integration Status">
+      {integrations?.integrations.map((integration) => (
+        <div className="debug-list-item" key={integration.provider}>
+          <strong>{integration.provider}</strong>
+          <span>{integration.status} · tools: {integration.tools_count}</span>
+          <button className="debug-disabled-button" disabled>Connect coming soon</button>
+        </div>
+      ))}
+    </Card>
+  );
+}
+
+function RunsPanel({ runtime }: { runtime: RuntimeDebug | null }) {
+  return (
+    <Card title="Recent Runs">
+      {runtime?.recent_runs?.length ? JSON.stringify(runtime.recent_runs) : <div className="debug-placeholder">No recent runs recorded yet.</div>}
+    </Card>
+  );
+}
+
+function SettingsPanel({ runtime }: { runtime: RuntimeDebug | null }) {
+  return (
+    <Card title="Settings Snapshot">
+      <Row label="Connection mode" value={runtime?.model?.connection_mode ?? "-"} />
+      <Row label="Write mode" value={runtime?.permissions?.write_mode ?? "-"} />
+    </Card>
+  );
+}
+
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="debug-card"><h2>{title}</h2>{children}</section>;
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return <div className="debug-row"><span>{label}</span><strong>{value}</strong></div>;
 }

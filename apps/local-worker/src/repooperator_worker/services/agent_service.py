@@ -329,6 +329,23 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
     Falls back to the legacy direct execution path if LangGraph raises an
     unexpected import or runtime error that is not a user-facing ValueError.
     """
+    if _USE_LANGGRAPH:
+        try:
+            from repooperator_worker.services.agent_orchestration_graph import (
+                run_agent_orchestration_graph,
+            )
+
+            logger.debug("agent_service: using LangGraph orchestration path")
+            return run_agent_orchestration_graph(request)
+        except (ValueError, RuntimeError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "agent_service: LangGraph orchestration failed with unexpected error %r; "
+                "falling back to legacy routing",
+                exc,
+            )
+
     settings = get_settings()
 
     # ── Step 1: Write confirmation check ─────────────────────────────────────

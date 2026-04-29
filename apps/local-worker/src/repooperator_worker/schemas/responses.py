@@ -10,6 +10,7 @@ class HealthResponse(BaseModel):
     configured_model_connection_mode: str | None = None
     configured_model_provider: str | None = None
     configured_model_name: str | None = None
+    configured_model_base_url: str | None = None
     write_mode: str = "read-only"
     recent_projects: list[str] = []
 
@@ -183,11 +184,17 @@ class AgentRunResponse(BaseModel):
     files_read: list[str] = []
     response: str
     # Write-intent routing fields (populated when response_type != "assistant_answer")
-    response_type: str = "assistant_answer"  # "assistant_answer" | "change_proposal" | "permission_required"
+    response_type: str = "assistant_answer"
     proposal_relative_path: str | None = None
     proposal_original_content: str | None = None
     proposal_proposed_content: str | None = None
     proposal_context_summary: str | None = None
+    clarification_candidates: list[str] = []
+    selected_target_file: str | None = None
+    intent_classification: str | None = None
+    graph_path: str | None = None
+    agent_flow: str = "langgraph"
+    proposal_error_details: str | None = None
 
 
 class LocalBranchSummary(BaseModel):

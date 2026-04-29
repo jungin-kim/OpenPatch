@@ -337,6 +337,7 @@ class GitMergeRequestCreateRequest(BaseModel):
 class ConversationMessage(BaseModel):
     role: str
     content: str
+    metadata: dict | None = None
 
     @field_validator("role")
     @classmethod

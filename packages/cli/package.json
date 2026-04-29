@@ -1,6 +1,6 @@
 {
   "name": "repooperator",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": false,
   "description": "RepoOperator onboarding and local product runtime CLI.",
   "bin": {
@@ -35,6 +35,7 @@
     "github",
     "repository",
     "ollama",
+    "vllm",
     "developer-tools"
   ]
 }

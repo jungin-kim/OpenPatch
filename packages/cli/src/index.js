@@ -38,6 +38,7 @@ const DEFAULT_OLLAMA_TIMEOUT_MS = 1500;
 const DEFAULT_OLLAMA_START_TIMEOUT_MS = 10000;
 const DEFAULT_LOG_TAIL_LINES = 40;
 const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
+const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8001/v1";
 const MIN_PYTHON_MAJOR = 3;
 const MIN_PYTHON_MINOR = 11;
 const PYTHON_CANDIDATES = ["python3.13", "python3.12", "python3.11", "python3", "python"];
@@ -51,6 +52,7 @@ const MODEL_PROVIDER_OPTIONS = [
   "anthropic",
   "gemini",
   "ollama",
+  "vllm",
   "openai-compatible",
 ];
 const MODEL_PROVIDER_CONFIG = {
@@ -78,6 +80,13 @@ const MODEL_PROVIDER_CONFIG = {
     defaultApiKey: "ollama",
     defaultModel: OLLAMA_RECOMMENDED_MODEL,
     prompts: ["baseUrl", "model"],
+  },
+  vllm: {
+    label: "vLLM",
+    defaultBaseUrl: VLLM_DEFAULT_BASE_URL,
+    defaultApiKey: "",
+    defaultModel: "",
+    prompts: ["baseUrl", "apiKeyOptional", "model"],
   },
   "openai-compatible": {
     label: "OpenAI-compatible",
@@ -2383,6 +2392,9 @@ async function promptLocalRuntimeModelConfig(rl, existingModelConfig = null) {
   if (provider === "ollama") {
     return promptOllamaModelConfig(rl, existingModelConfig?.provider === "ollama" ? existingModelConfig : null);
   }
+  if (provider === "vllm") {
+    return promptVllmModelConfig(rl, existingModelConfig?.provider === "vllm" ? existingModelConfig : null);
+  }
   throw new Error(`Unsupported local runtime provider: ${provider}`);
 }
 
@@ -2462,6 +2474,36 @@ async function promptOllamaModelConfig(rl, existingModelConfig = null) {
   };
 }
 
+async function promptVllmModelConfig(rl, existingModelConfig = null) {
+  term.summaryBox("Local model runtime: vLLM", [
+    "RepoOperator will use an OpenAI-compatible vLLM endpoint.",
+    "RepoOperator does not start vLLM. Start it yourself on this machine or a trusted LAN host.",
+  ]);
+
+  const baseUrl = await promptWithDefault(rl, "vLLM base URL", existingModelConfig?.baseUrl || VLLM_DEFAULT_BASE_URL);
+  const apiKey = await promptWithDefault(rl, "API key (optional)", existingModelConfig?.apiKey || "");
+  const probe = await term.spinner("Check vLLM /models", () => checkModelConnectivity({
+    connectionMode: "local-runtime",
+    provider: "vllm",
+    baseUrl,
+    apiKey,
+    model: existingModelConfig?.model || "unknown",
+  }, DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS));
+  if (probe.reachable) {
+    term.line("success", "vLLM reachable", probe.message);
+  } else {
+    term.line("warning", "vLLM not reachable yet", probe.message);
+  }
+  const model = await promptWithDefault(rl, "Model name", existingModelConfig?.model || "");
+  return {
+    connectionMode: "local-runtime",
+    provider: "vllm",
+    baseUrl,
+    apiKey,
+    model,
+  };
+}
+
 async function promptModelConnectionMode(rl, existingConnectionMode = null) {
   while (true) {
     printOptionList("Choose how RepoOperator should connect to a model", [
@@ -2485,13 +2527,17 @@ async function promptLocalRuntimeProvider(rl, _existingProvider = null) {
   while (true) {
     printOptionList("Choose a local model runtime", [
       ["1", "Ollama", "Local OpenAI-compatible model server"],
+      ["2", "vLLM", "OpenAI-compatible endpoint on this machine or trusted LAN"],
     ]);
     const answer = (await rl.question("Choice [1]: ")).trim() || "1";
 
     if (answer === "1") {
       return "ollama";
     }
-    term.line("warning", "Invalid choice", "Please choose 1.");
+    if (answer === "2") {
+      return "vllm";
+    }
+    term.line("warning", "Invalid choice", "Please choose 1 or 2.");
   }
 }
 
@@ -3070,6 +3116,7 @@ function buildModelConnectivityProbe(modelConfig) {
     modelConfig.provider === "openai" ||
     modelConfig.provider === "gemini" ||
     modelConfig.provider === "ollama" ||
+    modelConfig.provider === "vllm" ||
     modelConfig.provider === "openai-compatible"
   ) {
     return {
@@ -3105,6 +3152,9 @@ function formatModelConnectivityFailure(modelConfig, probe, status) {
 function getModelConnectivityRemediation(modelConfig, probe) {
   if (modelConfig.provider === "ollama") {
     return `Expected an Ollama-compatible models endpoint. Confirm Ollama is running and that ${probe.url} is reachable.`;
+  }
+  if (modelConfig.provider === "vllm") {
+    return `Expected a vLLM OpenAI-compatible models endpoint. Confirm vLLM is running on a trusted host and that ${probe.url} is reachable.`;
   }
   if (modelConfig.provider === "openai-compatible") {
     return `Expected an OpenAI-compatible models endpoint. Confirm the base URL is correct and that ${probe.url} returns a models list.`;
@@ -3456,7 +3506,7 @@ function normalizeModelConfig(modelConfig) {
   }
 
   const connectionMode = modelConfig.connectionMode
-    || (modelConfig.provider === "ollama" ? "local-runtime" : "remote-api");
+    || (["ollama", "vllm"].includes(modelConfig.provider) ? "local-runtime" : "remote-api");
 
   return {
     ...modelConfig,

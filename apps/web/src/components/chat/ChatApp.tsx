@@ -567,7 +567,11 @@ export function ChatApp() {
     const conversationHistory: ConversationMessage[] = messagesWithUser
       .filter((m) => m.role === "user" || m.role === "assistant")
       .slice(-10)
-      .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        metadata: m.metadata ?? null,
+      }));
 
     try {
       const payload = await runAgentTask({
@@ -595,6 +599,14 @@ export function ChatApp() {
           timestamp: new Date(),
           metadata: payload,
           proposal,
+        };
+      } else if (payload.response_type === "proposal_error") {
+        assistantMessage = {
+          id: `${Date.now()}-proposal-error`,
+          role: "assistant",
+          content: payload.response,
+          timestamp: new Date(),
+          metadata: payload,
         };
       } else {
         assistantMessage = {
@@ -928,6 +940,7 @@ export function ChatApp() {
           gitProvider={gitProvider}
           writeMode={writeMode}
           onProposalStatusChange={handleProposalStatusChange}
+          onClarificationSelect={(candidate) => setQuestion(candidate)}
         />
       }
       composer={

@@ -76,6 +76,30 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
               <span className="tool-meta-value">{metadata.model}</span>
             </div>
           )}
+          {metadata.agent_flow && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Agent flow</span>
+              <span className="tool-meta-value">{metadata.agent_flow}</span>
+            </div>
+          )}
+          {metadata.intent_classification && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Intent</span>
+              <span className="tool-meta-value">{metadata.intent_classification}</span>
+            </div>
+          )}
+          {metadata.graph_path && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Graph path</span>
+              <span className="tool-meta-value">{metadata.graph_path}</span>
+            </div>
+          )}
+          {metadata.selected_target_file && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Target file</span>
+              <span className="tool-meta-value">{metadata.selected_target_file}</span>
+            </div>
+          )}
           {metadata.branch && (
             <div className="tool-meta-item">
               <span className="tool-meta-label">Branch</span>
@@ -122,6 +146,7 @@ interface ChatMessagesProps {
   gitProvider: string;
   writeMode?: "read-only" | "write-with-approval" | "auto-apply";
   onProposalStatusChange?: (id: string, status: ProposalStatus, message?: string) => void;
+  onClarificationSelect?: (candidate: string) => void;
 }
 
 export function ChatMessages({
@@ -131,8 +156,10 @@ export function ChatMessages({
   gitProvider,
   writeMode = "read-only",
   onProposalStatusChange,
+  onClarificationSelect,
 }: ChatMessagesProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -145,6 +172,61 @@ export function ChatMessages({
       : activeProvider === "gitlab"
         ? "GitLab"
         : "GitHub";
+
+  function speakerLabel(message: ChatMessage): string {
+    return message.role === "user"
+      ? "You"
+      : message.role === "system"
+        ? "Context"
+        : "RepoOperator";
+  }
+
+  function formatMessageForCopy(message: ChatMessage): string {
+    const lines = [
+      `[${message.timestamp.toLocaleString()}] ${speakerLabel(message)}`,
+      message.content,
+    ];
+    if (message.proposal) {
+      lines.push(`Proposal: ${message.proposal.relativePath}`);
+      lines.push(`Status: ${message.proposal.status}`);
+    }
+    if (message.metadata?.selected_target_file) {
+      lines.push(`Target file: ${message.metadata.selected_target_file}`);
+    }
+    if (message.metadata?.clarification_candidates?.length) {
+      lines.push(`Candidates: ${message.metadata.clarification_candidates.join(", ")}`);
+    }
+    if (message.metadata?.proposal_error_details) {
+      lines.push(`Error: ${message.metadata.proposal_error_details}`);
+    }
+    return lines.filter(Boolean).join("\n");
+  }
+
+  function formatChatForCopy(): string {
+    return messages.map(formatMessageForCopy).join("\n\n---\n\n");
+  }
+
+  async function copyText(text: string, id: string) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId(null), 1800);
+    } catch {
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId(null), 1800);
+    }
+  }
 
   return (
     <div className="chat-body">
@@ -166,6 +248,18 @@ export function ChatMessages({
         </div>
       )}
 
+      {messages.length > 0 && (
+        <div className="chat-copy-bar">
+          <button
+            className="message-copy-btn"
+            type="button"
+            onClick={() => void copyText(formatChatForCopy(), "chat")}
+          >
+            {copiedId === "chat" ? "Copied" : "Copy chat"}
+          </button>
+        </div>
+      )}
+
       {messages.length === 0 && !questionPending ? (
         <div className="chat-empty">
           <div className="chat-empty-icon" aria-hidden="true" />
@@ -183,13 +277,16 @@ export function ChatMessages({
               key={msg.id}
               className={`message-group message-group-${msg.role}`}
             >
-              <span className="message-role-label">
-                {msg.role === "user"
-                  ? "You"
-                  : msg.role === "system"
-                    ? "Context"
-                    : "RepoOperator"}
-              </span>
+              <div className="message-meta-row">
+                <span className="message-role-label">{speakerLabel(msg)}</span>
+                <button
+                  className="message-copy-btn"
+                  type="button"
+                  onClick={() => void copyText(formatMessageForCopy(msg), msg.id)}
+                >
+                  {copiedId === msg.id ? "Copied" : "Copy message"}
+                </button>
+              </div>
               {msg.proposal ? (
                 <ProposalCard
                   proposal={msg.proposal}
@@ -199,12 +296,44 @@ export function ChatMessages({
               ) : msg.role === "assistant" && msg.metadata?.response_type === "permission_required" ? (
                 <div className="message-bubble message-bubble-permission">
                   <div className="permission-callout">
-                    <span className="permission-callout-icon" aria-hidden="true">🔒</span>
+                    <span className="permission-callout-icon" aria-hidden="true" />
                     <div>
                       <div className="permission-callout-title">Write permission required</div>
                       <div className="permission-callout-body">{msg.content}</div>
                     </div>
                   </div>
+                </div>
+              ) : msg.role === "assistant" && msg.metadata?.response_type === "clarification" ? (
+                <div className="message-bubble message-bubble-md">
+                  <MarkdownContent content={msg.content} />
+                  {msg.metadata.clarification_candidates?.length ? (
+                    <div className="clarification-options">
+                      {msg.metadata.clarification_candidates.map((candidate) => (
+                        <button
+                          key={candidate}
+                          className="clarification-option"
+                          type="button"
+                          onClick={() => onClarificationSelect?.(candidate)}
+                        >
+                          {candidate}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : msg.role === "assistant" && msg.metadata?.response_type === "proposal_error" ? (
+                <div className="proposal-error-card">
+                  <div className="proposal-error-title">No valid diff produced</div>
+                  <p>{msg.content}</p>
+                  {msg.metadata.proposal_error_details && (
+                    <details>
+                      <summary>View details</summary>
+                      <pre>{msg.metadata.proposal_error_details}</pre>
+                    </details>
+                  )}
+                  <button className="proposal-btn-reject" type="button" onClick={() => onClarificationSelect?.(msg.content)}>
+                    Retry with more detail
+                  </button>
                 </div>
               ) : msg.role === "assistant" ? (
                 <div className="message-bubble message-bubble-md">
