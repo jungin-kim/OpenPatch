@@ -13,16 +13,25 @@ type RuntimeDebug = {
 };
 
 type MemoryDebug = {
-  items: Array<{ id: string; type: string; content: string; source: string; created_at: string }>;
+  items: Array<{ id: string; type: string; content: string; source: string; repo?: string | null; created_at: string; tags?: string[] }>;
   graph: { nodes: unknown[]; edges: unknown[] };
 };
 
 type SkillsDebug = {
-  skills: Array<{ name: string; source_path: string; description: string; enabled: boolean }>;
+  skills: Array<{ name: string; source_path: string; scope: string; description: string; enabled: boolean }>;
 };
 
 type IntegrationsDebug = {
-  integrations: Array<{ provider: string; status: string; account?: string | null; tools_count: number; message?: string }>;
+  integrations: Array<{
+    provider: string;
+    status: string;
+    configured?: boolean;
+    accounts?: Array<{ id?: string; status?: string; toolkit?: string; user_id?: string }>;
+    toolkits?: Array<{ id?: string; slug?: string; name?: string; tools_count?: number }>;
+    toolkits_count?: number;
+    tools_count: number;
+    message?: string;
+  }>;
 };
 
 const tabs = ["Dashboard", "Agents", "Memory", "Skills", "Integrations", "Events / Runs", "Settings"] as const;
@@ -42,9 +51,9 @@ export default function DebugPage() {
   const [integrations, setIntegrations] = useState<IntegrationsDebug | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    async function load() {
+  async function load() {
       try {
+        setError(null);
         const [runtimePayload, memoryPayload, skillsPayload, integrationsPayload] = await Promise.all([
           loadJson<RuntimeDebug>("/api/worker/debug/runtime"),
           loadJson<MemoryDebug>("/api/worker/debug/memory"),
@@ -58,7 +67,9 @@ export default function DebugPage() {
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to load debug data.");
       }
-    }
+  }
+
+  useEffect(() => {
     void load();
   }, []);
 
@@ -81,9 +92,12 @@ export default function DebugPage() {
       <main className="debug-main">
         <header className="debug-header">
           <h1>{activeTab}</h1>
-          <span className={`debug-status${runtime?.worker?.status === "ok" ? " debug-status-ok" : ""}`}>
-            {runtime?.worker?.status === "ok" ? "Worker online" : "Worker unavailable"}
-          </span>
+          <div className="debug-header-actions">
+            <button className="debug-secondary-button" type="button" onClick={() => void load()}>Reload</button>
+            <span className={`debug-status${runtime?.worker?.status === "ok" ? " debug-status-ok" : ""}`}>
+              {runtime?.worker?.status === "ok" ? "Worker online" : "Worker unavailable"}
+            </span>
+          </div>
         </header>
         {error && <div className="debug-error">{error}</div>}
         {activeTab === "Dashboard" && <Dashboard runtime={runtime} />}
@@ -136,11 +150,11 @@ function MemoryPanel({ memory }: { memory: MemoryDebug | null }) {
     <>
       <Card title="Memory Table">
         <table className="debug-table">
-          <thead><tr><th>id</th><th>type</th><th>content</th><th>source</th><th>created_at</th></tr></thead>
+          <thead><tr><th>id</th><th>type</th><th>content</th><th>source</th><th>repo</th><th>tags</th><th>created_at</th></tr></thead>
           <tbody>
             {memory?.items.length ? memory.items.map((item) => (
-              <tr key={item.id}><td>{item.id}</td><td>{item.type}</td><td>{item.content}</td><td>{item.source}</td><td>{item.created_at}</td></tr>
-            )) : <tr><td colSpan={5}>No memory records yet.</td></tr>}
+              <tr key={item.id}><td>{item.id}</td><td>{item.type}</td><td>{item.content}</td><td>{item.source}</td><td>{item.repo ?? "-"}</td><td>{item.tags?.join(", ") || "-"}</td><td>{item.created_at}</td></tr>
+            )) : <tr><td colSpan={7}>No memory records yet.</td></tr>}
           </tbody>
         </table>
       </Card>
@@ -157,6 +171,7 @@ function SkillsPanel({ skills }: { skills: SkillsDebug | null }) {
       {skills?.skills.length ? skills.skills.map((skill) => (
         <div className="debug-list-item" key={`${skill.source_path}:${skill.name}`}>
           <strong>{skill.name}</strong>
+          <span>{skill.scope} · {skill.enabled ? "enabled" : "disabled"}</span>
           <span>{skill.description || "No description"}</span>
           <code>{skill.source_path}</code>
         </div>
@@ -171,8 +186,14 @@ function IntegrationsPanel({ integrations }: { integrations: IntegrationsDebug |
       {integrations?.integrations.map((integration) => (
         <div className="debug-list-item" key={integration.provider}>
           <strong>{integration.provider}</strong>
-          <span>{integration.status} · tools: {integration.tools_count}</span>
-          <button className="debug-disabled-button" disabled>Connect coming soon</button>
+          <span>{integration.status} · toolkits: {integration.toolkits_count ?? integration.toolkits?.length ?? 0} · tools: {integration.tools_count}</span>
+          {integration.message && <span>{integration.message}</span>}
+          {integration.accounts?.length ? (
+            <span>Connected accounts: {integration.accounts.map((account) => `${account.toolkit ?? "unknown"}:${account.status ?? "unknown"}`).join(", ")}</span>
+          ) : <span>No connected accounts reported.</span>}
+          <button className="debug-secondary-button" type="button" onClick={() => window.open("https://docs.composio.dev/docs/authenticating-tools", "_blank", "noopener,noreferrer")}>
+            Open setup docs
+          </button>
         </div>
       ))}
     </Card>
@@ -182,7 +203,24 @@ function IntegrationsPanel({ integrations }: { integrations: IntegrationsDebug |
 function RunsPanel({ runtime }: { runtime: RuntimeDebug | null }) {
   return (
     <Card title="Recent Runs">
-      {runtime?.recent_runs?.length ? JSON.stringify(runtime.recent_runs) : <div className="debug-placeholder">No recent runs recorded yet.</div>}
+      {runtime?.recent_runs?.length ? (
+        <table className="debug-table">
+          <thead><tr><th>run</th><th>time</th><th>repo</th><th>branch</th><th>intent</th><th>status</th><th>latency</th></tr></thead>
+          <tbody>
+            {runtime.recent_runs.map((run) => (
+              <tr key={String(run.id)}>
+                <td>{String(run.id ?? "-")}</td>
+                <td>{String(run.timestamp ?? "-")}</td>
+                <td>{String(run.repo ?? "-")}</td>
+                <td>{String(run.branch ?? "-")}</td>
+                <td>{String(run.intent ?? "-")}</td>
+                <td>{String(run.status ?? "-")}</td>
+                <td>{String(run.latency_ms ?? "-")} ms</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : <div className="debug-placeholder">No recent runs recorded yet.</div>}
     </Card>
   );
 }

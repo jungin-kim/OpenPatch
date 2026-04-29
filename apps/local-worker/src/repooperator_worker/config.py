@@ -44,6 +44,7 @@ class Settings:
     configured_model_provider: str | None
     configured_model_name: str | None
     write_mode: str  # "read-only" | "write-with-approval"
+    composio_api_key: str | None
 
     def get_provider_settings(self, provider: str) -> ProviderSettings:
         normalized = provider.strip().lower()
@@ -118,6 +119,7 @@ def get_settings() -> Settings:
         configured_model_provider=_resolve_configured_model_provider(runtime_config),
         configured_model_name=_resolve_configured_model_name(runtime_config),
         write_mode=_resolve_write_mode(runtime_config),
+        composio_api_key=_normalize_optional_value(os.getenv("REPOOPERATOR_COMPOSIO_API_KEY")),
     )
 
 

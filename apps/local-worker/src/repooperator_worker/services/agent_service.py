@@ -294,8 +294,8 @@ def _route_write_request(
         return _build_minimal_run_response(
             request,
             response=(
-                "Which file should I modify? "
-                "Mention the file name in your request and I will generate a diff for review."
+                "I need one safe target file before generating a diff. "
+                "Choose a file from the repository or ask RepoOperator to recommend files to inspect first."
             ),
         )
 
@@ -381,7 +381,8 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
         return _build_minimal_run_response(
             request,
             response=(
-                "What should I modify? Please mention the file name and describe the change."
+                "I need one safe target file before generating a diff. "
+                "Choose a file from the repository or ask RepoOperator to recommend files to inspect first."
             ),
         )
 

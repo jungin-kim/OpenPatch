@@ -94,6 +94,18 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
               <span className="tool-meta-value">{metadata.graph_path}</span>
             </div>
           )}
+          {metadata.run_id && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Run ID</span>
+              <span className="tool-meta-value">{metadata.run_id}</span>
+            </div>
+          )}
+          {metadata.skills_used?.length ? (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Skills used</span>
+              <span className="tool-meta-value">{metadata.skills_used.join(", ")}</span>
+            </div>
+          ) : null}
           {metadata.selected_target_file && (
             <div className="tool-meta-item">
               <span className="tool-meta-label">Target file</span>

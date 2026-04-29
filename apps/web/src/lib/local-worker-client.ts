@@ -153,6 +153,8 @@ export type AgentRunPayload = {
   graph_path?: string | null;
   agent_flow?: string | null;
   proposal_error_details?: string | null;
+  run_id?: string | null;
+  skills_used?: string[];
 };
 
 export type ThreadMessagePayload = {

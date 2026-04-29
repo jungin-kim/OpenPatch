@@ -1,3 +1,5 @@
+import time
+
 from fastapi import APIRouter, HTTPException
 
 from repooperator_worker.config import get_settings
@@ -65,11 +67,22 @@ from repooperator_worker.services.git_service import (
 from repooperator_worker.services.repo_service import open_repository, plan_repository_open
 from repooperator_worker.services.thread_service import list_threads, upsert_thread
 from repooperator_worker.services.debug_service import (
-    discover_skills,
     get_debug_runtime_status,
     integration_status,
-    list_memory_items,
 )
+from repooperator_worker.services.composio_service import (
+    composio_connection_instructions,
+    get_composio_status,
+    list_composio_connected_accounts,
+    list_composio_toolkits,
+)
+from repooperator_worker.services.event_service import new_run_id, record_agent_run
+from repooperator_worker.services.memory_service import (
+    list_memory_items,
+    maybe_record_from_agent_run,
+    record_applied_file_write,
+)
+from repooperator_worker.services.skills_service import discover_skills
 
 router = APIRouter()
 
@@ -123,6 +136,43 @@ def debug_skills() -> dict:
 @router.get("/debug/integrations")
 def debug_integrations() -> dict:
     return integration_status()
+
+
+@router.get("/integrations/composio/status")
+def composio_status() -> dict:
+    try:
+        return get_composio_status()
+    except RuntimeError as exc:
+        return {
+            "provider": "Composio",
+            "status": "error",
+            "configured": True,
+            "message": str(exc),
+            "accounts": [],
+            "toolkits": [],
+            "tools_count": 0,
+        }
+
+
+@router.get("/integrations/composio/toolkits")
+def composio_toolkits() -> dict:
+    try:
+        return list_composio_toolkits()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/integrations/composio/accounts")
+def composio_accounts() -> dict:
+    try:
+        return list_composio_connected_accounts()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/integrations/composio/connect")
+def composio_connect() -> dict:
+    return composio_connection_instructions()
 
 
 @router.get("/provider/projects", response_model=ProviderProjectsResponse)
@@ -206,7 +256,9 @@ def fs_read(request: FileReadRequest) -> FileReadResponse:
 @router.post("/fs/write", response_model=FileWriteResponse)
 def fs_write(request: FileWriteRequest) -> FileWriteResponse:
     try:
-        return write_text_file(request)
+        response = write_text_file(request)
+        record_applied_file_write(request)
+        return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -295,12 +347,42 @@ def git_merge_request(
 
 @router.post("/agent/run", response_model=AgentRunResponse)
 def agent_run(request: AgentRunRequest) -> AgentRunResponse:
+    run_id = new_run_id()
+    start = time.perf_counter()
+    response: AgentRunResponse | None = None
     try:
-        return run_agent_task(request)
+        response = run_agent_task(request).model_copy(update={"run_id": run_id})
+        maybe_record_from_agent_run(request, response)
+        return response
     except ValueError as exc:
+        record_agent_run(
+            run_id=run_id,
+            request=request,
+            response=response,
+            status="error",
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            error=str(exc),
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
+        record_agent_run(
+            run_id=run_id,
+            request=request,
+            response=response,
+            status="error",
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            error=str(exc),
+        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        if response is not None:
+            record_agent_run(
+                run_id=run_id,
+                request=request,
+                response=response,
+                status="ok",
+                latency_ms=int((time.perf_counter() - start) * 1000),
+            )
 
 
 @router.post("/agent/propose-file", response_model=AgentProposeFileResponse)

@@ -17,17 +17,21 @@ from repooperator_worker.schemas import (
     AgentRunResponse,
 )
 from repooperator_worker.services.common import resolve_project_path
+from repooperator_worker.services.context_service import build_query_aware_context
 from repooperator_worker.services.edit_service import propose_file_edit
 from repooperator_worker.services.model_client import (
     ModelGenerationRequest,
     OpenAICompatibleModelClient,
 )
 from repooperator_worker.services.retrieval_service import SKIP_DIRS
+from repooperator_worker.services.skills_service import enabled_skill_context
 
 logger = logging.getLogger(__name__)
 
 Intent = Literal[
     "read_only_question",
+    "repo_analysis",
+    "recommend_change_targets",
     "write_request",
     "write_confirmation",
     "file_clarification_answer",
@@ -104,6 +108,30 @@ CONFIRMATION_PHRASES = {
     "okay",
 }
 
+RECOMMEND_TARGET_KEYWORDS = {
+    "recommend",
+    "suggest",
+    "what file",
+    "which file",
+    "where should",
+    "파일 추천",
+    "파일을 추천",
+    "파일 제안",
+    "수정할 파일",
+    "수정해야 할 파일",
+    "어떤 파일",
+}
+
+REPO_ANALYSIS_KEYWORDS = {
+    "analyze project",
+    "project analysis",
+    "analyze repository",
+    "repository analysis",
+    "프로젝트를 분석",
+    "프로젝트 분석",
+    "레포지토리 분석",
+}
+
 FILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./\\-]+")
 
 
@@ -130,6 +158,8 @@ class OrchestrationState(TypedDict, total=False):
     result: AgentRunResponse | None
     graph_path: str
     error: str | None
+    skills_context: str
+    skills_used: list[str]
 
 
 def _base_response(
@@ -190,10 +220,14 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
         if response_type == "assistant_answer" and not pending.get("suggestion"):
             pending["suggestion"] = message.content
 
+    skills_context, skills_used = enabled_skill_context()
+
     return {
         "settings": get_settings(),
         "pending": pending,
         "instruction": request.task,
+        "skills_context": skills_context,
+        "skills_used": skills_used,
         "graph_path": "load_context",
     }
 
@@ -215,6 +249,12 @@ def _classify_intent(state: OrchestrationState) -> dict[str, Any]:
     elif _is_confirmation(lower):
         intent = "write_confirmation"
         confidence = 0.92
+    elif _is_recommend_change_targets(task):
+        intent = "recommend_change_targets"
+        confidence = 0.9
+    elif _is_repo_analysis(task):
+        intent = "repo_analysis"
+        confidence = 0.86
     elif file_hints and _has_write_language(task):
         intent = "write_request"
         confidence = 0.94
@@ -306,7 +346,10 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
         rendered = "\n".join(f"- `{candidate}`" for candidate in candidates)
         response = f"I found multiple files that could match. Which one should I modify?\n\n{rendered}"
     else:
-        response = "I could not find a matching file. Please mention the file path you want me to modify."
+        response = (
+            "I could not identify a safe target file for this change request yet. "
+            "Share a file path, or ask RepoOperator to recommend files to inspect first."
+        )
     result = _base_response(
         request,
         response=response,
@@ -314,8 +357,74 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
         clarification_candidates=candidates,
         intent_classification=state.get("intent"),
         graph_path="clarification",
+        skills_used=state.get("skills_used", []),
     )
     return {"result": result, "graph_path": "clarification"}
+
+
+def _recommend_change_targets(state: OrchestrationState) -> dict[str, Any]:
+    request = state["request"]
+    context = build_query_aware_context(request.project_path, request.task)
+    repo_path = resolve_project_path(request.project_path)
+    candidate_files = _recommend_candidate_files(repo_path)
+    skills_context = state.get("skills_context") or ""
+
+    fallback_lines = [
+        "Here are concrete files worth inspecting first:",
+        "",
+    ]
+    for relative_path, reason in candidate_files[:8]:
+        fallback_lines.append(f"- `{relative_path}` — {reason}")
+    fallback = "\n".join(fallback_lines) if candidate_files else (
+        "I could not find obvious source or configuration files yet. Start with the README and top-level configuration files."
+    )
+
+    response = fallback
+    try:
+        model_response = OpenAICompatibleModelClient().generate_text(
+            ModelGenerationRequest(
+                system_prompt=(
+                    "You are RepoOperator. Recommend concrete repository files to inspect or modify. "
+                    "Do not ask the user to provide a file path. Use the provided repository context. "
+                    "Return concise bullets with file paths and reasons. Do not claim to edit files."
+                ),
+                user_prompt="\n\n".join(
+                    part
+                    for part in [
+                        f"User request: {request.task}",
+                        skills_context,
+                        context.to_prompt_context(),
+                        "Candidate files:\n"
+                        + "\n".join(f"- {path}: {reason}" for path, reason in candidate_files[:12]),
+                    ]
+                    if part
+                ),
+            )
+        )
+        if model_response.strip():
+            response = model_response.strip()
+    except (ValueError, RuntimeError) as exc:
+        logger.info("recommend_change_targets using deterministic fallback: %r", exc)
+
+    result = _base_response(
+        request,
+        response=response,
+        response_type="assistant_answer",
+        files_read=context.files_read,
+        intent_classification=state.get("intent"),
+        graph_path="recommend_change_targets",
+        skills_used=state.get("skills_used", []),
+    ).model_copy(
+        update={
+            "context_summary": context.summary,
+            "top_level_entries": context.top_level_entries,
+            "readme_included": bool(context.readme_excerpt),
+            "is_git_repository": context.is_git_repository,
+            "branch": context.branch or request.branch,
+            "active_branch": context.branch or request.branch,
+        }
+    )
+    return {"result": result, "graph_path": "recommend_change_targets"}
 
 
 def _generate_change_plan(state: OrchestrationState) -> dict[str, Any]:
@@ -385,6 +494,7 @@ def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
         selected_target_file=proposal.relative_path,
         intent_classification=state.get("intent"),
         graph_path="proposal",
+        skills_used=state.get("skills_used", []),
     ).model_copy(update={"model": proposal.model})
     return {"result": result, "graph_path": "proposal"}
 
@@ -400,6 +510,7 @@ def _proposal_error(state: OrchestrationState) -> dict[str, Any]:
         intent_classification=state.get("intent"),
         graph_path="proposal_error",
         proposal_error_details=error,
+        skills_used=state.get("skills_used", []),
     )
     return {"result": result, "graph_path": "proposal_error"}
 
@@ -407,11 +518,19 @@ def _proposal_error(state: OrchestrationState) -> dict[str, Any]:
 def _answer_read_only(state: OrchestrationState) -> dict[str, Any]:
     from repooperator_worker.services.agent_graph import run_agent_graph
 
-    result = run_agent_graph(state["request"]).model_copy(
+    request = state["request"]
+    skills_context = state.get("skills_context") or ""
+    if skills_context:
+        request = request.model_copy(
+            update={"task": f"{request.task}\n\nRelevant enabled skills:\n{skills_context}"}
+        )
+
+    result = run_agent_graph(request).model_copy(
         update={
             "intent_classification": state.get("intent") or "read_only_question",
             "graph_path": "read_only",
             "agent_flow": "langgraph",
+            "skills_used": state.get("skills_used", []),
         }
     )
     return {"result": result, "graph_path": "read_only"}
@@ -421,6 +540,8 @@ def _after_classify(state: OrchestrationState) -> str:
     intent = state.get("intent")
     if intent == "read_only_question":
         return "answer_read_only"
+    if intent in {"repo_analysis", "recommend_change_targets"}:
+        return "recommend_change_targets"
     if state.get("settings").write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
         return "permission_required"
     return "resolve_target_files"
@@ -444,6 +565,7 @@ def _build_graph():
     graph.add_node("classify_intent", _classify_intent)
     graph.add_node("resolve_target_files", _resolve_target_files)
     graph.add_node("ask_clarification", _ask_clarification)
+    graph.add_node("recommend_change_targets", _recommend_change_targets)
     graph.add_node("generate_change_plan", _generate_change_plan)
     graph.add_node("generate_patch", _generate_patch)
     graph.add_node("validate_patch", _validate_patch)
@@ -456,6 +578,7 @@ def _build_graph():
     graph.add_conditional_edges("classify_intent", _after_classify)
     graph.add_conditional_edges("resolve_target_files", _after_resolve)
     graph.add_edge("ask_clarification", END)
+    graph.add_edge("recommend_change_targets", END)
     graph.add_edge("generate_change_plan", "generate_patch")
     graph.add_edge("generate_patch", "validate_patch")
     graph.add_conditional_edges("validate_patch", _after_validate)
@@ -481,6 +604,16 @@ def _has_write_language(text: str) -> bool:
     lowered = text.lower()
     tokens = set(re.findall(r"[A-Za-z0-9_]+", lowered))
     return any(keyword in tokens or keyword in lowered for keyword in WRITE_KEYWORDS)
+
+
+def _is_recommend_change_targets(text: str) -> bool:
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in RECOMMEND_TARGET_KEYWORDS)
+
+
+def _is_repo_analysis(text: str) -> bool:
+    lowered = text.lower()
+    return any(keyword in lowered for keyword in REPO_ANALYSIS_KEYWORDS)
 
 
 def _is_confirmation(text: str) -> bool:
@@ -596,6 +729,39 @@ def _closest_files(repo_path: Path, files: list[Path], hint: str) -> list[str]:
     return [str(path.relative_to(repo_path)) for _, path in scored[:5]]
 
 
+def _recommend_candidate_files(repo_path: Path) -> list[tuple[str, str]]:
+    files = _list_supported_files(repo_path)
+    recommendations: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for path in files:
+        rel = str(path.relative_to(repo_path))
+        if rel in seen:
+            continue
+        seen.add(rel)
+        name = path.name.lower()
+        reason: str | None = None
+        if name in {"readme.md", "package.json", "pyproject.toml", "docker-compose.yml", "docker-compose.yaml"}:
+            reason = "top-level project configuration or documentation"
+        elif "dockerfile" in name:
+            reason = "container build/runtime configuration"
+        elif path.suffix.lower() in {".py", ".ts", ".tsx", ".js", ".jsx"}:
+            reason = "source file likely to contain application behavior"
+        elif path.suffix.lower() in {".yml", ".yaml", ".toml", ".json"}:
+            reason = "configuration file that often affects runtime behavior"
+        elif path.suffix.lower() == ".md":
+            reason = "documentation that may need product or setup updates"
+        if reason:
+            recommendations.append((rel, reason))
+    recommendations.sort(
+        key=lambda item: (
+            0 if "/" not in item[0] else 1,
+            0 if Path(item[0]).name.lower() in {"readme.md", "package.json", "pyproject.toml"} else 1,
+            item[0].lower(),
+        )
+    )
+    return recommendations[:12]
+
+
 def _levenshtein(a: str, b: str) -> int:
     if a == b:
         return 0
@@ -640,6 +806,8 @@ def _classify_with_llm(
         intent = payload.get("intent")
         if intent in {
             "read_only_question",
+            "repo_analysis",
+            "recommend_change_targets",
             "write_request",
             "write_confirmation",
             "file_clarification_answer",

@@ -2519,6 +2519,7 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   margin-bottom: 18px;
 }
 
@@ -2538,6 +2539,12 @@ select {
 .debug-status-ok {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.debug-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .debug-grid {
@@ -2624,13 +2631,18 @@ select {
   font-size: 0.78rem;
 }
 
+.debug-secondary-button,
 .debug-disabled-button {
   width: fit-content;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-strong);
-  color: var(--muted);
+  color: var(--text);
   padding: 6px 9px;
+}
+
+.debug-disabled-button {
+  color: var(--muted);
 }
 
 /* ── Responsive ───────────────────────────────────── */

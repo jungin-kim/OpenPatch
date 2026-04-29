@@ -195,6 +195,8 @@ class AgentRunResponse(BaseModel):
     graph_path: str | None = None
     agent_flow: str = "langgraph"
     proposal_error_details: str | None = None
+    run_id: str | None = None
+    skills_used: list[str] = []
 
 
 class LocalBranchSummary(BaseModel):
