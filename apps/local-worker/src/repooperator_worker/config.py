@@ -109,7 +109,7 @@ def get_settings() -> Settings:
         openai_api_key=_normalize_optional_value(os.getenv("OPENAI_API_KEY")),
         openai_model=_normalize_optional_value(os.getenv("OPENAI_MODEL")),
         model_request_timeout_seconds=int(
-            os.getenv("REPOOPERATOR_MODEL_REQUEST_TIMEOUT_SECONDS", "60")
+            os.getenv("REPOOPERATOR_MODEL_REQUEST_TIMEOUT_SECONDS", "120")
         ),
         repooperator_config_path=repooperator_config_path,
         repooperator_home_dir=repooperator_config_path.parent,
@@ -192,6 +192,9 @@ def _resolve_configured_git_provider(runtime_config: dict) -> str | None:
     return None
 
 
+_LOCAL_RUNTIME_PROVIDERS = {"ollama", "vllm"}
+
+
 def _resolve_configured_model_connection_mode(runtime_config: dict) -> str | None:
     model_config = runtime_config.get("model")
     if not isinstance(model_config, dict):
@@ -200,7 +203,7 @@ def _resolve_configured_model_connection_mode(runtime_config: dict) -> str | Non
     if connection_mode in {"local-runtime", "remote-api"}:
         return connection_mode
     provider = _normalize_optional_value(model_config.get("provider"))
-    if provider == "ollama":
+    if provider in _LOCAL_RUNTIME_PROVIDERS:
         return "local-runtime"
     if provider:
         return "remote-api"

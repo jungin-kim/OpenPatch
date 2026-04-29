@@ -140,6 +140,12 @@ export type AgentRunPayload = {
   is_git_repository: boolean;
   files_read: string[];
   response: string;
+  // Write-intent routing fields
+  response_type?: "assistant_answer" | "change_proposal";
+  proposal_relative_path?: string | null;
+  proposal_original_content?: string | null;
+  proposal_proposed_content?: string | null;
+  proposal_context_summary?: string | null;
 };
 
 export type ThreadMessagePayload = {

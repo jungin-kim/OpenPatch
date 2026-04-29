@@ -5,24 +5,20 @@ The execution path now uses LangGraph (via ``agent_graph.run_agent_graph``).
 If LangGraph is unavailable for any reason, the service falls back to the
 legacy direct execution path so existing Q&A behavior is never broken.
 
-What moved into LangGraph (agent_graph.py):
-  - classify_request   — query classification + file hint extraction
-  - resolve_repo_context — active-repository validation
-  - retrieve_or_read_files — file retrieval pipeline
-  - answer_read_only   — model call
-  - format_response    — AgentRunResponse assembly
-
-What stayed outside LangGraph (unchanged):
-  - FastAPI routes  (api/routes.py)
-  - Repository open flow  (repo_service.py)
-  - Provider integration  (provider_service.py, git_providers.py)
-  - Thread persistence  (thread_service.py)
-  - CLI lifecycle  (packages/cli)
-  - Web UI state  (apps/web)
+Write intent routing intercepts the request before the read-only graph runs.
+If the user's task contains write-intent signals AND the current permission
+mode allows it, a change proposal is generated inline.  This lets the normal
+chat composer handle both Q&A and coding-agent write requests.
 """
 
 import logging
+import re
+from pathlib import Path
 
+from repooperator_worker.config import (
+    WRITE_MODE_WRITE_WITH_APPROVAL,
+    get_settings,
+)
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
 from repooperator_worker.services.active_repository import ActiveRepository, get_active_repository
 from repooperator_worker.services.context_service import build_query_aware_context
@@ -34,6 +30,22 @@ from repooperator_worker.services.model_client import (
 logger = logging.getLogger(__name__)
 
 _USE_LANGGRAPH = True  # set to False to force the legacy path for debugging
+
+# ── Write intent detection ────────────────────────────────────────────────────
+
+_WRITE_INTENT_KEYWORDS = frozenset({
+    # English
+    "change", "update", "fix", "modify", "refactor", "add", "remove", "delete",
+    "highlight", "implement", "edit", "rewrite", "rename", "replace", "insert",
+    "improve", "enhance", "convert", "format", "clean", "restructure",
+    "reorganize", "move", "make", "create",
+    # Korean
+    "수정", "바꿔", "고쳐", "추가", "하이라이트", "변경", "만들어", "구현",
+    "삭제", "수정해", "변경해", "추가해", "리팩토링", "개선", "고쳐줘",
+    "바꿔줘", "만들어줘", "구현해줘", "추가해줘", "삭제해줘",
+})
+
+_FILE_HINT_RE = re.compile(r'\b([\w./\\-]+\.[a-zA-Z]{1,6})\b', re.ASCII)
 
 _SYSTEM_PROMPT = """\
 You are RepoOperator, a read-only repository assistant.
@@ -52,12 +64,198 @@ which additional files should be inspected.
 - Keep answers focused and practical."""
 
 
+def detect_write_intent(task: str) -> tuple[bool, list[str]]:
+    """Return (is_write_request, file_hints) for a user task string.
+
+    Uses keyword matching for English and Korean write-intent signals plus
+    file-extension detection.  Not perfect, but handles common coding-agent
+    requests reliably.
+    """
+    from repooperator_worker.services.retrieval_service import SOURCE_EXTENSIONS
+
+    lower = task.lower()
+    tokens = re.findall(r'\w+', lower)
+    has_keyword = any(tok in _WRITE_INTENT_KEYWORDS for tok in tokens)
+
+    # Korean non-word characters (e.g. 수정해줘) need substring match
+    if not has_keyword:
+        has_keyword = any(kw in lower for kw in _WRITE_INTENT_KEYWORDS if not kw.isascii())
+
+    file_hints: list[str] = []
+    for match in _FILE_HINT_RE.finditer(task):
+        candidate = match.group(1)
+        suffix = Path(candidate).suffix.lower()
+        if suffix in SOURCE_EXTENSIONS and not candidate.lower().startswith("http"):
+            file_hints.append(candidate)
+
+    return has_keyword, file_hints
+
+
+def _resolve_write_target(
+    project_path: str, file_hints: list[str]
+) -> tuple[str | None, list[str]]:
+    """Return (resolved_relative_path | None, candidate_paths).
+
+    If exactly one file matches, return it.  If multiple match, return
+    None + candidate list so the caller can ask for clarification.
+    """
+    from repooperator_worker.services.retrieval_service import SKIP_DIRS
+
+    try:
+        from repooperator_worker.services.common import resolve_project_path
+        repo_path = resolve_project_path(project_path)
+    except Exception:
+        return None, []
+
+    def _find(filename: str) -> list[Path]:
+        target_name = Path(filename).name.lower()
+        matches: list[Path] = []
+        for path in repo_path.rglob("*"):
+            if any(part in SKIP_DIRS for part in path.parts):
+                continue
+            if not path.is_file():
+                continue
+            name = path.name.lower()
+            if name == target_name or target_name in name:
+                matches.append(path)
+        matches.sort(key=lambda p: (len(p.parts), str(p)))
+        return matches
+
+    for hint in file_hints:
+        matches = _find(hint)
+        if len(matches) == 1:
+            return str(matches[0].relative_to(repo_path)), []
+        if len(matches) > 1:
+            candidates = [str(m.relative_to(repo_path)) for m in matches[:5]]
+            return None, candidates
+
+    return None, []
+
+
+def _build_minimal_run_response(request: AgentRunRequest, *, response: str, response_type: str = "assistant_answer") -> AgentRunResponse:
+    """Build a minimal AgentRunResponse for write-intent routing outcomes."""
+    settings = get_settings()
+    client = OpenAICompatibleModelClient()
+    try:
+        model_name = client.model_name
+    except ValueError:
+        model_name = settings.configured_model_name or "unknown"
+    return AgentRunResponse(
+        project_path=request.project_path,
+        git_provider=request.git_provider,
+        active_repository_source=request.git_provider,
+        active_repository_path=request.project_path,
+        active_branch=request.branch,
+        task=request.task,
+        model=model_name,
+        branch=request.branch,
+        repo_root_name=request.project_path.split("/")[-1] or request.project_path,
+        context_summary="",
+        top_level_entries=[],
+        readme_included=False,
+        diff_included=False,
+        is_git_repository=True,
+        files_read=[],
+        response=response,
+        response_type=response_type,
+    )
+
+
 def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
     """Run the agent task, using LangGraph when available.
 
-    Falls back to the legacy direct execution path if the graph raises an
+    Write-intent requests are intercepted before the read-only graph:
+    - In read-only mode: the user is told to switch to Auto review.
+    - In write-with-approval mode: a change proposal is generated inline.
+
+    Falls back to the legacy direct execution path if LangGraph raises an
     unexpected import or runtime error that is not a user-facing ValueError.
     """
+    settings = get_settings()
+    is_write, file_hints = detect_write_intent(request.task)
+
+    if is_write:
+        if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
+            logger.info(
+                "agent_service: write intent detected but mode=%r — returning write_blocked",
+                settings.write_mode,
+            )
+            return _build_minimal_run_response(
+                request,
+                response=(
+                    "This looks like a code change request. "
+                    "Switch the permission mode to **Auto review** to let RepoOperator "
+                    "propose a diff for your approval."
+                ),
+            )
+
+        # Auto review — try to generate a proposal
+        logger.info(
+            "agent_service: write intent detected, mode=write-with-approval, hints=%r",
+            file_hints,
+        )
+        resolved_path, candidates = _resolve_write_target(request.project_path, file_hints)
+
+        if not resolved_path and candidates:
+            candidate_list = "\n".join(f"- `{c}`" for c in candidates)
+            return _build_minimal_run_response(
+                request,
+                response=(
+                    f"I found multiple files that could match. Which one should I modify?\n\n{candidate_list}"
+                ),
+            )
+
+        if not resolved_path and not file_hints:
+            return _build_minimal_run_response(
+                request,
+                response=(
+                    "Which file should I modify? "
+                    "Mention the file name in your request and I will generate a diff for review."
+                ),
+            )
+
+        if not resolved_path:
+            hint_list = ", ".join(f"`{h}`" for h in file_hints)
+            return _build_minimal_run_response(
+                request,
+                response=(
+                    f"I could not find {hint_list} in this repository. "
+                    "Check the file name and try again."
+                ),
+            )
+
+        # File resolved — generate proposal
+        try:
+            from repooperator_worker.schemas import AgentProposeFileRequest
+            from repooperator_worker.services.edit_service import propose_file_edit
+
+            proposal = propose_file_edit(
+                AgentProposeFileRequest(
+                    project_path=request.project_path,
+                    relative_path=resolved_path,
+                    instruction=request.task,
+                )
+            )
+            base = _build_minimal_run_response(
+                request,
+                response=f"Proposed change to `{resolved_path}`. Review the diff and apply if it looks correct.",
+                response_type="change_proposal",
+            )
+            return base.model_copy(update={
+                "model": proposal.model,
+                "proposal_relative_path": proposal.relative_path,
+                "proposal_original_content": proposal.original_content,
+                "proposal_proposed_content": proposal.proposed_content,
+                "proposal_context_summary": proposal.context_summary,
+                "files_read": [proposal.relative_path],
+            })
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("agent_service: proposal generation failed: %r", exc)
+            return _build_minimal_run_response(
+                request,
+                response=f"Unable to generate a proposal: {exc}",
+            )
+
     if _USE_LANGGRAPH:
         try:
             from repooperator_worker.services.agent_graph import run_agent_graph
@@ -65,8 +263,6 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
             logger.debug("agent_service: using LangGraph execution path")
             return run_agent_graph(request)
         except (ValueError, RuntimeError):
-            # User-facing errors (bad repo context, model failure) — re-raise
-            # so the route handler can return the correct HTTP status.
             raise
         except Exception as exc:  # noqa: BLE001
             logger.warning(

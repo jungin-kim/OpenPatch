@@ -38,13 +38,34 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 
 ## Quickstart
 
-Install the CLI:
+### Install via Homebrew (macOS — recommended)
+
+```bash
+brew tap jungin-kim/repooperator
+brew install repooperator
+```
+
+Homebrew handles Python 3.12 automatically — no manual Python setup needed.
+
+### Install via npm
+
+RepoOperator requires **Python 3.11 or later** for the local worker. If you use the
+npm path, install Python first.
 
 ```bash
 npm install -g repooperator
 ```
 
-Run onboarding once (automatically prepares the local runtime on first install):
+If onboarding fails with a Python version error, set `REPOOPERATOR_PYTHON` to a
+compatible interpreter:
+
+```bash
+REPOOPERATOR_PYTHON=$(which python3.12) repooperator onboard
+```
+
+### First-run setup
+
+Run onboarding once (automatically prepares the local runtime):
 
 ```bash
 repooperator onboard
@@ -58,7 +79,7 @@ repooperator up
 
 Open the printed local web URL, choose a repository, and ask a read-only question.
 
-> **No GitHub clone required.** `repooperator onboard` downloads and prepares all runtime
+> **No source clone required.** `repooperator onboard` downloads and prepares all runtime
 > dependencies into `~/.repooperator/runtime/` automatically. You do not need to clone the
 > RepoOperator source repository as a normal user.
 
@@ -74,6 +95,37 @@ To reset everything and start fresh:
 rm -rf ~/.repooperator
 repooperator onboard
 ```
+
+### Troubleshooting: Python version errors
+
+If you see an error like:
+
+```
+ERROR: Package 'repooperator-local-worker' requires a different Python: 3.9.6 not in '>=3.11'
+```
+
+Your system Python is too old. Fix options:
+
+**macOS (Homebrew):**
+```bash
+brew install python@3.12
+REPOOPERATOR_PYTHON="$(brew --prefix python@3.12)/bin/python3.12" repooperator onboard
+```
+
+**Linux (apt):**
+```bash
+sudo apt install python3.12
+REPOOPERATOR_PYTHON=$(which python3.12) repooperator onboard
+```
+
+**Linux (dnf):**
+```bash
+sudo dnf install python3.12
+REPOOPERATOR_PYTHON=$(which python3.12) repooperator onboard
+```
+
+You can also set `REPOOPERATOR_PYTHON` permanently in your shell profile so
+onboarding always uses the right interpreter.
 
 ## First End-To-End Local Flow
 

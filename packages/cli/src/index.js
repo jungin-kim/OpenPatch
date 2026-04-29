@@ -38,6 +38,9 @@ const DEFAULT_OLLAMA_TIMEOUT_MS = 1500;
 const DEFAULT_OLLAMA_START_TIMEOUT_MS = 10000;
 const DEFAULT_LOG_TAIL_LINES = 40;
 const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1";
+const MIN_PYTHON_MAJOR = 3;
+const MIN_PYTHON_MINOR = 11;
+const PYTHON_CANDIDATES = ["python3.13", "python3.12", "python3.11", "python3", "python"];
 const OLLAMA_RECOMMENDED_MODEL = "qwen2.5-coder:7b";
 const MODEL_CONNECTION_MODES = [
   "local-runtime",
@@ -207,12 +210,19 @@ async function runOnboard() {
     const webDetection = await term.spinner("Detect web app installation", () =>
       resolveWebInstallation({}, process.cwd()),
     );
-    const pythonAvailable = await commandExists("python3");
     const npmAvailable = await commandExists("npm");
+    const selectedPython = await findCompatiblePython();
+    let pythonLabel;
+    if (selectedPython) {
+      const ver = await getPythonVersion(selectedPython);
+      pythonLabel = ver ? `${selectedPython} (${ver.major}.${ver.minor})` : selectedPython;
+    } else {
+      pythonLabel = `Python ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+ not found`;
+    }
     term.summaryBox("Environment", [
       ["Local worker", workerDetection.installed ? workerDetection.summary : workerDetection.summary],
       ["Web app", webDetection.installed ? webDetection.summary : webDetection.summary],
-      ["Python", pythonAvailable ? "python3 found" : "python3 not found"],
+      ["Python", pythonLabel],
       ["npm", npmAvailable ? "npm found" : "npm not found"],
     ]);
 
@@ -405,11 +415,31 @@ async function runDoctor() {
   const workerVenvPython = path.join(RUNTIME_VENV_DIR, "bin", "python");
   const webPackageJson = path.join(RUNTIME_WEB_DIR, "package.json");
   const webNextBin = path.join(RUNTIME_WEB_DIR, "node_modules", ".bin", "next");
+
+  const systemPython = await findCompatiblePython();
+  const venvExists = await fileExists(workerVenvPython);
+  const venvVersion = venvExists ? await getVenvPythonVersion() : null;
+  const venvCompatible = isPythonCompatible(venvVersion);
+
+  checks.push(makeCheck(
+    "System Python (>=3.11)",
+    !!systemPython,
+    systemPython || `No Python ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+ found — install it and rerun onboard`,
+  ));
   checks.push(makeCheck(
     "Worker python exists",
-    await fileExists(workerVenvPython),
-    await fileExists(workerVenvPython) ? workerVenvPython : `Missing at ${workerVenvPython}`,
+    venvExists,
+    venvExists ? workerVenvPython : `Missing at ${workerVenvPython}`,
   ));
+  if (venvExists) {
+    checks.push(makeCheck(
+      "Worker python version",
+      venvCompatible,
+      venvVersion
+        ? `${venvVersion.major}.${venvVersion.minor}${venvCompatible ? "" : ` (need ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+ — rerun onboard to repair)`}`
+        : "Unknown — rerun onboard to repair",
+    ));
+  }
   checks.push(makeCheck(
     "Web package.json exists",
     await fileExists(webPackageJson),
@@ -1366,13 +1396,102 @@ async function copyRuntimeDirectory(src, dest) {
   });
 }
 
+async function getPythonVersion(executable) {
+  try {
+    const result = await runCommandCapture(executable, [
+      "-c",
+      "import sys; print(sys.version_info.major, sys.version_info.minor)",
+    ]);
+    if (result.returncode !== 0) return null;
+    const parts = result.stdout.trim().split(/\s+/);
+    const major = parseInt(parts[0], 10);
+    const minor = parseInt(parts[1], 10);
+    if (isNaN(major) || isNaN(minor)) return null;
+    return { major, minor };
+  } catch {
+    return null;
+  }
+}
+
+function isPythonCompatible(versionInfo) {
+  if (!versionInfo) return false;
+  if (versionInfo.major !== MIN_PYTHON_MAJOR) return false;
+  return versionInfo.minor >= MIN_PYTHON_MINOR;
+}
+
+async function findCompatiblePython() {
+  const envOverride = process.env.REPOOPERATOR_PYTHON;
+  if (envOverride) {
+    const version = await getPythonVersion(envOverride);
+    if (isPythonCompatible(version)) return envOverride;
+    if (version) {
+      throw new Error(
+        `REPOOPERATOR_PYTHON is set to "${envOverride}" but it is Python ${version.major}.${version.minor}, which is below the required ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+.`,
+      );
+    }
+    throw new Error(
+      `REPOOPERATOR_PYTHON is set to "${envOverride}" but it could not be executed. Check the path and try again.`,
+    );
+  }
+
+  for (const candidate of PYTHON_CANDIDATES) {
+    if (!(await commandExists(candidate))) continue;
+    const version = await getPythonVersion(candidate);
+    if (isPythonCompatible(version)) return candidate;
+  }
+
+  return null;
+}
+
+function formatNoPythonError(foundVersion) {
+  const required = `Python ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+`;
+  const found = foundVersion
+    ? `Python ${foundVersion.major}.${foundVersion.minor} was found but is too old.`
+    : "No compatible Python installation was found.";
+
+  const platform = process.platform;
+  let installHint;
+  if (platform === "darwin") {
+    installHint = [
+      `Install ${required} via Homebrew:`,
+      "  brew install python@3.12",
+      "Or download from https://www.python.org/downloads/",
+    ].join("\n");
+  } else if (platform === "linux") {
+    installHint = [
+      `Install ${required} via your package manager, e.g.:`,
+      "  sudo apt install python3.12   # Debian/Ubuntu",
+      "  sudo dnf install python3.12   # Fedora/RHEL",
+      "Or download from https://www.python.org/downloads/",
+    ].join("\n");
+  } else {
+    installHint = `Download and install ${required} from https://www.python.org/downloads/`;
+  }
+
+  return `${found}\n\n${installHint}\n\nAfter installing Python, rerun \`repooperator onboard\`.`;
+}
+
+async function getVenvPythonVersion() {
+  const venvPython = path.join(RUNTIME_VENV_DIR, "bin", "python");
+  if (!(await fileExists(venvPython))) return null;
+  return getPythonVersion(venvPython);
+}
+
 async function installWorkerRuntime() {
   const sourceDir = getBundledWorkerSourceDir();
   if (!sourceDir) {
     throw new Error(`${PRODUCT_NAME} could not find bundled local worker sources. Reinstall the repooperator npm package.`);
   }
-  if (!(await commandExists("python3"))) {
-    throw new Error("Python 3 is required for the local worker. Install Python 3.11+ and rerun onboarding.");
+
+  const selectedPython = await findCompatiblePython();
+  if (!selectedPython) {
+    let foundVersion = null;
+    for (const candidate of PYTHON_CANDIDATES) {
+      if (!(await commandExists(candidate))) continue;
+      foundVersion = await getPythonVersion(candidate);
+      if (foundVersion) break;
+    }
+    throw new Error(formatNoPythonError(foundVersion));
   }
 
   await fsp.mkdir(RUNTIME_DIR, { recursive: true });
@@ -1380,8 +1499,17 @@ async function installWorkerRuntime() {
   await copyRuntimeDirectory(sourceDir, RUNTIME_WORKER_DIR);
 
   const venvPython = path.join(RUNTIME_VENV_DIR, "bin", "python");
-  if (!(await fileExists(venvPython))) {
-    const venvResult = await runCommandCapture("python3", ["-m", "venv", RUNTIME_VENV_DIR]);
+  let needsNewVenv = !(await fileExists(venvPython));
+  if (!needsNewVenv) {
+    const existingVersion = await getVenvPythonVersion();
+    if (!isPythonCompatible(existingVersion)) {
+      await fsp.rm(RUNTIME_VENV_DIR, { recursive: true, force: true });
+      needsNewVenv = true;
+    }
+  }
+
+  if (needsNewVenv) {
+    const venvResult = await runCommandCapture(selectedPython, ["-m", "venv", RUNTIME_VENV_DIR]);
     if (venvResult.returncode !== 0) {
       throw new Error(`Failed to create worker virtual environment at ${RUNTIME_VENV_DIR}.\n${venvResult.stderr}`);
     }
@@ -1617,10 +1745,6 @@ async function findRepoRootWithWeb(startDir) {
 }
 
 async function resolveWorkerRuntime(workerPath) {
-  if (!(await commandExists("python3"))) {
-    throw new Error("Python is missing. Install Python 3.11+ before starting the local worker.");
-  }
-
   const runtimePythonPath = path.join(RUNTIME_VENV_DIR, "bin", "python");
   if (await fileExists(runtimePythonPath)) {
     return { pythonPath: runtimePythonPath };
@@ -1631,6 +1755,16 @@ async function resolveWorkerRuntime(workerPath) {
     return { pythonPath: localPythonPath };
   }
 
+  const compatible = await findCompatiblePython();
+  if (!compatible) {
+    let foundVersion = null;
+    for (const candidate of PYTHON_CANDIDATES) {
+      if (!(await commandExists(candidate))) continue;
+      foundVersion = await getPythonVersion(candidate);
+      if (foundVersion) break;
+    }
+    throw new Error(formatNoPythonError(foundVersion));
+  }
   throw new Error(
     `Worker Python executable is missing. Re-run \`${CLI_COMMAND} onboard\` to repair the runtime.`,
   );

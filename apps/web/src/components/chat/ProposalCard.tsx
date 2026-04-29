@@ -245,3 +245,26 @@ export function proposalFromPayload(
     status: "proposed",
   };
 }
+
+/** Helper to turn a change_proposal AgentRunPayload into a ChangeProposal. */
+export function proposalFromRunPayload(
+  payload: {
+    model: string;
+    proposal_relative_path?: string | null;
+    proposal_original_content?: string | null;
+    proposal_proposed_content?: string | null;
+  },
+  opts: { projectPath: string; branch?: string | null },
+): ChangeProposal {
+  const relativePath = payload.proposal_relative_path ?? "unknown";
+  return {
+    id: `${Date.now()}-proposal-${relativePath}`,
+    projectPath: opts.projectPath,
+    branch: opts.branch,
+    relativePath,
+    originalContent: payload.proposal_original_content ?? "",
+    proposedContent: payload.proposal_proposed_content ?? "",
+    model: payload.model,
+    status: "proposed",
+  };
+}

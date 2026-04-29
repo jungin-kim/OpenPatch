@@ -69,13 +69,17 @@ class OpenAICompatibleModelClient:
         return f"{base_url}/chat/completions"
 
     def _build_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {"Content-Type": "application/json"}
         api_key = self._settings.openai_api_key
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY is not configured.")
-        return {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        elif self._settings.configured_model_connection_mode != "local-runtime":
+            raise ValueError(
+                "OPENAI_API_KEY is not configured. "
+                "Set it in ~/.repooperator/config.json or via the OPENAI_API_KEY environment variable."
+            )
+        # Local runtimes (Ollama, vLLM) do not require an API key.
+        return headers
 
     def _build_payload(self, prompt: ModelGenerationRequest) -> dict:
         return {

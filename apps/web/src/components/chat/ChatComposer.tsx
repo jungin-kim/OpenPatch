@@ -1,6 +1,6 @@
 "use client";
 
-import { type KeyboardEvent, useState } from "react";
+import { type KeyboardEvent } from "react";
 
 interface ChatComposerProps {
   value: string;
@@ -9,8 +9,6 @@ interface ChatComposerProps {
   disabled: boolean;
   pending: boolean;
   writeMode?: "read-only" | "write-with-approval" | "auto-apply";
-  onProposeChange?: (relativePath: string, instruction: string) => void;
-  proposePending?: boolean;
 }
 
 export function ChatComposer({
@@ -20,13 +18,7 @@ export function ChatComposer({
   disabled,
   pending,
   writeMode = "read-only",
-  onProposeChange,
-  proposePending = false,
 }: ChatComposerProps) {
-  const [mode, setMode] = useState<"ask" | "propose">("ask");
-  const [relativePath, setRelativePath] = useState("");
-  const [instruction, setInstruction] = useState("");
-
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
@@ -36,82 +28,25 @@ export function ChatComposer({
     }
   }
 
-  function handlePropose() {
-    if (!onProposeChange || !relativePath.trim() || !instruction.trim() || proposePending) return;
-    onProposeChange(relativePath.trim(), instruction.trim());
-    // Reset form after submitting
-    setRelativePath("");
-    setInstruction("");
-    setMode("ask");
-  }
-
-  function handleProposeKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      handlePropose();
-    }
-  }
-
   const canSubmit = !disabled && !pending && value.trim().length > 0;
-  const canPropose =
-    !disabled &&
-    !proposePending &&
-    relativePath.trim().length > 0 &&
-    instruction.trim().length > 0;
-  const showProposeToggle =
-    writeMode === "write-with-approval" && Boolean(onProposeChange) && !disabled;
 
-  if (mode === "propose") {
-    return (
-      <div className="chat-composer-area">
-        <div className="composer-form">
-          <div className="composer-propose-bar">
-            <span className="composer-propose-label">Propose a file change</span>
-            <button
-              className="composer-mode-link"
-              type="button"
-              onClick={() => setMode("ask")}
-            >
-              ← Back to Q&amp;A
-            </button>
-          </div>
-          <input
-            className="composer-propose-path"
-            type="text"
-            value={relativePath}
-            onChange={(e) => setRelativePath(e.target.value)}
-            placeholder="Relative path, e.g. src/utils/helpers.py"
-            disabled={proposePending}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <textarea
-            className="composer-textarea"
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            onKeyDown={handleProposeKeyDown}
-            placeholder="Describe the change you want… (⌘+Enter to generate proposal)"
-            disabled={proposePending}
-            rows={3}
-          />
-          <div className="composer-actions">
-            <span className="composer-hint">
-              RepoOperator will propose a diff. You must review and approve before any file is
-              modified.
-            </span>
-            <button
-              className="composer-send-btn"
-              type="button"
-              onClick={handlePropose}
-              disabled={!canPropose}
-            >
-              {proposePending ? "Generating proposal…" : "Generate proposal"}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const placeholder = disabled
+    ? "Open a repository above before asking a question…"
+    : writeMode === "write-with-approval"
+      ? "Ask a question or request a change… (⌘+Enter to send)"
+      : "Ask a question about the repository… (⌘+Enter to send)";
+
+  const hint = disabled
+    ? "Open a repository to start asking questions."
+    : writeMode === "write-with-approval"
+      ? "Auto review — change requests will generate a diff for your approval."
+      : "Basic permissions — no files are modified.";
+
+  const buttonLabel = pending
+    ? writeMode === "write-with-approval"
+      ? "Working…"
+      : "Asking…"
+    : "Ask RepoOperator";
 
   return (
     <div className="chat-composer-area">
@@ -121,40 +56,19 @@ export function ChatComposer({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={
-            disabled
-              ? "Open a repository above before asking a question…"
-              : "Ask a question about the repository… (⌘+Enter to send)"
-          }
+          placeholder={placeholder}
           disabled={disabled || pending}
           rows={3}
         />
         <div className="composer-actions">
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span className="composer-hint">
-              {disabled
-                ? "Open a repository to start asking questions."
-                : writeMode === "write-with-approval"
-                  ? "Auto review — changes require your explicit approval."
-                  : "Basic permissions — no files are modified."}
-            </span>
-            {showProposeToggle && (
-              <button
-                className="composer-propose-toggle"
-                type="button"
-                onClick={() => setMode("propose")}
-              >
-                Propose change
-              </button>
-            )}
-          </div>
+          <span className="composer-hint">{hint}</span>
           <button
             className="composer-send-btn"
             type="button"
             onClick={onSubmit}
             disabled={!canSubmit}
           >
-            {pending ? "Asking…" : "Ask RepoOperator"}
+            {buttonLabel}
           </button>
         </div>
       </div>

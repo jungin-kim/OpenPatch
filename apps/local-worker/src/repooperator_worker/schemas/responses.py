@@ -182,6 +182,12 @@ class AgentRunResponse(BaseModel):
     is_git_repository: bool
     files_read: list[str] = []
     response: str
+    # Write-intent routing fields (populated when response_type != "assistant_answer")
+    response_type: str = "assistant_answer"  # "assistant_answer" | "change_proposal"
+    proposal_relative_path: str | None = None
+    proposal_original_content: str | None = None
+    proposal_proposed_content: str | None = None
+    proposal_context_summary: str | None = None
 
 
 class LocalBranchSummary(BaseModel):

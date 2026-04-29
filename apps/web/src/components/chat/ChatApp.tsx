@@ -14,7 +14,6 @@ import {
   listThreads,
   LocalWorkerClientError,
   openRepository,
-  proposeFileEdit,
   runAgentTask,
   saveThread,
   updatePermissionMode,
@@ -26,7 +25,7 @@ import {
   type ThreadRecordPayload,
 } from "@/lib/local-worker-client";
 import {
-  proposalFromPayload,
+  proposalFromRunPayload,
   type ChangeProposal,
   type ProposalStatus,
 } from "./ProposalCard";
@@ -94,7 +93,6 @@ export function ChatApp() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadStoreState, setThreadStoreState] = useState<ThreadStoreState>("loading");
   const [question, setQuestion] = useState("");
-  const [proposePending, setProposePending] = useState(false);
   const [writeMode, setWriteMode] = useState<PermissionMode>("read-only");
   const [permissionPending, setPermissionPending] = useState(false);
   const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
@@ -570,29 +568,52 @@ export function ChatApp() {
         branch: repoResult.branch || undefined,
         task: userMessage.content,
       });
-      const messagesWithAssistant: ChatMessage[] = [
-        ...messagesWithUser,
-        {
+
+      let assistantMessage: ChatMessage;
+
+      if (
+        payload.response_type === "change_proposal" &&
+        payload.proposal_relative_path
+      ) {
+        const proposal = proposalFromRunPayload(payload, {
+          projectPath: repoResult.project_path,
+          branch: repoResult.branch,
+        });
+        assistantMessage = {
+          id: `${Date.now()}-proposal`,
+          role: "assistant",
+          content: payload.response,
+          timestamp: new Date(),
+          metadata: payload,
+          proposal,
+        };
+      } else {
+        assistantMessage = {
           id: `${Date.now()}-assistant`,
           role: "assistant",
           content: payload.response,
           timestamp: new Date(),
           metadata: payload,
-        },
-      ];
-      setMessages(messagesWithAssistant);
-      updateActiveThread(messagesWithAssistant);
+        };
+      }
+
+      const nextMessages = [...messagesWithUser, assistantMessage];
+      setMessages(nextMessages);
+      updateActiveThread(nextMessages);
     } catch (error) {
       const msg =
         error instanceof LocalWorkerClientError || error instanceof Error
           ? error.message
           : "Unable to run the task through the local worker.";
+      const isTimeout = msg.toLowerCase().includes("timed out");
       const messagesWithError: ChatMessage[] = [
         ...messagesWithUser,
         {
           id: `${Date.now()}-error`,
           role: "assistant",
-          content: `Error: ${msg}`,
+          content: isTimeout
+            ? `The request timed out. The model may need more time — retry, or try a shorter request. Details: ${msg}`
+            : `Error: ${msg}`,
           timestamp: new Date(),
         },
       ];
@@ -808,71 +829,6 @@ export function ChatApp() {
     }
   }
 
-  async function handleProposeChange(relativePath: string, instruction: string) {
-    if (!repoResult || proposePending) return;
-    if (writeMode !== "write-with-approval") {
-      const errorMessage: ChatMessage = {
-        id: `${Date.now()}-permission`,
-        role: "assistant",
-        content: "Switch the permission mode to Auto review before generating file change proposals.",
-        timestamp: new Date(),
-      };
-      const nextMessages = [...messages, errorMessage];
-      setMessages(nextMessages);
-      updateActiveThread(nextMessages);
-      return;
-    }
-
-    const userMessage: ChatMessage = {
-      id: `${Date.now()}-user`,
-      role: "user",
-      content: `Propose change to ${relativePath}:\n${instruction}`,
-      timestamp: new Date(),
-    };
-    const messagesWithUser = [...messages, userMessage];
-    setMessages(messagesWithUser);
-    updateActiveThread(messagesWithUser);
-    setProposePending(true);
-
-    try {
-      const payload = await proposeFileEdit({
-        project_path: repoResult.project_path,
-        relative_path: relativePath,
-        instruction,
-      });
-      const proposal: ChangeProposal = proposalFromPayload(payload, {
-        projectPath: repoResult.project_path,
-        branch: repoResult.branch,
-      });
-      const proposalMessage: ChatMessage = {
-        id: `${Date.now()}-proposal`,
-        role: "assistant",
-        content: `Proposed change to \`${relativePath}\`. Review the diff below and apply if it looks correct.`,
-        timestamp: new Date(),
-        proposal,
-      };
-      const messagesWithProposal = [...messagesWithUser, proposalMessage];
-      setMessages(messagesWithProposal);
-      updateActiveThread(messagesWithProposal);
-    } catch (error) {
-      const msg =
-        error instanceof LocalWorkerClientError || error instanceof Error
-          ? error.message
-          : "Unable to generate the file change proposal.";
-      const errorMessage: ChatMessage = {
-        id: `${Date.now()}-error`,
-        role: "assistant",
-        content: `Error generating proposal: ${msg}`,
-        timestamp: new Date(),
-      };
-      const messagesWithError = [...messagesWithUser, errorMessage];
-      setMessages(messagesWithError);
-      updateActiveThread(messagesWithError);
-    } finally {
-      setProposePending(false);
-    }
-  }
-
   function handleProposalStatusChange(id: string, status: ProposalStatus, _message?: string) {
     setMessages((prev) =>
       prev.map((msg) =>
@@ -973,8 +929,6 @@ export function ChatApp() {
           disabled={!repoResult}
           pending={questionPending}
           writeMode={writeMode}
-          onProposeChange={handleProposeChange}
-          proposePending={proposePending}
         />
       }
     />
