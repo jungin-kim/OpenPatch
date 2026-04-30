@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { AgentRunPayload, RepoOpenPayload } from "@/lib/local-worker-client";
+import type { AgentRunPayload, CommandResultPayload, RepoOpenPayload } from "@/lib/local-worker-client";
 import { MarkdownContent } from "./MarkdownContent";
 import {
   ProposalCard,
@@ -17,6 +17,75 @@ export type ChatMessage = {
   metadata?: AgentRunPayload;
   proposal?: ChangeProposal;
 };
+
+function CommandApprovalCard({
+  metadata,
+  onDecision,
+}: {
+  metadata: AgentRunPayload;
+  onDecision?: (metadata: AgentRunPayload, decision: "yes" | "yes_session" | "no_explain") => void;
+}) {
+  const approval = metadata.command_approval;
+  if (!approval) return null;
+  return (
+    <div className={`command-card command-card-${approval.risk}`}>
+      <div className="command-card-heading">Command approval required</div>
+      <p>{approval.reason}</p>
+      <dl className="command-card-grid">
+        <div>
+          <dt>Command</dt>
+          <dd><code>{approval.display_command}</code></dd>
+        </div>
+        <div>
+          <dt>Working directory</dt>
+          <dd>{approval.cwd || "No repository opened"}</dd>
+        </div>
+        <div>
+          <dt>Risk</dt>
+          <dd>{approval.risk}</dd>
+        </div>
+        <div>
+          <dt>Read-only</dt>
+          <dd>{approval.read_only ? "Yes" : "No"}</dd>
+        </div>
+        <div>
+          <dt>Network</dt>
+          <dd>{approval.needs_network ? "May use network" : "No network expected"}</dd>
+        </div>
+        <div>
+          <dt>Outside repository</dt>
+          <dd>{approval.touches_outside_repo ? "Yes" : "No"}</dd>
+        </div>
+      </dl>
+      {approval.blocked ? (
+        <div className="command-card-blocked">Blocked by RepoOperator safety policy.</div>
+      ) : (
+        <div className="command-card-actions">
+          <button type="button" onClick={() => onDecision?.(metadata, "yes")}>Yes</button>
+          <button type="button" onClick={() => onDecision?.(metadata, "yes_session")}>
+            Yes, and don't ask again for this session
+          </button>
+          <button type="button" onClick={() => onDecision?.(metadata, "no_explain")}>
+            No, explain another approach
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommandResultCard({ result }: { result: CommandResultPayload }) {
+  return (
+    <div className="command-card">
+      <div className="command-card-heading">Command result</div>
+      <p><code>{result.display_command}</code> exited with {result.exit_code}.</p>
+      <details open>
+        <summary>Output</summary>
+        <pre>{result.stdout || result.stderr || "No output"}</pre>
+      </details>
+    </div>
+  );
+}
 
 function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
   const [open, setOpen] = useState(false);
@@ -174,9 +243,10 @@ interface ChatMessagesProps {
   repoResult: RepoOpenPayload | null;
   questionPending: boolean;
   gitProvider: string;
-  writeMode?: "read-only" | "write-with-approval" | "auto-apply";
+  writeMode?: "basic" | "auto_review" | "full_access";
   onProposalStatusChange?: (id: string, status: ProposalStatus, message?: string) => void;
   onClarificationSelect?: (candidate: string) => void;
+  onCommandDecision?: (metadata: AgentRunPayload, decision: "yes" | "yes_session" | "no_explain") => void;
 }
 
 export function ChatMessages({
@@ -184,9 +254,10 @@ export function ChatMessages({
   repoResult,
   questionPending,
   gitProvider,
-  writeMode = "read-only",
+  writeMode = "basic",
   onProposalStatusChange,
   onClarificationSelect,
+  onCommandDecision,
 }: ChatMessagesProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -351,6 +422,12 @@ export function ChatMessages({
                     </div>
                   ) : null}
                 </div>
+              ) : msg.role === "assistant" && msg.metadata?.response_type === "command_approval" ? (
+                <CommandApprovalCard metadata={msg.metadata} onDecision={onCommandDecision} />
+              ) : msg.role === "assistant" && msg.metadata?.response_type === "command_result" && msg.metadata.command_result ? (
+                <CommandResultCard result={msg.metadata.command_result as CommandResultPayload} />
+              ) : msg.role === "assistant" && msg.metadata?.response_type === "command_denied" ? (
+                <CommandApprovalCard metadata={msg.metadata} onDecision={onCommandDecision} />
               ) : msg.role === "assistant" && msg.metadata?.response_type === "proposal_error" ? (
                 <div className="proposal-error-card">
                   <div className="proposal-error-title">No valid diff produced</div>

@@ -12,13 +12,22 @@ class HealthResponse(BaseModel):
     configured_model_name: str | None = None
     configured_model_base_url: str | None = None
     write_mode: str = "read-only"
+    permission_mode: str = "basic"
+    sandbox_scope: str = "repository"
+    approval_policy: dict = {}
+    tool_permissions: dict = {}
     recent_projects: list[str] = []
 
 
 class PermissionModeResponse(BaseModel):
+    mode: str = "basic"
     write_mode: str
     available_modes: list[str]
     unsupported_modes: list[str] = []
+    sandbox: dict = {}
+    approval: dict = {}
+    tools: dict = {}
+    profile: dict = {}
 
 
 class ProviderProjectSummary(BaseModel):
@@ -195,6 +204,8 @@ class AgentRunResponse(BaseModel):
     graph_path: str | None = None
     agent_flow: str = "langgraph"
     proposal_error_details: str | None = None
+    command_approval: dict | None = None
+    command_result: dict | None = None
     run_id: str | None = None
     skills_used: list[str] = []
     thread_context_files: list[str] = []

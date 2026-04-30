@@ -420,25 +420,25 @@ RepoOperator has a built-in permission model to prevent accidental file modifica
 
 | Mode | Behavior |
 |---|---|
-| `read-only` (default) | No file changes are permitted. Proposals and writes are blocked at the backend. |
-| `write-with-approval` | Change proposals are allowed. Files are only modified after you click **Apply** in the UI. |
-| `auto-apply` | Advanced scoped Full access. RepoOperator can apply edits and run approved local tools only inside the active repository, with previews for risky actions. |
+| `basic` (default) | Repository sandbox mode. RepoOperator can read files, prepare diffs, and run safe in-repo commands with guardrails. |
+| `auto_review` | Daily-use mode for sandbox work plus approval cards for elevated actions, network access, and risky local tools. |
+| `full_access` | Dangerous advanced mode for broader local access after a strong confirmation. Risky commands are still logged and previewed where practical. |
 
 Auto-apply, auto-commit, and auto-push are never enabled by default.
 
-### Setting write mode
+### Setting permission mode
 
 Open the web app and use the permission selector in the top bar:
 
-- **Basic permissions** maps to `read-only`.
-- **Auto review** maps to `write-with-approval`.
-- **Full access** maps to `auto-apply` after a confirmation prompt. It is scoped to the active repository and approved local tools; it is not unrestricted computer control.
+- **Basic permissions** maps to `basic`.
+- **Auto review** maps to `auto_review`.
+- **Full access** maps to `full_access` after a confirmation prompt.
 
-RepoOperator persists the selected mode in `~/.repooperator/config.json` while preserving the rest of your configuration. Advanced users can still override the mode for debugging with `REPOOPERATOR_WRITE_MODE`, but normal usage should go through the web UI.
+RepoOperator persists the selected mode in `~/.repooperator/config.json` while preserving the rest of your configuration. Advanced users can still override the mode for debugging with `REPOOPERATOR_PERMISSION_MODE`, but normal usage should go through the web UI.
 
-Local tool access is capability-based and visible in the Debug page. RepoOperator currently detects `git` and `glab`, allows approved read-only diagnostics, and requires explicit confirmation for mutating repository operations.
+Local tool access is capability-based and visible in the Debug page. RepoOperator currently detects `git` and `glab`, allows safe repository diagnostics, and requires explicit approval cards for mutating, networked, or risky commands.
 
-### Write workflow (write-with-approval mode)
+### File edit workflow
 
 1. Open a repository and switch to a branch you want to work on.
 2. Click **Propose change** in the composer area.

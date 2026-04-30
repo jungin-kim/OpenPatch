@@ -1,6 +1,7 @@
 "use client";
 
-export type PermissionMode = "read-only" | "write-with-approval" | "auto-apply";
+export type PermissionMode = "basic" | "auto_review" | "full_access";
+export type LegacyWriteMode = "read-only" | "write-with-approval" | "auto-apply";
 
 export type WorkerHealthPayload = {
   status: string;
@@ -12,14 +13,23 @@ export type WorkerHealthPayload = {
   configured_model_provider?: string | null;
   configured_model_name?: string | null;
   configured_model_base_url?: string | null;
-  write_mode?: PermissionMode;
+  write_mode?: LegacyWriteMode;
+  permission_mode?: PermissionMode;
+  sandbox_scope?: string;
+  approval_policy?: Record<string, boolean>;
+  tool_permissions?: Record<string, string>;
   recent_projects?: string[];
 };
 
 export type PermissionModePayload = {
-  write_mode: PermissionMode;
+  mode: PermissionMode;
+  write_mode: LegacyWriteMode;
   available_modes: PermissionMode[];
   unsupported_modes?: PermissionMode[];
+  sandbox?: Record<string, boolean | string>;
+  approval?: Record<string, boolean>;
+  tools?: Record<string, string>;
+  profile?: Record<string, unknown>;
 };
 
 export type ProviderProjectSummary = {
@@ -142,7 +152,7 @@ export type AgentRunPayload = {
   files_read: string[];
   response: string;
   // Write-intent routing fields
-  response_type?: "assistant_answer" | "change_proposal" | "permission_required" | "clarification" | "proposal_error";
+  response_type?: "assistant_answer" | "change_proposal" | "permission_required" | "clarification" | "proposal_error" | "command_approval" | "command_result" | "command_denied" | "command_error";
   proposal_relative_path?: string | null;
   proposal_original_content?: string | null;
   proposal_proposed_content?: string | null;
@@ -153,11 +163,38 @@ export type AgentRunPayload = {
   graph_path?: string | null;
   agent_flow?: string | null;
   proposal_error_details?: string | null;
+  command_approval?: CommandApprovalPayload | null;
+  command_result?: CommandResultPayload | null;
   run_id?: string | null;
   skills_used?: string[];
   thread_context_files?: string[];
   thread_context_symbols?: string[];
   context_source?: string | null;
+};
+
+export type CommandApprovalPayload = {
+  type: "command_approval";
+  approval_id: string;
+  command: string[];
+  display_command: string;
+  cwd?: string | null;
+  risk: "low" | "medium" | "high" | string;
+  read_only: boolean;
+  needs_network: boolean;
+  touches_outside_repo: boolean;
+  needs_approval: boolean;
+  blocked?: boolean;
+  reason: string;
+  pattern?: string;
+  options?: string[];
+};
+
+export type CommandResultPayload = CommandApprovalPayload & {
+  status: string;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms?: number;
 };
 
 export type ThreadMessagePayload = {
@@ -214,13 +251,32 @@ export async function getPermissionMode(): Promise<PermissionModePayload> {
   return parseWorkerResponse<PermissionModePayload>(response);
 }
 
-export async function updatePermissionMode(writeMode: PermissionMode): Promise<PermissionModePayload> {
+export async function updatePermissionMode(mode: PermissionMode): Promise<PermissionModePayload> {
   const response = await fetch("/api/worker/permissions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ write_mode: writeMode }),
+    body: JSON.stringify({ mode }),
   });
   return parseWorkerResponse<PermissionModePayload>(response);
+}
+
+export async function runApprovedCommand(input: {
+  command: string[];
+  approval_id?: string;
+  remember_for_session?: boolean;
+  decision?: string;
+}): Promise<CommandResultPayload> {
+  const response = await fetch("/api/worker/commands/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      argv: input.command,
+      approval_id: input.approval_id,
+      remember_for_session: input.remember_for_session,
+      decision: input.decision,
+    }),
+  });
+  return parseWorkerResponse<CommandResultPayload>(response);
 }
 
 export async function getProviderProjects(input: {

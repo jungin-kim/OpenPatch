@@ -2,7 +2,7 @@ import json
 import re
 from pathlib import Path
 
-from repooperator_worker.config import WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
+from repooperator_worker.config import WRITE_MODE_AUTO_APPLY, WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
 from repooperator_worker.schemas import AgentProposeFileRequest, AgentProposeFileResponse
 from repooperator_worker.services.common import (
     ensure_git_repository,
@@ -20,10 +20,10 @@ MAX_FILE_CHARS = 12_000
 
 def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileResponse:
     settings = get_settings()
-    if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
+    if settings.write_mode not in {WRITE_MODE_WRITE_WITH_APPROVAL, WRITE_MODE_AUTO_APPLY}:
         raise ValueError(
             "Write operations are disabled. "
-            "Switch the web UI permission mode to Auto review to enable change proposals."
+            "Use Basic permissions or Auto review to enable repository-scoped change proposals."
         )
 
     repo_path = resolve_project_path(request.project_path)

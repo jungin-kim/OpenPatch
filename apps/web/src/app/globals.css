@@ -10,6 +10,7 @@
   --accent: #1f6a53;
   --accent-soft: rgba(31, 106, 83, 0.12);
   --warning: #8a5a17;
+  --danger: #b42318;
   --shadow: 0 20px 60px rgba(22, 29, 24, 0.08);
   --radius-lg: 24px;
   --radius-md: 18px;
@@ -31,6 +32,7 @@
   --accent: #75c79e;
   --accent-soft: rgba(117, 199, 158, 0.14);
   --warning: #e1bb75;
+  --danger: #ff8a7a;
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.38);
   color-scheme: dark;
 }
@@ -2706,6 +2708,73 @@ select {
   fill: var(--text);
   font-size: 11px;
   font-family: var(--font-mono);
+}
+
+.command-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.command-card-medium {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
+
+.command-card-high {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+
+.command-card-heading {
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.command-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.command-card-grid dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.command-card-grid dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.command-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.command-card-actions button {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-strong);
+  color: var(--text);
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.command-card-actions button:hover {
+  border-color: var(--accent);
+}
+
+.command-card-blocked {
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  padding: 8px;
 }
 
 /* ── Responsive ───────────────────────────────────── */

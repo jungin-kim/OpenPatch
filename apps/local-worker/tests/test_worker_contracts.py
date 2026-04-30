@@ -306,14 +306,17 @@ class WorkerContractTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                payload = update_permission_mode("write-with-approval")
+                payload = update_permission_mode("auto_review")
                 settings = get_settings()
 
+            self.assertEqual(payload.mode, "auto_review")
             self.assertEqual(payload.write_mode, "write-with-approval")
             self.assertEqual(settings.write_mode, "write-with-approval")
+            self.assertEqual(settings.permission_mode, "auto_review")
             updated = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertEqual(updated["model"]["model"], "qwen2.5-coder:7b")
             self.assertEqual(updated["gitProvider"]["token"], "secret-token")
+            self.assertEqual(updated["permissions"]["mode"], "auto_review")
             self.assertEqual(updated["permissions"]["writeMode"], "write-with-approval")
 
     def test_permission_mode_accepts_scoped_full_access(self) -> None:
@@ -332,10 +335,12 @@ class WorkerContractTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                updated = update_permission_mode("auto-apply")
+                updated = update_permission_mode("full_access")
                 payload = get_permission_mode()
 
+            self.assertEqual(updated.mode, "full_access")
             self.assertEqual(updated.write_mode, "auto-apply")
+            self.assertEqual(payload.mode, "full_access")
             self.assertEqual(payload.write_mode, "auto-apply")
 
     def test_runtime_config_prefers_environment_override_for_gitlab(self) -> None:

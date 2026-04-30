@@ -82,19 +82,19 @@ const permissionModes: Array<{
   disabled?: boolean;
 }> = [
   {
-    mode: "read-only",
+    mode: "basic",
     label: "Basic permissions",
-    description: "Ask questions without modifying files.",
+    description: "Work inside the active repository sandbox with guardrails.",
   },
   {
-    mode: "write-with-approval",
+    mode: "auto_review",
     label: "Auto review",
-    description: "Generate diffs and apply only after approval.",
+    description: "Use approval cards for elevated actions, network, and risky tools.",
   },
   {
-    mode: "auto-apply",
+    mode: "full_access",
     label: "Full access",
-    description: "Scoped repo edits and approved local tools.",
+    description: "Dangerous broader local access after confirmation.",
   },
 ];
 
@@ -404,7 +404,7 @@ export function ChatHeader({
           )}
           <div className="permission-control">
             <button
-              className={`permission-trigger${writeMode === "write-with-approval" ? " permission-trigger-review" : ""}`}
+              className={`permission-trigger${writeMode === "auto_review" ? " permission-trigger-review" : ""}`}
               type="button"
               aria-label="Permission mode"
               aria-expanded={showPermissions}
@@ -413,7 +413,7 @@ export function ChatHeader({
               title="Change RepoOperator permission mode"
             >
               <span className="permission-trigger-icon" aria-hidden="true">
-                {writeMode === "write-with-approval" ? "◇" : "●"}
+                {writeMode === "auto_review" ? "◇" : writeMode === "full_access" ? "!" : "●"}
               </span>
               {permissionPending ? "Updating…" : permissionLabel(writeMode)}
               <span className="permission-trigger-caret" aria-hidden="true">▾</span>

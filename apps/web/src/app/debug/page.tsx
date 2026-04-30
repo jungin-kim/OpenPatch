@@ -6,7 +6,13 @@ import { useEffect, useState } from "react";
 type RuntimeDebug = {
   worker?: { status?: string; service?: string };
   model?: { provider?: string | null; connection_mode?: string | null; name?: string | null; base_url?: string | null };
-  permissions?: { write_mode?: string };
+  permissions?: {
+    write_mode?: string;
+    mode?: string;
+    sandbox?: Record<string, string | boolean>;
+    approval?: Record<string, boolean>;
+    tools?: Record<string, string>;
+  };
   repository?: { source?: string | null; project_path?: string | null; branch?: string | null };
   agent?: { orchestration_mode?: string };
   recent_runs?: Array<Record<string, unknown>>;
@@ -142,7 +148,9 @@ function Dashboard({ runtime }: { runtime: RuntimeDebug | null }) {
         <Row label="Branch" value={runtime?.repository?.branch ?? "-"} />
       </Card>
       <Card title="Permissions">
-        <Row label="Write mode" value={runtime?.permissions?.write_mode ?? "-"} />
+        <Row label="Mode" value={runtime?.permissions?.mode ?? "-"} />
+        <Row label="Sandbox scope" value={String(runtime?.permissions?.sandbox?.scope ?? "-")} />
+        <Row label="Approval policy" value={runtime?.permissions?.approval ? "Elevated actions require review" : "-"} />
       </Card>
     </div>
   );
@@ -326,7 +334,8 @@ function SettingsPanel({ runtime }: { runtime: RuntimeDebug | null }) {
   return (
     <Card title="Settings Snapshot">
       <Row label="Connection mode" value={runtime?.model?.connection_mode ?? "-"} />
-      <Row label="Write mode" value={runtime?.permissions?.write_mode ?? "-"} />
+      <Row label="Permission mode" value={runtime?.permissions?.mode ?? "-"} />
+      <Row label="Tool permissions" value={runtime?.permissions?.tools ? Object.entries(runtime.permissions.tools).map(([key, value]) => `${key}: ${value}`).join(" · ") : "-"} />
     </Card>
   );
 }

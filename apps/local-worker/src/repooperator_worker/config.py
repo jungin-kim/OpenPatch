@@ -20,6 +20,14 @@ AVAILABLE_WRITE_MODES = [
     WRITE_MODE_WRITE_WITH_APPROVAL,
     WRITE_MODE_AUTO_APPLY,
 ]
+PERMISSION_MODE_BASIC = "basic"
+PERMISSION_MODE_AUTO_REVIEW = "auto_review"
+PERMISSION_MODE_FULL_ACCESS = "full_access"
+AVAILABLE_PERMISSION_MODES = [
+    PERMISSION_MODE_BASIC,
+    PERMISSION_MODE_AUTO_REVIEW,
+    PERMISSION_MODE_FULL_ACCESS,
+]
 
 
 @dataclass(frozen=True)
@@ -43,7 +51,8 @@ class Settings:
     configured_model_connection_mode: str | None
     configured_model_provider: str | None
     configured_model_name: str | None
-    write_mode: str  # "read-only" | "write-with-approval"
+    permission_mode: str
+    write_mode: str
     composio_api_key: str | None
 
     def get_provider_settings(self, provider: str) -> ProviderSettings:
@@ -118,6 +127,7 @@ def get_settings() -> Settings:
         configured_model_connection_mode=_resolve_configured_model_connection_mode(runtime_config),
         configured_model_provider=_resolve_configured_model_provider(runtime_config),
         configured_model_name=_resolve_configured_model_name(runtime_config),
+        permission_mode=_resolve_permission_mode(runtime_config),
         write_mode=_resolve_write_mode(runtime_config),
         composio_api_key=_normalize_optional_value(os.getenv("REPOOPERATOR_COMPOSIO_API_KEY")),
     )
@@ -227,18 +237,16 @@ def _resolve_configured_model_name(runtime_config: dict) -> str | None:
 
 
 def _resolve_write_mode(runtime_config: dict) -> str:
-    """Read the write mode from config, defaulting to read-only for safety.
-
-    Config key: ``permissions.writeMode``
-    Valid values: ``"read-only"`` (default), ``"write-with-approval"``
-
-    This setting is intentionally conservative — it must be explicitly set in
-    the config file to unlock write capabilities. Re-onboarding never resets
-    this value because it is loaded fresh from the config file on every request.
-    """
+    """Return the legacy write-mode equivalent for older code paths."""
     env_value = os.getenv("REPOOPERATOR_WRITE_MODE")
     if env_value and env_value.strip().lower() in _VALID_WRITE_MODES:
         return env_value.strip().lower()
+
+    permission_mode = _resolve_permission_mode(runtime_config)
+    if permission_mode == PERMISSION_MODE_FULL_ACCESS:
+        return WRITE_MODE_AUTO_APPLY
+    if permission_mode in {PERMISSION_MODE_BASIC, PERMISSION_MODE_AUTO_REVIEW}:
+        return WRITE_MODE_WRITE_WITH_APPROVAL
 
     permissions = runtime_config.get("permissions")
     if isinstance(permissions, dict):
@@ -246,4 +254,45 @@ def _resolve_write_mode(runtime_config: dict) -> str:
         if mode and mode.lower() in _VALID_WRITE_MODES:
             return mode.lower()
 
-    return WRITE_MODE_READ_ONLY
+    return WRITE_MODE_WRITE_WITH_APPROVAL
+
+
+def _resolve_permission_mode(runtime_config: dict) -> str:
+    env_value = os.getenv("REPOOPERATOR_PERMISSION_MODE")
+    if env_value:
+        normalized = _normalize_permission_mode(env_value)
+        if normalized:
+            return normalized
+
+    permissions = runtime_config.get("permissions")
+    if isinstance(permissions, dict):
+        mode = _normalize_permission_mode(permissions.get("mode"))
+        if mode:
+            return mode
+        legacy = _normalize_optional_value(permissions.get("writeMode"))
+        if legacy == WRITE_MODE_WRITE_WITH_APPROVAL:
+            return PERMISSION_MODE_AUTO_REVIEW
+        if legacy == WRITE_MODE_AUTO_APPLY:
+            return PERMISSION_MODE_FULL_ACCESS
+        if legacy == WRITE_MODE_READ_ONLY:
+            return PERMISSION_MODE_BASIC
+
+    return PERMISSION_MODE_BASIC
+
+
+def _normalize_permission_mode(value: str | None) -> str | None:
+    normalized = _normalize_optional_value(value)
+    if normalized is None:
+        return None
+    lowered = normalized.strip().lower().replace("-", "_")
+    aliases = {
+        "basic": PERMISSION_MODE_BASIC,
+        "auto_review": PERMISSION_MODE_AUTO_REVIEW,
+        "autoreview": PERMISSION_MODE_AUTO_REVIEW,
+        "full_access": PERMISSION_MODE_FULL_ACCESS,
+        "fullaccess": PERMISSION_MODE_FULL_ACCESS,
+        WRITE_MODE_READ_ONLY: PERMISSION_MODE_BASIC,
+        WRITE_MODE_WRITE_WITH_APPROVAL: PERMISSION_MODE_AUTO_REVIEW,
+        WRITE_MODE_AUTO_APPLY: PERMISSION_MODE_FULL_ACCESS,
+    }
+    return aliases.get(lowered)

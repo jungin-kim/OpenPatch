@@ -44,6 +44,12 @@ from repooperator_worker.schemas import (
 from repooperator_worker.services.edit_service import propose_file_edit
 from repooperator_worker.services.agent_service import run_agent_task
 from repooperator_worker.services.command_runner import run_command
+from repooperator_worker.services.command_service import (
+    list_command_approvals,
+    preview_command,
+    revoke_command_approval,
+    run_command_with_policy,
+)
 from repooperator_worker.services.file_service import read_text_file, write_text_file
 from repooperator_worker.services.provider_service import (
     list_provider_branches,
@@ -53,6 +59,7 @@ from repooperator_worker.services.provider_service import (
 )
 from repooperator_worker.services.permissions_service import (
     get_permission_mode,
+    permission_profile,
     update_permission_mode,
 )
 from repooperator_worker.services.git_service import (
@@ -91,6 +98,7 @@ router = APIRouter()
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     settings = get_settings()
+    profile = permission_profile(settings.permission_mode)
     return HealthResponse(
         status="ok",
         service="repooperator-local-worker",
@@ -102,6 +110,10 @@ def health() -> HealthResponse:
         configured_model_name=settings.configured_model_name,
         configured_model_base_url=settings.openai_base_url,
         write_mode=settings.write_mode,
+        permission_mode=profile["mode"],
+        sandbox_scope=profile["sandbox"]["scope"],
+        approval_policy=profile["approval"],
+        tool_permissions=profile["tools"],
         recent_projects=list_recent_project_paths(),
     )
 
@@ -114,7 +126,7 @@ def permissions_get() -> PermissionModeResponse:
 @router.post("/permissions", response_model=PermissionModeResponse)
 def permissions_post(request: PermissionModeRequest) -> PermissionModeResponse:
     try:
-        return update_permission_mode(request.write_mode)
+        return update_permission_mode(request.mode or request.write_mode)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -208,6 +220,59 @@ def tools_run(request: dict) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/commands/preview")
+def commands_preview(request: dict) -> dict:
+    argv = request.get("argv") or request.get("command")
+    try:
+        return preview_command(argv, reason=request.get("reason"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/commands/run")
+def commands_run(request: dict) -> dict:
+    argv = request.get("argv") or request.get("command")
+    try:
+        decision = request.get("decision", "yes")
+        record_event(
+            event_type="command_approval",
+            summary=f"Command approval decision: {decision}",
+            command=argv if isinstance(argv, list) else None,
+            status="denied" if decision == "no_explain" else "ok",
+        )
+        if decision == "no_explain":
+            return {
+                "status": "denied",
+                "command": argv,
+                "stdout": "",
+                "stderr": "",
+                "exit_code": None,
+                "message": "Command was not run. RepoOperator will explain another approach.",
+            }
+        return run_command_with_policy(
+            argv,
+            approval_id=request.get("approval_id"),
+            remember_for_session=bool(request.get("remember_for_session")),
+            reason=request.get("reason"),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/commands/approvals")
+def commands_approvals() -> dict:
+    return list_command_approvals()
+
+
+@router.delete("/commands/approvals/{approval_id}")
+def commands_approval_revoke(approval_id: str) -> dict:
+    return revoke_command_approval(approval_id)
 
 
 @router.get("/provider/projects", response_model=ProviderProjectsResponse)

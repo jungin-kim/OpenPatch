@@ -15,6 +15,7 @@ import {
   LocalWorkerClientError,
   openRepository,
   runAgentTask,
+  runApprovedCommand,
   saveThread,
   updatePermissionMode,
   type AgentRunPayload,
@@ -94,7 +95,7 @@ export function ChatApp() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threadStoreState, setThreadStoreState] = useState<ThreadStoreState>("loading");
   const [question, setQuestion] = useState("");
-  const [writeMode, setWriteMode] = useState<PermissionMode>("read-only");
+  const [writeMode, setWriteMode] = useState<PermissionMode>("basic");
   const [permissionPending, setPermissionPending] = useState(false);
   const [permissionMessage, setPermissionMessage] = useState<string | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
@@ -115,7 +116,7 @@ export function ChatApp() {
       setConfiguredModelConnectionMode(payload.configured_model_connection_mode || "");
       setConfiguredModelProvider(payload.configured_model_provider || "");
       setConfiguredModelName(payload.configured_model_name || "");
-      setWriteMode(payload.write_mode ?? "read-only");
+      setWriteMode(payload.permission_mode ?? "basic");
       if (options.syncProvider && nextSource) setGitProvider(nextSource);
       if (payload.recent_projects?.length) {
         setManualProjectPath((cur) => cur || payload.recent_projects?.[0] || "");
@@ -126,7 +127,7 @@ export function ChatApp() {
       setConfiguredModelConnectionMode("");
       setConfiguredModelProvider("");
       setConfiguredModelName("");
-      setWriteMode("read-only");
+      setWriteMode("basic");
     }
   }
 
@@ -447,9 +448,9 @@ export function ChatApp() {
   }
 
   async function handlePermissionModeChange(mode: PermissionMode) {
-    if (mode === "auto-apply") {
+    if (mode === "full_access") {
       const confirmed = window.confirm(
-        "Full access can modify files and run approved local tools in this repository. Continue?",
+        "Full access can read and modify files outside this repository and run local commands on this computer. Use only in a trusted environment.",
       );
       if (!confirmed) return;
     }
@@ -459,13 +460,13 @@ export function ChatApp() {
     setPermissionMessage(null);
     try {
       const payload = await updatePermissionMode(mode);
-      setWriteMode(payload.write_mode);
+      setWriteMode(payload.mode);
       setPermissionMessage(
-        payload.write_mode === "write-with-approval"
-          ? "Auto review enabled. File changes still require Apply."
-          : payload.write_mode === "auto-apply"
-            ? "Full access enabled for scoped repository edits and approved local tools."
-            : "Basic permissions enabled. File writes are blocked.",
+        payload.mode === "auto_review"
+          ? "Auto review enabled. Elevated actions will use approval cards."
+          : payload.mode === "full_access"
+            ? "Full access enabled. Risky commands are still logged and previewed where practical."
+            : "Basic permissions enabled. Repo sandbox work is allowed with guardrails.",
       );
       window.setTimeout(() => setPermissionMessage(null), 3200);
     } catch (error) {
@@ -477,6 +478,62 @@ export function ChatApp() {
       );
     } finally {
       setPermissionPending(false);
+    }
+  }
+
+  async function handleCommandDecision(
+    metadata: AgentRunPayload,
+    decision: "yes" | "yes_session" | "no_explain",
+  ) {
+    if (!metadata.command_approval) return;
+    if (decision === "no_explain") {
+      const denial: ChatMessage = {
+        id: `${Date.now()}-command-denied`,
+        role: "assistant",
+        content: "I will not run that command. I can continue with repository inspection or suggest a safer manual alternative.",
+        timestamp: new Date(),
+      };
+      setMessages((current) => [...current, denial]);
+      return;
+    }
+    const pendingMessage: ChatMessage = {
+      id: `${Date.now()}-command-running`,
+      role: "system",
+      content: `Running ${metadata.command_approval.display_command}...`,
+      timestamp: new Date(),
+    };
+    setMessages((current) => [...current, pendingMessage]);
+    try {
+      const result = await runApprovedCommand({
+        command: metadata.command_approval.command,
+        approval_id: metadata.command_approval.approval_id,
+        remember_for_session: decision === "yes_session",
+        decision,
+      });
+      const assistantMessage: ChatMessage = {
+        id: `${Date.now()}-command-result`,
+        role: "assistant",
+        content: `Command completed with exit code ${result.exit_code}.`,
+        timestamp: new Date(),
+        metadata: {
+          ...metadata,
+          response_type: "command_result",
+          command_result: result,
+        },
+      };
+      setMessages((current) => [...current.filter((m) => m.id !== pendingMessage.id), assistantMessage]);
+    } catch (error) {
+      const assistantMessage: ChatMessage = {
+        id: `${Date.now()}-command-error`,
+        role: "assistant",
+        content: error instanceof Error ? error.message : "Command failed.",
+        timestamp: new Date(),
+        metadata: {
+          ...metadata,
+          response_type: "command_error",
+        },
+      };
+      setMessages((current) => [...current.filter((m) => m.id !== pendingMessage.id), assistantMessage]);
     }
   }
 
@@ -944,6 +1001,7 @@ export function ChatApp() {
           writeMode={writeMode}
           onProposalStatusChange={handleProposalStatusChange}
           onClarificationSelect={(candidate) => setQuestion(candidate)}
+          onCommandDecision={handleCommandDecision}
         />
       }
       composer={

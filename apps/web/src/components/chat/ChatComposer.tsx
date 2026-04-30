@@ -8,7 +8,7 @@ interface ChatComposerProps {
   onSubmit: () => void;
   disabled: boolean;
   pending: boolean;
-  writeMode?: "read-only" | "write-with-approval" | "auto-apply";
+  writeMode?: "basic" | "auto_review" | "full_access";
 }
 
 export function ChatComposer({
@@ -17,7 +17,7 @@ export function ChatComposer({
   onSubmit,
   disabled,
   pending,
-  writeMode = "read-only",
+  writeMode = "basic",
 }: ChatComposerProps) {
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -32,18 +32,20 @@ export function ChatComposer({
 
   const placeholder = disabled
     ? "Open a repository above before asking a question…"
-    : writeMode === "write-with-approval"
+    : writeMode === "auto_review"
       ? "Ask a question or request a change… (⌘+Enter to send)"
       : "Ask a question about the repository… (⌘+Enter to send)";
 
   const hint = disabled
     ? "Open a repository to start asking questions."
-    : writeMode === "write-with-approval"
-      ? "Auto review — change requests will generate a diff for your approval."
-      : "Basic permissions — no files are modified.";
+    : writeMode === "auto_review"
+      ? "Auto review — elevated commands and risky actions use approval cards."
+      : writeMode === "full_access"
+        ? "Full access — broader local actions are enabled and logged."
+        : "Basic permissions — repository sandbox work is allowed with guardrails.";
 
   const buttonLabel = pending
-    ? writeMode === "write-with-approval"
+    ? writeMode === "auto_review"
       ? "Working…"
       : "Asking…"
     : "Ask RepoOperator";

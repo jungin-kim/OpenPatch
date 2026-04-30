@@ -22,7 +22,7 @@ export type ChangeProposal = {
 
 interface ProposalCardProps {
   proposal: ChangeProposal;
-  writeMode: "read-only" | "write-with-approval" | "auto-apply";
+  writeMode: "basic" | "auto_review" | "full_access";
   onStatusChange: (id: string, status: ProposalStatus, message?: string) => void;
 }
 
@@ -97,11 +97,10 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
   const [applying, setApplying] = useState(false);
   const [showFull, setShowFull] = useState(false);
 
-  const isReadOnly = writeMode === "read-only";
   const isSettled = proposal.status !== "proposed";
 
   async function handleApply() {
-    if (isReadOnly || applying || isSettled) return;
+    if (applying || isSettled) return;
     setApplying(true);
     try {
       await writeRepositoryFile({
@@ -185,36 +184,28 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
       {/* Actions */}
       {!isSettled && (
         <div className="proposal-card-actions">
-          {isReadOnly ? (
-            <p className="proposal-readonly-notice">
-              Write operations are disabled. Switch to Auto review to apply changes.
-            </p>
-          ) : (
-            <>
-              <p className="proposal-warning">
-                Review the diff before applying. RepoOperator will modify only{" "}
-                <strong>{proposal.relativePath}</strong> on the current branch.
-              </p>
-              <div className="proposal-card-buttons">
-                <button
-                  className="proposal-btn-apply"
-                  type="button"
-                  onClick={() => void handleApply()}
-                  disabled={applying}
-                >
-                  {applying ? "Applying…" : `Apply changes to ${proposal.relativePath}`}
-                </button>
-                <button
-                  className="proposal-btn-reject"
-                  type="button"
-                  onClick={handleReject}
-                  disabled={applying}
-                >
-                  Reject
-                </button>
-              </div>
-            </>
-          )}
+          <p className="proposal-warning">
+            Review the diff before applying. RepoOperator will modify only{" "}
+            <strong>{proposal.relativePath}</strong> on the current branch.
+          </p>
+          <div className="proposal-card-buttons">
+            <button
+              className="proposal-btn-apply"
+              type="button"
+              onClick={() => void handleApply()}
+              disabled={applying}
+            >
+              {applying ? "Applying…" : `Apply changes to ${proposal.relativePath}`}
+            </button>
+            <button
+              className="proposal-btn-reject"
+              type="button"
+              onClick={handleReject}
+              disabled={applying}
+            >
+              Reject
+            </button>
+          </div>
         </div>
       )}
 

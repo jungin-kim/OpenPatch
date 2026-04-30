@@ -47,7 +47,7 @@ def write_text_file(request: FileWriteRequest) -> FileWriteResponse:
     if settings.write_mode not in {WRITE_MODE_WRITE_WITH_APPROVAL, WRITE_MODE_AUTO_APPLY}:
         raise ValueError(
             "Write operations are disabled. "
-            "Switch the web UI permission mode to Auto review to apply changes."
+            "Use Basic permissions or Auto review to apply repository-scoped changes."
         )
 
     repo_path = resolve_project_path(request.project_path)

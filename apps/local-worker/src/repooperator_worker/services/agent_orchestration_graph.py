@@ -45,6 +45,7 @@ Intent = Literal[
     "write_confirmation",
     "file_clarification_answer",
     "local_tool_request",
+    "local_command_request",
     "ambiguous",
 ]
 
@@ -275,6 +276,9 @@ def _classify_intent(state: OrchestrationState) -> dict[str, Any]:
         confidence = 0.86
     elif _is_local_tool_request(task):
         intent = "local_tool_request"
+        confidence = 0.9
+    elif _is_local_command_request(task):
+        intent = "local_command_request"
         confidence = 0.9
     elif file_hints and _has_write_language(task):
         intent = "write_request"
@@ -616,12 +620,71 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
     return {"result": result_response, "graph_path": "local_tool_request"}
 
 
+def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
+    request = state["request"]
+    from repooperator_worker.services.command_service import preview_command, run_command_with_policy
+
+    command, reason = _command_for_task(request.task)
+    preview = preview_command(command, reason=reason)
+    if preview.get("blocked"):
+        result = _base_response(
+            request,
+            response=f"I will not run `{preview.get('display_command')}`. {preview.get('reason')}",
+            response_type="command_denied",
+            command_approval=preview,
+            intent_classification=state.get("intent"),
+            graph_path="command_denied",
+            context_source=state.get("context_source"),
+        )
+        return {"result": result, "graph_path": "command_denied"}
+    if preview.get("needs_approval"):
+        result = _base_response(
+            request,
+            response="RepoOperator needs your approval before running this local command.",
+            response_type="command_approval",
+            command_approval=preview,
+            intent_classification=state.get("intent"),
+            graph_path="command_approval",
+            context_source=state.get("context_source"),
+        )
+        return {"result": result, "graph_path": "command_approval"}
+    try:
+        command_result = run_command_with_policy(command, approval_id=preview.get("approval_id"))
+        response = (
+            f"Ran `{command_result.get('display_command')}` in `{command_result.get('cwd')}` "
+            f"and exited with {command_result.get('exit_code')}."
+        )
+        result = _base_response(
+            request,
+            response=response,
+            response_type="command_result",
+            command_result=command_result,
+            intent_classification=state.get("intent"),
+            graph_path="command_result",
+            context_source=state.get("context_source"),
+        )
+        return {"result": result, "graph_path": "command_result"}
+    except (ValueError, RuntimeError, PermissionError) as exc:
+        result = _base_response(
+            request,
+            response=f"RepoOperator could not run the command: {exc}",
+            response_type="command_error",
+            command_approval=preview,
+            intent_classification=state.get("intent"),
+            graph_path="command_error",
+            context_source=state.get("context_source"),
+        )
+        return {"result": result, "graph_path": "command_error"}
+
+
 def _after_classify(state: OrchestrationState) -> str:
     intent = state.get("intent")
     if intent == "read_only_question":
         return "answer_read_only"
     if intent == "local_tool_request":
         return "run_local_tool_request"
+    if intent == "local_command_request":
+        return "run_local_command_request"
     if intent in {"repo_analysis", "recommend_change_targets"}:
         return "recommend_change_targets"
     if state.get("settings").write_mode not in {
@@ -659,6 +722,7 @@ def _build_graph():
     graph.add_node("proposal_error", _proposal_error)
     graph.add_node("answer_read_only", _answer_read_only)
     graph.add_node("run_local_tool_request", _run_local_tool_request)
+    graph.add_node("run_local_command_request", _run_local_command_request)
     graph.set_entry_point("load_context")
     graph.add_edge("load_context", "classify_intent")
     graph.add_conditional_edges("classify_intent", _after_classify)
@@ -673,6 +737,7 @@ def _build_graph():
     graph.add_edge("proposal_error", END)
     graph.add_edge("answer_read_only", END)
     graph.add_edge("run_local_tool_request", END)
+    graph.add_edge("run_local_command_request", END)
     return graph
 
 
@@ -712,6 +777,47 @@ def _is_local_tool_request(text: str) -> bool:
         or "pull request" in lowered
         or re.search(r"\bmr\b", lowered) is not None
     ) and any(token in lowered for token in {"show", "list", "보여", "목록", "현재", "read"})
+
+
+def _is_local_command_request(text: str) -> bool:
+    lowered = text.lower()
+    return any(
+        phrase in lowered
+        for phrase in {
+            "git 상태",
+            "git status",
+            "git push",
+            "npm install",
+            "pip install",
+            "rm -rf",
+            "ls /",
+            "현재 git",
+            "command",
+            "run ",
+            "실행",
+        }
+    )
+
+
+def _command_for_task(text: str) -> tuple[list[str], str]:
+    lowered = text.lower()
+    if "npm install" in lowered:
+        return ["npm", "install"], "Install project dependencies. This may modify files and use the network."
+    if "pip install" in lowered:
+        return ["pip", "install"], "Install Python dependencies. This may modify the environment and use the network."
+    if "rm -rf" in lowered:
+        match = re.search(r"rm\s+-rf\s+([^\s]+)", text, flags=re.IGNORECASE)
+        target = match.group(1) if match else "/tmp/something"
+        return ["rm", "-rf", target], "Delete files recursively. This is destructive."
+    if "git push" in lowered:
+        return ["git", "push"], "Push commits to the configured remote. This requires review."
+    if "ls /" in lowered:
+        match = re.search(r"ls\s+([/][^\s]+)", text, flags=re.IGNORECASE)
+        target = match.group(1) if match else "/"
+        return ["ls", target], "List a path outside the repository."
+    if "git status" in lowered or "git 상태" in lowered or "현재 git" in lowered:
+        return ["git", "status", "--short"], "Check the current repository working tree status."
+    return ["pwd"], "Show the active repository working directory."
 
 
 def _is_confirmation(text: str) -> bool:

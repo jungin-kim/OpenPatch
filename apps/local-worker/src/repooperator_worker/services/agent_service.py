@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 
 from repooperator_worker.config import (
+    WRITE_MODE_AUTO_APPLY,
     WRITE_MODE_WRITE_WITH_APPROVAL,
     get_settings,
 )
@@ -360,7 +361,7 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
             pending_hints,
         )
 
-        if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
+        if settings.write_mode not in {WRITE_MODE_WRITE_WITH_APPROVAL, WRITE_MODE_AUTO_APPLY}:
             return _build_minimal_run_response(
                 request,
                 response=(
@@ -390,7 +391,7 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
     is_write, file_hints = detect_write_intent(request.task)
 
     if is_write:
-        if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
+        if settings.write_mode not in {WRITE_MODE_WRITE_WITH_APPROVAL, WRITE_MODE_AUTO_APPLY}:
             logger.info(
                 "agent_service: write intent detected but mode=%r — returning permission_required",
                 settings.write_mode,

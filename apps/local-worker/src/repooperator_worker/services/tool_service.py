@@ -10,6 +10,7 @@ from repooperator_worker.config import WRITE_MODE_AUTO_APPLY, get_settings
 from repooperator_worker.services.active_repository import get_active_repository
 from repooperator_worker.services.common import resolve_project_path
 from repooperator_worker.services.event_service import record_event
+from repooperator_worker.services.permissions_service import permission_profile
 
 READ_ONLY_COMMANDS = {
     ("git", "status"),
@@ -39,6 +40,7 @@ class ToolCommand:
 
 
 def get_tools_status() -> dict[str, Any]:
+    profile = permission_profile()
     tools = []
     for tool in ("git", "glab"):
         path = shutil.which(tool)
@@ -56,10 +58,9 @@ def get_tools_status() -> dict[str, Any]:
     return {
         "tools": tools,
         "permissions": {
-            "file_write": get_settings().write_mode,
-            "git_operations": "preview-required",
-            "gitlab_cli": "read-only-approved",
-            "shell_command": "allowlisted-only",
+            "mode": profile["mode"],
+            "sandbox_scope": profile["sandbox"]["scope"],
+            **profile["tools"],
         },
     }
 

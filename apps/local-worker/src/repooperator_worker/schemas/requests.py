@@ -417,15 +417,28 @@ class GitBranchListRequest(BaseModel):
 
 
 class PermissionModeRequest(BaseModel):
-    write_mode: str
+    mode: str | None = None
+    write_mode: str | None = None
 
-    @field_validator("write_mode")
+    @field_validator("mode", "write_mode")
     @classmethod
-    def validate_write_mode(cls, value: str) -> str:
+    def validate_write_mode(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         normalized = value.strip().lower()
-        if normalized not in {"read-only", "write-with-approval", "auto-apply"}:
+        allowed = {
+            "basic",
+            "auto_review",
+            "auto-review",
+            "full_access",
+            "full-access",
+            "read-only",
+            "write-with-approval",
+            "auto-apply",
+        }
+        if normalized not in allowed:
             raise ValueError(
-                "write_mode must be one of: read-only, write-with-approval, auto-apply"
+                "permission mode must be one of: basic, auto_review, full_access"
             )
         return normalized
 
