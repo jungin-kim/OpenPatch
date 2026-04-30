@@ -38,6 +38,12 @@ from repooperator_worker.services.response_quality_service import (
     language_guidance_for_task,
     user_prefers_korean,
 )
+from repooperator_worker.services.recommendation_context_service import (
+    build_recommendation_context,
+    recommendation_context_from_history,
+    resolve_recommendation_followup,
+    selected_recommendation_items,
+)
 from repooperator_worker.services.retrieval_service import SKIP_DIRS
 from repooperator_worker.services.skills_service import enabled_skill_context
 from repooperator_worker.services.thread_context_service import (
@@ -59,6 +65,8 @@ Intent = Literal[
     "git_workflow_request",
     "gitlab_mr_request",
     "multi_step_request",
+    "pasted_prompt_or_spec",
+    "apply_spec_to_repo",
     "ambiguous",
 ]
 
@@ -93,6 +101,8 @@ SUPPORTED_INTENTS: set[str] = {
     "git_workflow_request",
     "gitlab_mr_request",
     "multi_step_request",
+    "pasted_prompt_or_spec",
+    "apply_spec_to_repo",
     "ambiguous",
 }
 
@@ -102,7 +112,7 @@ repository agent to do. Return JSON only; do not include markdown or prose.
 
 Schema:
 {
-  "intent": "read_only_question|repo_analysis|recommend_change_targets|review_recommendation|write_request|write_confirmation|file_clarification_answer|local_command_request|git_workflow_request|gitlab_mr_request|multi_step_request|ambiguous",
+  "intent": "read_only_question|repo_analysis|recommend_change_targets|review_recommendation|write_request|write_confirmation|file_clarification_answer|local_command_request|git_workflow_request|gitlab_mr_request|multi_step_request|pasted_prompt_or_spec|apply_spec_to_repo|ambiguous",
   "confidence": 0.0,
   "target_files": [],
   "target_symbols": [],
@@ -125,21 +135,19 @@ Intent guidance:
 - git_workflow_request: user asks to commit, push, inspect branch/status/diff/log, or otherwise perform git workflow steps.
 - gitlab_mr_request: user asks about GitLab merge requests, pipelines, or MR creation.
 - multi_step_request: user asks to perform 2 or more sequential operations (e.g. analyze A, analyze B, then update C; or modify file X and also fix file Y).
+- pasted_prompt_or_spec: user pasted a structured prompt, external task spec, implementation plan, or instructions and has not clearly asked to apply it to the active repository.
+- apply_spec_to_repo: user explicitly asks RepoOperator to apply a pasted/specification-style task to the active repository.
 - ambiguous: there is not enough context to safely decide.
-
-multi_step_request examples:
-- "analyze fr_pair.py, analyze fr_folder.py, then update requirements_docker.txt"
-- "read config.py and utils.py and summarize both, then update README.md"
-- "check models/user.py and models/post.py and refactor both for consistency"
 
 Use recent thread context, pending candidates, and pending proposals. Korean and
 English requests are both expected. Do not expose hidden reasoning.
 
 Important distinctions:
-- "what should I fix", "suggest improvements", "고칠거 알려줘", "개선할 점 알려줘", and "리팩토링 포인트 알려줘" are review_recommendation.
-- "refactor it", "modify it", "apply that", "수정해줘", "리팩토링해줘", and "적용해줘" are write_request or write_confirmation.
-- "latest commit", "recent commit", "가장 최근 커밋정보", and "최근 커밋" are git_workflow_request with git_action "git_recent_commit".
-- "commit my changes", "방금 수정한 내용 커밋해줘", and "커밋해줘" are git_workflow_request with git_action "git_commit_plan".
+- Requests for improvement advice or review points are review_recommendation, not edits.
+- Requests to make or apply changes are write_request or write_confirmation depending on prior context.
+- Requests about commit history are git_workflow_request with git_action "git_recent_commit".
+- Requests to create a local commit from current changes are git_workflow_request with git_action "git_commit_plan".
+- Long structured instructions that look like a prompt for another agent are pasted_prompt_or_spec unless the user explicitly asks to apply them to this repository.
 """
 
 
@@ -182,6 +190,10 @@ class OrchestrationState(TypedDict, total=False):
     thread_context: ThreadContext
     context_source: str
     context_reference: Any  # ContextReferenceResult | None
+    recommendation_context: dict[str, Any] | None
+    recommendation_resolution: dict[str, Any] | None
+    pasted_prompt_or_spec: bool
+    apply_spec_to_repo: bool
     plan_step_events: list[dict]  # SSE events emitted during multi-step execution
 
 
@@ -217,6 +229,8 @@ def _base_response(
         response=response,
         response_type=response_type,
         agent_flow="langgraph",
+        effective_worker_model=model_name,
+        configured_model=settings.configured_model_name,
         **extra,
     )
 
@@ -242,16 +256,34 @@ def _classifier_debug(state: OrchestrationState) -> dict[str, Any]:
         resolved_files = state.get("target_files", [])
     elif state.get("candidates"):
         resolved_files = state.get("candidates", [])
-    return {
+    trace = {
         "classifier": state.get("classifier") or "llm",
         "classifier_confidence": state.get("confidence"),
         "resolved_files": resolved_files,
         "resolved_symbols": state.get("target_symbols") or [],
         "validation_status": state.get("validation_status") or "pending",
+    }
+    optional = {
         "git_action": state.get("git_action"),
         "commands_planned": state.get("commands_planned") or [],
         "commands_run": state.get("commands_run") or [],
+        "recommendation_context_loaded": bool(state.get("recommendation_context")),
+        "selected_recommendation_ids": (
+            state.get("recommendation_resolution", {}).get("selected_recommendation_ids", [])
+            if isinstance(state.get("recommendation_resolution"), dict)
+            else []
+        ),
+        "pasted_prompt_or_spec": bool(state.get("pasted_prompt_or_spec")),
+        "apply_spec_to_repo": bool(state.get("apply_spec_to_repo")),
+        "plan_id": state.get("plan_id"),
+        "plan_steps": state.get("plan_steps") or [],
+        "proposal_validation_status": state.get("proposal_validation_status"),
+        "retry_count": state.get("retry_count") or 0,
     }
+    for key, value in optional.items():
+        if value not in (None, False, [], ""):
+            trace[key] = value
+    return trace
 
 
 def _load_context(state: OrchestrationState) -> dict[str, Any]:
@@ -278,6 +310,7 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
 
     skills_context, skills_used = enabled_skill_context()
     thread_context = build_thread_context(request)
+    recommendation_context = recommendation_context_from_history(request)
 
     return {
         "settings": get_settings(),
@@ -288,6 +321,10 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
         "thread_context": thread_context,
         "context_source": "retrieval",
         "context_reference": None,
+        "recommendation_context": recommendation_context,
+        "recommendation_resolution": None,
+        "pasted_prompt_or_spec": False,
+        "apply_spec_to_repo": False,
         "classifier": "llm",
         "validation_status": "not_started",
         "graph_path": "load_context",
@@ -369,6 +406,8 @@ def _classify_intent(state: OrchestrationState) -> dict[str, Any]:
         "requested_action": classification.get("requested_action"),
         "needs_tool": classification.get("needs_tool"),
         "git_action": _normalize_git_action(classification.get("git_action") or classification.get("requested_action")),
+        "pasted_prompt_or_spec": intent == "pasted_prompt_or_spec",
+        "apply_spec_to_repo": intent == "apply_spec_to_repo",
         "needs_clarification": bool(classification.get("needs_clarification")),
         "clarification_question": classification.get("clarification_question"),
         "classifier": str(classification.get("classifier") or "llm"),
@@ -385,6 +424,14 @@ def _resolve_target_files(state: OrchestrationState) -> dict[str, Any]:
 
     if intent == "file_clarification_answer":
         candidates = pending.get("candidates", [])
+        if state.get("target_files"):
+            return {
+                "selected_file": state["target_files"][0],
+                "candidates": [],
+                "instruction": _find_previous_write_instruction(request) or request.task,
+                "validation_status": "target_file_valid",
+                "graph_path": f"{state.get('graph_path', '')}->resolve_target_files",
+            }
         selected = _select_from_candidates(request.task, candidates)
         if selected:
             return {
@@ -521,6 +568,7 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
         response=response,
         response_type="clarification",
         clarification_candidates=candidates,
+        recommendation_context=state.get("recommendation_context"),
         intent_classification=state.get("intent"),
         graph_path="clarification",
         skills_used=state.get("skills_used", []),
@@ -578,11 +626,19 @@ def _recommend_change_targets(state: OrchestrationState) -> dict[str, Any]:
     except (ValueError, RuntimeError) as exc:
         logger.info("recommend_change_targets using deterministic fallback: %r", exc)
 
+    recommendation_context = build_recommendation_context(
+        request=request,
+        files_read=context.files_read,
+        response=response,
+        candidate_files=candidate_files,
+    )
+
     result = _base_response(
         request,
         response=response,
         response_type="assistant_answer",
         files_read=context.files_read,
+        recommendation_context=recommendation_context,
         intent_classification=state.get("intent"),
         graph_path="recommend_change_targets",
         skills_used=state.get("skills_used", []),
@@ -602,6 +658,96 @@ def _recommend_change_targets(state: OrchestrationState) -> dict[str, Any]:
         }
     )
     return {"result": result, "graph_path": "recommend_change_targets"}
+
+
+def _handle_pasted_spec(state: OrchestrationState) -> dict[str, Any]:
+    request = state["request"]
+    is_apply = state.get("intent") == "apply_spec_to_repo" or bool(state.get("apply_spec_to_repo"))
+    if is_apply:
+        plan_steps = [
+            "Summarize the pasted specification into implementation areas.",
+            "Inspect likely repository files before choosing edit targets.",
+            "Confirm the affected files and scope before generating proposals.",
+            "Generate diff proposals only after target validation.",
+        ]
+        response = (
+            "I can apply this specification to the current repository, but it is broad enough to plan first.\n\n"
+            "Plan:\n"
+            + "\n".join(f"{idx}. {step}" for idx, step in enumerate(plan_steps, start=1))
+            + "\n\nConfirm the scope or name the area you want to start with, and I will inspect the repository before proposing edits."
+        )
+        result = _base_response(
+            request,
+            response=response,
+            response_type="assistant_answer",
+            intent_classification=state.get("intent"),
+            graph_path="apply_spec_plan",
+            plan_id="plan_" + uuid.uuid4().hex[:10],
+            plan_steps=plan_steps,
+            **_classifier_debug(state),
+        )
+        return {"result": result, "graph_path": "apply_spec_plan"}
+
+    response = (
+        "This looks like a pasted prompt, task specification, or implementation plan rather than a direct repository edit request.\n\n"
+        "What would you like me to do with it?\n"
+        "- Summarize it\n"
+        "- Rewrite it for another tool\n"
+        "- Convert it into a checklist\n"
+        "- Save it as a routine or skill\n"
+        "- Apply it to the current repository after a plan review"
+    )
+    result = _base_response(
+        request,
+        response=response,
+        response_type="assistant_answer",
+        intent_classification=state.get("intent"),
+        graph_path="pasted_prompt_or_spec",
+        **_classifier_debug(state),
+    )
+    return {"result": result, "graph_path": "pasted_prompt_or_spec"}
+
+
+def _resolve_recommendation_followup(state: OrchestrationState) -> dict[str, Any]:
+    request = state["request"]
+    context = state.get("recommendation_context")
+    if not context:
+        return {"graph_path": f"{state.get('graph_path', '')}->resolve_recommendation_followup_none"}
+    resolution = resolve_recommendation_followup(
+        request=request,
+        recommendation_context=context,
+    )
+    updates: dict[str, Any] = {
+        "recommendation_resolution": resolution,
+        "graph_path": f"{state.get('graph_path', '')}->resolve_recommendation_followup",
+    }
+    if not resolution.get("refers_to_previous_recommendation"):
+        return updates
+    selected_items = selected_recommendation_items(
+        context,
+        resolution.get("selected_recommendation_ids") or [],
+        resolution.get("selected_files") or [],
+    )
+    selected_files = sorted({file for item in selected_items for file in item.get("files", [])})
+    if resolution.get("needs_clarification") or len(selected_files) > 1:
+        updates["candidates"] = selected_files or context.get("recommended_files", [])
+        updates["needs_clarification"] = True
+        updates["clarification_question"] = resolution.get("clarification_question") or (
+            "The previous recommendations cover multiple files. Choose which file or recommendation to turn into a proposal first."
+        )
+        return updates
+    if len(selected_files) == 1:
+        updates["selected_file"] = selected_files[0]
+        updates["instruction"] = _instruction_from_recommendations(request.task, selected_items)
+        updates["validation_status"] = "recommendation_target_valid"
+    return updates
+
+
+def _instruction_from_recommendations(task: str, items: list[dict[str, Any]]) -> str:
+    changes: list[str] = []
+    for item in items:
+        changes.extend(str(change) for change in item.get("suggested_changes") or [])
+    return "\n".join([task, "", "Use the prior structured recommendations:", *[f"- {change}" for change in changes]])
 
 
 def _generate_change_plan(state: OrchestrationState) -> dict[str, Any]:
@@ -670,6 +816,8 @@ def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
         proposal_proposed_content=proposal.proposed_content,
         proposal_context_summary=proposal.context_summary,
         selected_target_file=proposal.relative_path,
+        recommendation_context=state.get("recommendation_context"),
+        proposal_validation_status=state.get("validation_status"),
         intent_classification=state.get("intent"),
         graph_path="proposal",
         skills_used=state.get("skills_used", []),
@@ -722,8 +870,7 @@ def _answer_read_only(state: OrchestrationState) -> dict[str, Any]:
             update={"task": f"{request.task}\n\nRelevant enabled skills:\n{skills_context}"}
         )
 
-    result = run_agent_graph(request).model_copy(
-        update={
+    update = {
             "intent_classification": state.get("intent") or "read_only_question",
             "graph_path": "read_only",
             "agent_flow": "langgraph",
@@ -733,8 +880,16 @@ def _answer_read_only(state: OrchestrationState) -> dict[str, Any]:
             "resolved_files": state.get("target_files") or [],
             "resolved_symbols": state.get("target_symbols") or [],
             "validation_status": state.get("validation_status") or "classified",
-        }
-    )
+    }
+    result = run_agent_graph(request)
+    if state.get("intent") == "review_recommendation":
+        update["recommendation_context"] = build_recommendation_context(
+            request=request,
+            files_read=result.files_read,
+            response=result.response,
+        )
+        update["recommendation_context_loaded"] = True
+    result = result.model_copy(update=update)
     return {"result": result, "graph_path": "read_only"}
 
 
@@ -1098,15 +1253,15 @@ def _run_git(repo_path: Path, args: list[str]) -> subprocess.CompletedProcess[st
 
 def _normalize_git_action(value: Any) -> str:
     text = str(value or "").strip().lower()
-    if any(token in text for token in ("recent_commit", "latest_commit", "last_commit", "log", "commit info", "커밋정보", "최근 커밋", "가장 최근")):
+    if any(token in text for token in ("git_recent_commit", "recent_commit", "latest_commit", "last_commit", "log", "commit info")):
         return "git_recent_commit"
     if "mr_create" in text or ("merge request" in text and "create" in text) or "mr create" in text:
         return "git_mr_create_plan"
     if "push" in text or "푸시" in text:
         return "git_push_plan"
-    if "commit" in text or "커밋" in text:
+    if "git_commit_plan" in text or "commit" in text:
         return "git_commit_plan"
-    if any(token in text for token in ("diff", "status", "branch", "changes", "변경사항", "브랜치", "상태")):
+    if any(token in text for token in ("diff", "status", "branch", "changes")):
         return "git_status"
     return "git_status"
 
@@ -1191,7 +1346,7 @@ def _format_recent_commit_response(request: AgentRunRequest, log: subprocess.Com
     if log.returncode != 0:
         return "I could not read the latest commit:\n\n```text\n" + _redact_text(log.stderr or log.stdout) + "\n```"
     if user_prefers_korean(request.task):
-        return "가장 최근 커밋 정보입니다.\n\n```text\n" + _redact_text(log.stdout.strip()) + "\n```"
+        return "현재 브랜치의 최신 커밋입니다.\n\n```text\n" + _redact_text(log.stdout.strip()) + "\n```"
     return "Latest commit information:\n\n```text\n" + _redact_text(log.stdout.strip()) + "\n```"
 
 
@@ -1625,6 +1780,8 @@ def _format_plan_summary(
 
 def _after_classify(state: OrchestrationState) -> str:
     intent = state.get("intent")
+    if intent in {"pasted_prompt_or_spec", "apply_spec_to_repo"}:
+        return "handle_pasted_spec"
     if intent == "read_only_question":
         return "answer_read_only"
     if intent == "gitlab_mr_request":
@@ -1647,6 +1804,8 @@ def _after_classify(state: OrchestrationState) -> str:
     # File clarification answers already have candidates set — skip context ref resolution
     if intent == "file_clarification_answer":
         return "resolve_target_files"
+    if intent == "write_confirmation" and state.get("recommendation_context"):
+        return "resolve_recommendation_followup"
     # All write intents go through LLM context reference resolution first
     return "resolve_context_reference"
 
@@ -1672,6 +1831,8 @@ def _build_graph():
     graph.add_node("resolve_target_files", _resolve_target_files)
     graph.add_node("ask_clarification", _ask_clarification)
     graph.add_node("recommend_change_targets", _recommend_change_targets)
+    graph.add_node("handle_pasted_spec", _handle_pasted_spec)
+    graph.add_node("resolve_recommendation_followup", _resolve_recommendation_followup)
     graph.add_node("decompose_and_execute", _decompose_and_execute)
     graph.add_node("generate_change_plan", _generate_change_plan)
     graph.add_node("generate_patch", _generate_patch)
@@ -1691,6 +1852,8 @@ def _build_graph():
     graph.add_conditional_edges("resolve_target_files", _after_resolve)
     graph.add_edge("ask_clarification", END)
     graph.add_edge("recommend_change_targets", END)
+    graph.add_edge("handle_pasted_spec", END)
+    graph.add_conditional_edges("resolve_recommendation_followup", _after_resolve)
     graph.add_edge("generate_change_plan", "generate_patch")
     graph.add_edge("generate_patch", "validate_patch")
     graph.add_conditional_edges("validate_patch", _after_validate)
@@ -2144,6 +2307,13 @@ def _fallback_classification(state: OrchestrationState, file_hints: list[str]) -
     request = state["request"]
     pending = state.get("pending", {})
     lowered = request.task.lower()
+    if _looks_like_structured_external_spec(request.task):
+        return _classification_payload(
+            intent="pasted_prompt_or_spec",
+            confidence=0.6,
+            requested_action="handle_pasted_spec",
+            classifier="deterministic_fallback",
+        )
     if pending.get("candidates") and _matches_pending_candidate(request.task, pending["candidates"]):
         return _classification_payload(
             intent="file_clarification_answer",
@@ -2173,6 +2343,21 @@ def _fallback_classification(state: OrchestrationState, file_hints: list[str]) -
         requested_action="answer",
         classifier="deterministic_fallback",
     )
+
+
+def _looks_like_structured_external_spec(text: str) -> bool:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if len(text) < 900 or len(lines) < 12:
+        return False
+    structural_lines = sum(
+        1
+        for line in lines
+        if line.startswith(("#", "-", "*"))
+        or re.match(r"^\d+[\.)]\s+", line)
+        or line.endswith(":")
+    )
+    imperative_blocks = sum(1 for line in lines if len(line.split()) >= 4 and line[0].isupper())
+    return structural_lines >= 5 and imperative_blocks >= 3
 
 
 def _classification_payload(

@@ -53,7 +53,28 @@ def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileRespo
             user_prompt=user_prompt,
         )
     ).strip()
-    proposed_content = _parse_and_validate_model_edit(raw_output, original_content)
+    try:
+        proposed_content = _parse_and_validate_model_edit(raw_output, original_content, request.relative_path)
+    except ValueError as first_error:
+        repair_prompt = (
+            "The previous output was not a valid structured edit. Return JSON only with this exact schema:\n"
+            "{\"edits\":[{\"path\":\""
+            + request.relative_path
+            + "\",\"replacement\":\"full file content\",\"summary\":\"short summary\"}],"
+            "\"overall_summary\":\"short summary\",\"tests\":[\"suggested test\"]}\n"
+            "The replacement must be the complete updated file content, not prose, not a refusal, and not markdown."
+        )
+        repaired_output = client.generate_text(
+            ModelGenerationRequest(
+                system_prompt=system_prompt,
+                user_prompt=f"{user_prompt}\n\n{repair_prompt}\n\nInvalid output summary: {first_error}",
+            )
+        ).strip()
+        proposed_content = _parse_and_validate_model_edit(
+            repaired_output,
+            original_content,
+            request.relative_path,
+        )
 
     return AgentProposeFileResponse(
         project_path=request.project_path,
@@ -81,7 +102,7 @@ def _normalize_model_file_content(content: str) -> str:
     return content
 
 
-def _parse_and_validate_model_edit(raw_output: str, original_content: str) -> str:
+def _parse_and_validate_model_edit(raw_output: str, original_content: str, relative_path: str | None = None) -> str:
     """Extract full replacement content and reject refusals/prose masquerading as diffs."""
     content = _normalize_model_file_content(raw_output.strip())
     if not content:
@@ -112,6 +133,16 @@ def _parse_and_validate_model_edit(raw_output: str, original_content: str) -> st
             return _validate_replacement_content(payload["replacement"], original_content)
         if isinstance(payload.get("content"), str):
             return _validate_replacement_content(payload["content"], original_content)
+        if isinstance(payload.get("edits"), list):
+            edits = [item for item in payload["edits"] if isinstance(item, dict)]
+            if len(edits) != 1:
+                raise ValueError("RepoOperator expected one validated edit for this proposal.")
+            edit = edits[0]
+            if relative_path and str(edit.get("path")) != relative_path:
+                raise ValueError("The model edit path did not match the selected target file.")
+            if isinstance(edit.get("replacement"), str):
+                return _validate_replacement_content(edit["replacement"], original_content)
+            raise ValueError("The structured edit did not include replacement file content.")
         if "response" in payload:
             raise ValueError("The model returned a response object instead of a file edit.")
         raise ValueError("The model JSON did not include replacement file content.")

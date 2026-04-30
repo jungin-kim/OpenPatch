@@ -319,6 +319,35 @@ class WorkerContractTests(unittest.TestCase):
             self.assertEqual(updated["permissions"]["mode"], "auto_review")
             self.assertEqual(updated["permissions"]["writeMode"], "write-with-approval")
 
+    def test_runtime_model_settings_are_loaded_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_path = Path(temp_home) / ".repooperator" / "config.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "model": {
+                            "connectionMode": "local-runtime",
+                            "provider": "vllm",
+                            "baseUrl": "http://127.0.0.1:8001/v1",
+                            "apiKey": "local-secret",
+                            "model": "team-code-model",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {"REPOOPERATOR_CONFIG_PATH": str(config_path)},
+                clear=True,
+            ):
+                settings = get_settings()
+            self.assertEqual(settings.openai_base_url, "http://127.0.0.1:8001/v1")
+            self.assertEqual(settings.openai_model, "team-code-model")
+            self.assertEqual(settings.configured_model_provider, "vllm")
+            self.assertTrue(settings.config_hash)
+
     def test_permission_mode_accepts_scoped_full_access(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
             config_dir = Path(temp_home) / ".repooperator"

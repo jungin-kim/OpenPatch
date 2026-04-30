@@ -90,7 +90,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
                 },
             ),
         ]
-        request = self._request("이 내용 그대로 적용해줘", history)
+        request = self._request("please turn that prior recommendation into a patch", history)
 
         with patch(
             "repooperator_worker.services.context_reference_service.OpenAICompatibleModelClient",
@@ -138,7 +138,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
                 },
             ),
         ]
-        request = self._request("split_video 함수 보고 고칠거 알려줘", history)
+        request = self._request("review the previously discussed split_video function for improvements", history)
         with patch("repooperator_worker.services.agent_graph.run_agent_graph") as run_read_only:
             run_read_only.return_value = AgentRunResponse(
                 project_path=str(self.repo),
@@ -179,7 +179,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
 
     def test_commit_request_routes_to_git_workflow_not_proposal(self) -> None:
         (self.repo / "README.md").write_text("# Demo\n\nChanged\n", encoding="utf-8")
-        request = self._request("방금 수정한 내용 커밋해줘")
+        request = self._request("prepare a local commit for the current working tree changes")
         result = self._run_with_classifier(
             {
                 "intent": "git_workflow_request",
@@ -216,7 +216,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
                 "needs_clarification": False,
                 "clarification_question": None,
             },
-            self._request("가장 최근 커밋정보 알려줘"),
+            self._request("show the newest commit details for this branch"),
         )
         self.assertEqual(result.response_type, "assistant_answer")
         self.assertEqual(result.git_action, "git_recent_commit")
@@ -224,7 +224,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
         self.assertIn("Initial commit", result.response)
 
     def test_review_recommendation_does_not_generate_proposal(self) -> None:
-        request = self._request("split_video 함수 보고 고칠거 알려줘")
+        request = self._request("suggest improvements for the split_video function")
         with patch("repooperator_worker.services.agent_graph.run_agent_graph") as run_read_only:
             run_read_only.return_value = AgentRunResponse(
                 project_path=str(self.repo),
@@ -265,7 +265,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
         self.assertIsNone(result.proposal_relative_path)
 
     def test_mr_request_routes_to_gitlab_tool_flow(self) -> None:
-        request = self._request("지금 레포 mr정보 알려줘")
+        request = self._request("summarize merge request status for this repository")
         with patch("shutil.which", return_value=None):
             result = self._run_with_classifier(
                 {
@@ -295,7 +295,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
                 "needs_clarification": False,
                 "clarification_question": None,
             },
-            self._request("수정할 파일 추천해줘"),
+            self._request("recommend the next files worth improving"),
         )
         self.assertEqual(result.intent_classification, "recommend_change_targets")
         self.assertIn("Here are concrete files", result.response)
@@ -315,7 +315,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
                 },
             ),
         ]
-        request = self._request("docker-compose.yml로 해줘", history)
+        request = self._request("use the root compose file from those options", history)
         with patch(
             "repooperator_worker.services.agent_orchestration_graph.propose_file_edit",
             return_value=AgentProposeFileResponse(
@@ -343,8 +343,196 @@ class AgentRoutingGraphTests(unittest.TestCase):
         self.assertEqual(result.response_type, "change_proposal")
         self.assertEqual(result.proposal_relative_path, "docker-compose.yml")
 
+    def test_recommendation_followup_uses_structured_context(self) -> None:
+        recommendation_context = {
+            "recommendation_id": "rec_test",
+            "repo": str(self.repo),
+            "branch": "main",
+            "recommended_files": ["trim_videos.py"],
+            "items": [
+                {
+                    "id": "rec_test_1",
+                    "files": ["trim_videos.py"],
+                    "symbols": ["split_video"],
+                    "suggested_changes": ["Add validation and explicit return values."],
+                    "rationale": "confirmed from file review",
+                    "risk_level": "medium",
+                    "category": "code",
+                    "needs_more_inspection": False,
+                }
+            ],
+        }
+        history = [
+            ConversationMessage(
+                role="assistant",
+                content="I recommend a focused validation refactor.",
+                metadata={
+                    "response_type": "assistant_answer",
+                    "recommendation_context": recommendation_context,
+                    "recommendation_context_loaded": True,
+                    "files_read": ["trim_videos.py"],
+                },
+            )
+        ]
+        request = self._request("continue by preparing the recommended code change", history)
+
+        class _RecommendationResolver:
+            @property
+            def model_name(self) -> str:
+                return "test-model"
+
+            def generate_text(self, request):
+                return json.dumps(
+                    {
+                        "refers_to_previous_recommendation": True,
+                        "selected_recommendation_ids": ["rec_test_1"],
+                        "selected_files": ["trim_videos.py"],
+                        "requested_action": "generate_proposal",
+                        "confidence": 0.91,
+                        "needs_clarification": False,
+                        "clarification_question": None,
+                    }
+                )
+
+        with patch(
+            "repooperator_worker.services.recommendation_context_service.OpenAICompatibleModelClient",
+            return_value=_RecommendationResolver(),
+        ), patch(
+            "repooperator_worker.services.agent_orchestration_graph.propose_file_edit",
+            return_value=AgentProposeFileResponse(
+                project_path=str(self.repo),
+                relative_path="trim_videos.py",
+                model="test-model",
+                context_summary="test",
+                original_content="def split_video(input_path):\n    return input_path\n",
+                proposed_content="def split_video(input_path):\n    if not input_path:\n        raise ValueError('input_path required')\n    return input_path\n",
+            ),
+        ):
+            result = self._run_with_classifier(
+                {
+                    "intent": "write_confirmation",
+                    "confidence": 0.9,
+                    "target_files": [],
+                    "target_symbols": [],
+                    "requested_action": "continue_previous_recommendation",
+                    "needs_tool": None,
+                    "needs_clarification": False,
+                    "clarification_question": None,
+                },
+                request,
+            )
+
+        self.assertEqual(result.response_type, "change_proposal")
+        self.assertTrue(result.recommendation_context_loaded)
+        self.assertEqual(result.proposal_relative_path, "trim_videos.py")
+
+    def test_multi_file_recommendation_followup_asks_for_scope(self) -> None:
+        recommendation_context = {
+            "recommendation_id": "rec_multi",
+            "repo": str(self.repo),
+            "branch": "main",
+            "recommended_files": ["trim_videos.py", "README.md"],
+            "items": [
+                {"id": "rec_multi_1", "files": ["trim_videos.py"], "suggested_changes": ["Improve validation."]},
+                {"id": "rec_multi_2", "files": ["README.md"], "suggested_changes": ["Document usage."]},
+            ],
+        }
+        request = self._request(
+            "prepare the suggested improvements",
+            [
+                ConversationMessage(
+                    role="assistant",
+                    content="Two areas are worth improving.",
+                    metadata={"response_type": "assistant_answer", "recommendation_context": recommendation_context},
+                )
+            ],
+        )
+
+        class _MultiResolver:
+            @property
+            def model_name(self) -> str:
+                return "test-model"
+
+            def generate_text(self, request):
+                return json.dumps(
+                    {
+                        "refers_to_previous_recommendation": True,
+                        "selected_recommendation_ids": ["rec_multi_1", "rec_multi_2"],
+                        "selected_files": ["trim_videos.py", "README.md"],
+                        "requested_action": "generate_proposal",
+                        "confidence": 0.86,
+                        "needs_clarification": False,
+                        "clarification_question": None,
+                    }
+                )
+
+        with patch(
+            "repooperator_worker.services.recommendation_context_service.OpenAICompatibleModelClient",
+            return_value=_MultiResolver(),
+        ):
+            result = self._run_with_classifier(
+                {
+                    "intent": "write_confirmation",
+                    "confidence": 0.9,
+                    "target_files": [],
+                    "target_symbols": [],
+                    "requested_action": "continue_previous_recommendation",
+                    "needs_tool": None,
+                    "needs_clarification": False,
+                    "clarification_question": None,
+                },
+                request,
+            )
+        self.assertEqual(result.response_type, "clarification")
+        self.assertCountEqual(result.clarification_candidates, ["trim_videos.py", "README.md"])
+
+    def test_pasted_spec_without_apply_does_not_select_repo_file(self) -> None:
+        request = self._request(
+            "Here is a structured implementation brief with constraints, verification, and final report sections."
+        )
+        result = self._run_with_classifier(
+            {
+                "intent": "pasted_prompt_or_spec",
+                "confidence": 0.92,
+                "target_files": ["README.md"],
+                "target_symbols": [],
+                "requested_action": "summarize_external_spec",
+                "needs_tool": None,
+                "needs_clarification": False,
+                "clarification_question": None,
+            },
+            request,
+        )
+        self.assertEqual(result.intent_classification, "pasted_prompt_or_spec")
+        self.assertEqual(result.response_type, "assistant_answer")
+        self.assertTrue(result.pasted_prompt_or_spec)
+        self.assertIsNone(result.proposal_relative_path)
+
+    def test_explicit_apply_spec_returns_plan_before_edits(self) -> None:
+        request = self._request(
+            "Apply the attached implementation brief to this repository after planning the affected areas."
+        )
+        result = self._run_with_classifier(
+            {
+                "intent": "apply_spec_to_repo",
+                "confidence": 0.91,
+                "target_files": ["README.md", "trim_videos.py"],
+                "target_symbols": [],
+                "requested_action": "plan_spec_application",
+                "needs_tool": None,
+                "needs_clarification": False,
+                "clarification_question": None,
+            },
+            request,
+        )
+        self.assertEqual(result.intent_classification, "apply_spec_to_repo")
+        self.assertEqual(result.response_type, "assistant_answer")
+        self.assertTrue(result.apply_spec_to_repo)
+        self.assertGreaterEqual(len(result.plan_steps), 3)
+        self.assertIsNone(result.proposal_relative_path)
+
     def test_agent_service_returns_agent_error_without_legacy_fallback(self) -> None:
-        request = self._request("tts_dockerfile 최적화해줘")
+        request = self._request("optimize the container build file")
         with patch(
             "repooperator_worker.services.agent_orchestration_graph.run_agent_orchestration_graph",
             side_effect=KeyError("graph exploded"),

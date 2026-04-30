@@ -11,6 +11,9 @@ class HealthResponse(BaseModel):
     configured_model_provider: str | None = None
     configured_model_name: str | None = None
     configured_model_base_url: str | None = None
+    config_loaded_at: str | None = None
+    config_source_path: str | None = None
+    config_hash: str | None = None
     write_mode: str = "read-only"
     permission_mode: str = "basic"
     sandbox_scope: str = "repository"
@@ -210,6 +213,17 @@ class AgentRunResponse(BaseModel):
     commands_planned: list[str] = []
     commands_run: list[str] = []
     reasoning: str | None = None
+    recommendation_context: dict | None = None
+    recommendation_context_loaded: bool = False
+    selected_recommendation_ids: list[str] = []
+    pasted_prompt_or_spec: bool = False
+    apply_spec_to_repo: bool = False
+    plan_id: str | None = None
+    plan_steps: list[str] = []
+    proposal_validation_status: str | None = None
+    retry_count: int = 0
+    effective_worker_model: str | None = None
+    configured_model: str | None = None
     run_id: str | None = None
     skills_used: list[str] = []
     thread_context_files: list[str] = []

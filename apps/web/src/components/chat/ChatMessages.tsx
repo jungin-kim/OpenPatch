@@ -256,6 +256,30 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
               <span className="tool-meta-value">{metadata.commands_planned.join(", ")}</span>
             </div>
           ) : null}
+          {metadata.recommendation_context_loaded ? (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Recommendation context</span>
+              <span className="tool-meta-value">loaded</span>
+            </div>
+          ) : null}
+          {metadata.selected_recommendation_ids?.length ? (
+            <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="tool-meta-label">Selected recommendations</span>
+              <span className="tool-meta-value">{metadata.selected_recommendation_ids.join(", ")}</span>
+            </div>
+          ) : null}
+          {metadata.pasted_prompt_or_spec !== undefined ? (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Pasted spec</span>
+              <span className="tool-meta-value">{metadata.pasted_prompt_or_spec ? "yes" : "no"}</span>
+            </div>
+          ) : null}
+          {metadata.plan_steps?.length ? (
+            <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="tool-meta-label">Plan steps</span>
+              <span className="tool-meta-value">{metadata.plan_steps.join(" → ")}</span>
+            </div>
+          ) : null}
           {metadata.thread_context_files?.length ? (
             <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
               <span className="tool-meta-label">Thread context files</span>

@@ -38,6 +38,14 @@ class OpenAICompatibleModelClient:
                 response_payload = json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 404 and "model" in error_body.lower():
+                raise RuntimeError(
+                    "The configured model was not found by the model endpoint. "
+                    f"Effective worker model: {self._settings.openai_model or 'not configured'}. "
+                    f"Configured provider: {self._settings.configured_model_provider or 'unknown'}. "
+                    f"Base URL: {self._settings.openai_base_url or 'not configured'}. "
+                    "Re-run onboarding or reload/restart the worker after changing model settings."
+                ) from exc
             raise RuntimeError(
                 f"Model API request failed with status {exc.code}: {error_body}"
             ) from exc
@@ -93,6 +101,11 @@ class OpenAICompatibleModelClient:
 
 def _extract_response_text(response_payload: dict) -> str:
     try:
-        return response_payload["choices"][0]["message"]["content"]
+        message = response_payload["choices"][0]["message"]
+        content = message.get("content") or ""
+        reasoning = message.get("reasoning_content") or message.get("thinking") or ""
+        if reasoning and content:
+            return f"<think>{reasoning}</think>\n{content}"
+        return content or reasoning
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError("Model API response did not contain a chat completion message.") from exc

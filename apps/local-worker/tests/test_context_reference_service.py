@@ -61,7 +61,7 @@ class ContextReferenceServiceTests(unittest.TestCase):
                 "needs_clarification": False,
                 "clarification_question": None,
             },
-            task="이 파일 수정해줘",
+            task="please update the file we just reviewed",
         )
         self.assertEqual(result.resolver, "llm")
         self.assertEqual(result.target_files, ["trim_videos.py"])
@@ -77,7 +77,7 @@ class ContextReferenceServiceTests(unittest.TestCase):
                 "needs_clarification": False,
                 "clarification_question": None,
             },
-            task="방금 말한 함수 리팩토링해줘",
+            task="refactor the function from the recent analysis",
         )
         self.assertEqual(result.reference_type, "symbol")
         self.assertEqual(result.target_files, ["trim_videos.py"])
@@ -94,7 +94,7 @@ class ContextReferenceServiceTests(unittest.TestCase):
                 "needs_clarification": False,
                 "clarification_question": None,
             },
-            task="이 내용 그대로 적용해줘",
+            task="prepare a patch from the prior suggestion",
         )
         self.assertEqual(result.reference_type, "change_suggestion")
         self.assertEqual(result.target_files, ["trim_videos.py"])

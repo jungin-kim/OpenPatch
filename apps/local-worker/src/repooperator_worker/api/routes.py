@@ -112,6 +112,9 @@ def health() -> HealthResponse:
         configured_model_provider=settings.configured_model_provider,
         configured_model_name=settings.configured_model_name,
         configured_model_base_url=settings.openai_base_url,
+        config_loaded_at=settings.config_loaded_at,
+        config_source_path=str(settings.repooperator_config_path),
+        config_hash=settings.config_hash,
         write_mode=settings.write_mode,
         permission_mode=profile["mode"],
         sandbox_scope=profile["sandbox"]["scope"],
@@ -124,6 +127,22 @@ def health() -> HealthResponse:
 @router.get("/permissions", response_model=PermissionModeResponse)
 def permissions_get() -> PermissionModeResponse:
     return get_permission_mode()
+
+
+@router.post("/admin/reload-config")
+def admin_reload_config() -> dict:
+    settings = get_settings()
+    return {
+        "status": "ok",
+        "configured_model_connection_mode": settings.configured_model_connection_mode,
+        "configured_model_provider": settings.configured_model_provider,
+        "configured_model_name": settings.configured_model_name,
+        "configured_model_base_url": settings.openai_base_url,
+        "config_loaded_at": settings.config_loaded_at,
+        "config_source_path": str(settings.repooperator_config_path),
+        "config_hash": settings.config_hash,
+        "api_key_configured": bool(settings.openai_api_key),
+    }
 
 
 @router.post("/permissions", response_model=PermissionModeResponse)

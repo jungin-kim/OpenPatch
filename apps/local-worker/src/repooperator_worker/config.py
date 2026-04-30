@@ -1,5 +1,7 @@
 import os
 import json
+import hashlib
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +53,8 @@ class Settings:
     configured_model_connection_mode: str | None
     configured_model_provider: str | None
     configured_model_name: str | None
+    config_loaded_at: str
+    config_hash: str
     permission_mode: str
     write_mode: str
     composio_api_key: str | None
@@ -115,9 +119,9 @@ def get_settings() -> Settings:
             key="token",
             normalizer=_normalize_optional_value,
         ),
-        openai_base_url=_normalize_optional_url(os.getenv("OPENAI_BASE_URL")),
-        openai_api_key=_normalize_optional_value(os.getenv("OPENAI_API_KEY")),
-        openai_model=_normalize_optional_value(os.getenv("OPENAI_MODEL")),
+        openai_base_url=_resolve_model_base_url(runtime_config),
+        openai_api_key=_resolve_model_api_key(runtime_config),
+        openai_model=_resolve_model_name(runtime_config),
         model_request_timeout_seconds=int(
             os.getenv("REPOOPERATOR_MODEL_REQUEST_TIMEOUT_SECONDS", "120")
         ),
@@ -127,6 +131,8 @@ def get_settings() -> Settings:
         configured_model_connection_mode=_resolve_configured_model_connection_mode(runtime_config),
         configured_model_provider=_resolve_configured_model_provider(runtime_config),
         configured_model_name=_resolve_configured_model_name(runtime_config),
+        config_loaded_at=_config_loaded_at(repooperator_config_path),
+        config_hash=_safe_config_hash(runtime_config),
         permission_mode=_resolve_permission_mode(runtime_config),
         write_mode=_resolve_write_mode(runtime_config),
         composio_api_key=_normalize_optional_value(os.getenv("REPOOPERATOR_COMPOSIO_API_KEY")),
@@ -234,6 +240,56 @@ def _resolve_configured_model_name(runtime_config: dict) -> str | None:
     if not isinstance(model_config, dict):
         return None
     return _normalize_optional_value(model_config.get("model"))
+
+
+def _resolve_model_base_url(runtime_config: dict) -> str | None:
+    env_value = _normalize_optional_url(os.getenv("OPENAI_BASE_URL"))
+    if env_value is not None:
+        return env_value
+    model_config = runtime_config.get("model")
+    if isinstance(model_config, dict):
+        return _normalize_optional_url(model_config.get("baseUrl"))
+    return None
+
+
+def _resolve_model_api_key(runtime_config: dict) -> str | None:
+    env_value = _normalize_optional_value(os.getenv("OPENAI_API_KEY"))
+    if env_value is not None:
+        return env_value
+    model_config = runtime_config.get("model")
+    if isinstance(model_config, dict):
+        return _normalize_optional_value(model_config.get("apiKey"))
+    return None
+
+
+def _resolve_model_name(runtime_config: dict) -> str | None:
+    env_value = _normalize_optional_value(os.getenv("OPENAI_MODEL"))
+    if env_value is not None:
+        return env_value
+    return _resolve_configured_model_name(runtime_config)
+
+
+def _config_loaded_at(config_path: Path) -> str:
+    try:
+        timestamp = config_path.stat().st_mtime
+    except OSError:
+        timestamp = time.time()
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
+
+
+def _safe_config_hash(runtime_config: dict) -> str:
+    redacted = json.loads(json.dumps(runtime_config))
+    model = redacted.get("model")
+    if isinstance(model, dict) and model.get("apiKey"):
+        model["apiKey"] = f"present:{hashlib.sha256(str(model['apiKey']).encode('utf-8')).hexdigest()[:12]}"
+    for source in redacted.get("repositorySources") or []:
+        if isinstance(source, dict) and source.get("token"):
+            source["token"] = f"present:{hashlib.sha256(str(source['token']).encode('utf-8')).hexdigest()[:12]}"
+    provider = redacted.get("gitProvider")
+    if isinstance(provider, dict) and provider.get("token"):
+        provider["token"] = f"present:{hashlib.sha256(str(provider['token']).encode('utf-8')).hexdigest()[:12]}"
+    raw = json.dumps(redacted, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _resolve_write_mode(runtime_config: dict) -> str:

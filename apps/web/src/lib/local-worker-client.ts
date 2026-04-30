@@ -13,6 +13,9 @@ export type WorkerHealthPayload = {
   configured_model_provider?: string | null;
   configured_model_name?: string | null;
   configured_model_base_url?: string | null;
+  config_loaded_at?: string | null;
+  config_source_path?: string | null;
+  config_hash?: string | null;
   write_mode?: LegacyWriteMode;
   permission_mode?: PermissionMode;
   sandbox_scope?: string;
@@ -183,6 +186,17 @@ export type AgentRunPayload = {
   commands_planned?: string[];
   commands_run?: string[];
   reasoning?: string | null;
+  recommendation_context?: Record<string, unknown> | null;
+  recommendation_context_loaded?: boolean;
+  selected_recommendation_ids?: string[];
+  pasted_prompt_or_spec?: boolean;
+  apply_spec_to_repo?: boolean;
+  plan_id?: string | null;
+  plan_steps?: string[];
+  proposal_validation_status?: string | null;
+  retry_count?: number;
+  effective_worker_model?: string | null;
+  configured_model?: string | null;
   plan_steps_summary?: Array<{
     step_index: number;
     description: string;

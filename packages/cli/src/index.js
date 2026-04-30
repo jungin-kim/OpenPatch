@@ -4,6 +4,7 @@ const path = require("node:path");
 const os = require("node:os");
 const readline = require("node:readline/promises");
 const net = require("node:net");
+const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { stdin, stdout } = require("node:process");
 const term = require("./terminal");
@@ -287,6 +288,7 @@ async function runOnboard() {
       },
     };
 
+    const runtimeConfigChanged = hasRuntimeRelevantConfigChanged(existingConfig, config);
     await writeJson(CONFIG_PATH, config);
     const previousRuntimeState = await readState();
     await writeJson(STATE_PATH, {
@@ -313,10 +315,13 @@ async function runOnboard() {
           "Check existing worker",
           () => checkWorkerHealth(config.worker.baseUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS),
         );
-        if (existingWorkerHealth.reachable) {
+        if (existingWorkerHealth.reachable && !runtimeConfigChanged) {
           workerRuntimeState = "reused existing healthy worker";
           term.line("success", "A healthy worker is already running", "Reusing the existing worker.");
         } else {
+          if (existingWorkerHealth.reachable && runtimeConfigChanged) {
+            term.line("info", "Configuration changed", "Restarting the worker so the new model/runtime settings take effect.");
+          }
           workerRuntimeState = await restartWorkerForOnboarding();
         }
       } else {
@@ -371,6 +376,7 @@ async function runOnboard() {
       ["Saved repository sources", formatRepositorySourcesSummary(config)],
       ["Model", formatModelSummary(config.model)],
       ["Worker runtime", workerRuntimeState],
+      ["Config changed", runtimeConfigChanged ? "yes - worker reload required" : "no runtime-relevant changes"],
       ["Worker health", workerHealth.reachable ? "ok" : "needs attention"],
       ["Model connectivity", modelConnectivity.reachable ? "ok" : "needs attention"],
     ]);
@@ -2117,6 +2123,45 @@ async function promptReonboardingPlan(rl) {
   }
 }
 
+function hasRuntimeRelevantConfigChanged(previousConfig, nextConfig) {
+  if (!previousConfig) {
+    return true;
+  }
+  return runtimeConfigFingerprint(previousConfig) !== runtimeConfigFingerprint(nextConfig);
+}
+
+function runtimeConfigFingerprint(config) {
+  const safe = {
+    model: {
+      connectionMode: config?.model?.connectionMode || null,
+      provider: config?.model?.provider || null,
+      model: config?.model?.model || null,
+      baseUrl: config?.model?.baseUrl || null,
+      apiKeyState: config?.model?.apiKey ? `present:${hashSecret(config.model.apiKey)}` : "absent",
+    },
+    gitProvider: {
+      provider: config?.gitProvider?.provider || null,
+      baseUrl: config?.gitProvider?.baseUrl || null,
+      tokenState: config?.gitProvider?.token ? `present:${hashSecret(config.gitProvider.token)}` : "absent",
+    },
+    repositorySources: Array.isArray(config?.repositorySources)
+      ? config.repositorySources.map((source) => ({
+          provider: source?.provider || null,
+          baseUrl: source?.baseUrl || null,
+          owner: source?.owner || null,
+          tokenState: source?.token ? `present:${hashSecret(source.token)}` : "absent",
+        }))
+      : [],
+    localRepoBaseDir: config?.localRepoBaseDir || null,
+    workerBaseUrl: config?.worker?.baseUrl || null,
+  };
+  return crypto.createHash("sha256").update(JSON.stringify(safe)).digest("hex");
+}
+
+function hashSecret(value) {
+  return crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 12);
+}
+
 async function promptRepositorySourceConfig(rl, existingConfig = null) {
   const existingSources = normalizeRepositorySources(existingConfig);
   if (existingSources.length) {
@@ -3091,10 +3136,17 @@ async function checkModelConnectivity(modelConfig, timeoutMs) {
         message: formatModelConnectivityFailure(modelConfig, probe, response.status),
       };
     }
+    const validation = await validateModelListResponse(response, modelConfig, probe);
+    if (!validation.ok) {
+      return {
+        reachable: false,
+        message: validation.message,
+      };
+    }
 
     return {
       reachable: true,
-      message: `Model endpoint responded successfully at ${probe.url} with status ${response.status}.`,
+      message: validation.message || `Model endpoint responded successfully at ${probe.url} with status ${response.status}.`,
     };
   } catch (error) {
     const remediation = getModelConnectivityRemediation(modelConfig, probe);
@@ -3107,6 +3159,50 @@ async function checkModelConnectivity(modelConfig, timeoutMs) {
       message: `${message} ${remediation}`.trim(),
     };
   }
+}
+
+async function validateModelListResponse(response, modelConfig, probe) {
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    return { ok: true, message: "" };
+  }
+  let payload;
+  try {
+    payload = await response.clone().json();
+  } catch {
+    return { ok: true, message: "" };
+  }
+  const modelIds = extractModelIds(payload);
+  if (!modelIds.length) {
+    return { ok: true, message: `Model endpoint responded at ${probe.url}, but did not list model IDs.` };
+  }
+  const configured = modelConfig.model || modelConfig.modelName;
+  if (configured && !modelIds.includes(configured)) {
+    return {
+      ok: false,
+      message: [
+        `Model endpoint is reachable at ${probe.url}, but configured model "${configured}" was not found.`,
+        `Available model IDs: ${modelIds.slice(0, 12).join(", ")}`,
+      ].join(" "),
+    };
+  }
+  return {
+    ok: true,
+    message: `Model endpoint responded at ${probe.url}. Configured model "${configured || modelIds[0]}" is available.`,
+  };
+}
+
+function extractModelIds(payload) {
+  const data = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
+  return data
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item.id === "string") return item.id;
+      if (item && typeof item.name === "string") return item.name;
+      if (item && typeof item.model === "string") return item.model;
+      return null;
+    })
+    .filter(Boolean);
 }
 
 function buildModelConnectivityProbe(modelConfig) {
