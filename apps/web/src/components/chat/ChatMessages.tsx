@@ -188,6 +188,36 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
               <span className="tool-meta-value">{metadata.context_source}</span>
             </div>
           )}
+          {metadata.context_reference_resolver && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Reference resolver</span>
+              <span className="tool-meta-value">{metadata.context_reference_resolver}</span>
+            </div>
+          )}
+          {metadata.resolved_reference_type && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Reference type</span>
+              <span className="tool-meta-value">{metadata.resolved_reference_type}</span>
+            </div>
+          )}
+          {metadata.reference_confidence !== undefined && metadata.reference_confidence !== null && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Reference confidence</span>
+              <span className="tool-meta-value">{Math.round(metadata.reference_confidence * 100)}%</span>
+            </div>
+          )}
+          {metadata.resolved_files?.length ? (
+            <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="tool-meta-label">Resolved files</span>
+              <span className="tool-meta-value">{metadata.resolved_files.join(", ")}</span>
+            </div>
+          ) : null}
+          {metadata.resolved_symbols?.length ? (
+            <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="tool-meta-label">Resolved symbols</span>
+              <span className="tool-meta-value">{metadata.resolved_symbols.join(", ")}</span>
+            </div>
+          ) : null}
           {metadata.thread_context_files?.length ? (
             <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
               <span className="tool-meta-label">Thread context files</span>

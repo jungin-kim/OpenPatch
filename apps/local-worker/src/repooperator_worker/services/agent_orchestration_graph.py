@@ -32,7 +32,6 @@ from repooperator_worker.services.skills_service import enabled_skill_context
 from repooperator_worker.services.thread_context_service import (
     ThreadContext,
     build_thread_context,
-    resolve_followup_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,27 +97,6 @@ WRITE_KEYWORDS = {
     "적용",
 }
 
-CONFIRMATION_PHRASES = {
-    "응",
-    "네",
-    "넵",
-    "ㅇㅇ",
-    "이대로 수정해줘",
-    "너가 제안한 방식대로 수정해봐",
-    "수정해줘",
-    "수정해달라니까",
-    "적용해줘",
-    "그대로 해줘",
-    "go ahead",
-    "apply that",
-    "apply it",
-    "make that change",
-    "do it",
-    "yes",
-    "ok",
-    "okay",
-}
-
 RECOMMEND_TARGET_KEYWORDS = {
     "recommend",
     "suggest",
@@ -173,6 +151,7 @@ class OrchestrationState(TypedDict, total=False):
     skills_used: list[str]
     thread_context: ThreadContext
     context_source: str
+    context_reference: Any  # ContextReferenceResult | None
 
 
 def _base_response(
@@ -211,6 +190,21 @@ def _base_response(
     )
 
 
+def _context_reference_debug(state: OrchestrationState) -> dict[str, Any]:
+    ref = state.get("context_reference")
+    if ref is None:
+        return {}
+    trace = ref.to_debug_trace()
+    return {
+        "context_reference_resolver": trace.get("context_reference_resolver"),
+        "resolved_reference_type": trace.get("resolved_reference_type"),
+        "resolved_files": trace.get("resolved_files") or [],
+        "resolved_symbols": trace.get("resolved_symbols") or [],
+        "reference_confidence": trace.get("confidence"),
+        "reference_clarification_needed": trace.get("clarification_needed"),
+    }
+
+
 def _load_context(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
     pending: PendingState = {}
@@ -235,9 +229,6 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
 
     skills_context, skills_used = enabled_skill_context()
     thread_context = build_thread_context(request)
-    followup_file, context_source = resolve_followup_file(request, thread_context)
-    if followup_file:
-        pending["selected_file"] = followup_file
 
     return {
         "settings": get_settings(),
@@ -246,7 +237,8 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
         "skills_context": skills_context,
         "skills_used": skills_used,
         "thread_context": thread_context,
-        "context_source": context_source,
+        "context_source": "retrieval",
+        "context_reference": None,
         "graph_path": "load_context",
     }
 
@@ -255,19 +247,18 @@ def _classify_intent(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
     pending = state.get("pending", {})
     task = request.task.strip()
-    lower = task.lower().strip(" .!?")
     file_hints = _extract_file_hints(task)
 
     intent: Intent = "read_only_question"
     confidence = 0.72
     reason = "deterministic"
 
+    # 1. Definite: user is answering a pending clarification
     if pending.get("candidates") and _matches_pending_candidate(task, pending["candidates"]):
         intent = "file_clarification_answer"
         confidence = 0.96
-    elif _is_confirmation(lower):
-        intent = "write_confirmation"
-        confidence = 0.92
+
+    # 2. Definite: domain-specific tool/command requests (deterministic is reliable here)
     elif _is_recommend_change_targets(task):
         intent = "recommend_change_targets"
         confidence = 0.9
@@ -280,12 +271,18 @@ def _classify_intent(state: OrchestrationState) -> dict[str, Any]:
     elif _is_local_command_request(task):
         intent = "local_command_request"
         confidence = 0.9
+
+    # 3. Definite: explicit file hints + write language = write_request
     elif file_hints and _has_write_language(task):
         intent = "write_request"
         confidence = 0.94
+
+    # 4. Likely write: write keywords present (no explicit file yet — resolve_context_reference handles target)
     elif _has_write_language(task):
         intent = "write_request"
         confidence = 0.82
+
+    # 5. Ambiguous: use LLM to classify when there is prior suggestion context
     elif pending.get("suggestion"):
         llm_intent = _classify_with_llm(request, pending, file_hints)
         if llm_intent:
@@ -336,20 +333,27 @@ def _resolve_target_files(state: OrchestrationState) -> dict[str, Any]:
             return {
                 "selected_file": pending["selected_file"],
                 "instruction": _find_previous_write_instruction(request) or request.task,
+                "graph_path": f"{state.get('graph_path', '')}->resolve_target_files",
             }
-        # No file found via pending/followup — try thread context last-analyzed file directly
+        # LLM context reference resolver did not find a file — last resort: thread context
         thread_context: ThreadContext = state.get("thread_context") or ThreadContext(request.project_path, request.branch)
         if thread_context.last_analyzed_file:
             return {
                 "selected_file": thread_context.last_analyzed_file,
                 "instruction": _find_previous_write_instruction(request) or request.task,
-                "graph_path": f"{state.get('graph_path', '')}->resolve_target_files_fallback",
+                "graph_path": f"{state.get('graph_path', '')}->resolve_target_files_thread_fallback",
             }
 
     if intent == "write_request" and pending.get("selected_file"):
         return {
             "selected_file": pending["selected_file"],
             "instruction": request.task,
+            "graph_path": f"{state.get('graph_path', '')}->resolve_target_files",
+        }
+    if intent == "write_request" and state.get("candidates"):
+        return {
+            "selected_file": None,
+            "candidates": state.get("candidates", []),
             "graph_path": f"{state.get('graph_path', '')}->resolve_target_files",
         }
 
@@ -386,28 +390,38 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
     candidates = state.get("candidates", [])
     thread_context: ThreadContext = state.get("thread_context") or ThreadContext(request.project_path, request.branch)
+    context_ref = state.get("context_reference")
+
+    # Use LLM-generated clarification question when available
+    llm_question = (context_ref.clarification_question if context_ref else None)
 
     if candidates:
         rendered = "\n".join(f"- `{candidate}`" for candidate in candidates)
-        response = f"I found multiple files that could match. Which one should I modify?\n\n{rendered}"
+        base = llm_question or "I found multiple possible targets in the recent context. Choose one to continue."
+        response = f"{base}\n\n{rendered}"
+    elif llm_question:
+        response = llm_question
+        if thread_context.recent_files:
+            file_list = "\n".join(f"- `{f}`" for f in thread_context.recent_files[:5])
+            response = f"{llm_question}\n\nRecent files:\n{file_list}"
+            candidates = list(thread_context.recent_files[:5])
     elif thread_context.last_analyzed_file:
-        # We have recent context — suggest the file rather than asking blindly
         response = (
             f"Should I apply this change to `{thread_context.last_analyzed_file}`? "
-            "Reply with the file name to confirm, or share a different path."
+            "Reply with the target name to confirm, or share a different target."
         )
         candidates = [thread_context.last_analyzed_file]
     elif thread_context.recent_files:
         file_list = "\n".join(f"- `{f}`" for f in thread_context.recent_files[:5])
         response = (
-            f"Which file should I modify? Recent files from this session:\n\n{file_list}\n\n"
-            "Reply with the file name, or describe the change you want and I will recommend a target."
+            f"I found recent files from this session:\n\n{file_list}\n\n"
+            "Choose one of these targets, or describe the change and I will recommend where to apply it."
         )
         candidates = list(thread_context.recent_files[:5])
     else:
         response = (
-            "Which file should I modify? "
-            "Mention the file name in your request, or ask me to recommend files to inspect first."
+            "I need one target from the current repository context before preparing a change. "
+            "You can choose a recent file, name a symbol, or ask RepoOperator to recommend targets."
         )
     result = _base_response(
         request,
@@ -420,6 +434,7 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
         thread_context_files=thread_context.recent_files,
         thread_context_symbols=thread_context.symbol_names,
         context_source=state.get("context_source"),
+        **_context_reference_debug(state),
     )
     return {"result": result, "graph_path": "clarification"}
 
@@ -479,6 +494,7 @@ def _recommend_change_targets(state: OrchestrationState) -> dict[str, Any]:
         thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
         thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
         context_source=state.get("context_source"),
+        **_context_reference_debug(state),
     ).model_copy(
         update={
             "context_summary": context.summary,
@@ -563,6 +579,7 @@ def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
         thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
         thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
         context_source=state.get("context_source"),
+        **_context_reference_debug(state),
     ).model_copy(update={"model": proposal.model})
     return {"result": result, "graph_path": "proposal"}
 
@@ -803,6 +820,61 @@ def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
         return {"result": result, "graph_path": "command_error"}
 
 
+def _resolve_context_reference(state: OrchestrationState) -> dict[str, Any]:
+    """LLM-based context reference resolution node.
+
+    Determines what file/symbol/proposal the user's message refers to and
+    populates pending.selected_file when resolution is confident.
+    Runs only for write-intent paths where an explicit file was not supplied.
+    """
+    from repooperator_worker.services.context_reference_service import resolve_context_reference
+
+    request = state["request"]
+    thread_context: ThreadContext = state.get("thread_context") or ThreadContext(
+        request.project_path, request.branch
+    )
+    pending = state.get("pending") or {}
+
+    history = [
+        {"role": m.role, "content": m.content}
+        for m in (request.conversation_history or [])
+    ]
+
+    suggestion_summary = pending.get("suggestion")
+    if suggestion_summary and len(suggestion_summary) > 300:
+        suggestion_summary = suggestion_summary[:297] + "..."
+
+    ref_result = resolve_context_reference(
+        task=request.task,
+        conversation_history=history,
+        project_path=request.project_path,
+        recent_files=thread_context.recent_files,
+        last_analyzed_file=thread_context.last_analyzed_file,
+        symbols=thread_context.symbols,
+        suggestion_summary=suggestion_summary,
+        proposal_file=pending.get("proposal_file"),
+        candidate_files=pending.get("candidates", []),
+    )
+
+    updates: dict[str, Any] = {
+        "context_reference": ref_result,
+        "context_source": ref_result.resolver,
+        "graph_path": f"{state.get('graph_path', '')}->resolve_context_reference",
+    }
+
+    if ref_result.refers_to_previous_context and ref_result.target_files:
+        updated_pending = dict(pending)
+        if not updated_pending.get("selected_file"):
+            updated_pending["selected_file"] = ref_result.target_files[0]
+        updates["pending"] = updated_pending
+    elif ref_result.needs_clarification:
+        candidates = ref_result.target_files or pending.get("candidates") or thread_context.recent_files
+        if candidates:
+            updates["candidates"] = list(candidates[:8])
+
+    return updates
+
+
 def _after_classify(state: OrchestrationState) -> str:
     intent = state.get("intent")
     if intent == "read_only_question":
@@ -818,7 +890,11 @@ def _after_classify(state: OrchestrationState) -> str:
         WRITE_MODE_AUTO_APPLY,
     }:
         return "permission_required"
-    return "resolve_target_files"
+    # File clarification answers already have candidates set — skip context ref resolution
+    if intent == "file_clarification_answer":
+        return "resolve_target_files"
+    # All write intents go through LLM context reference resolution first
+    return "resolve_context_reference"
 
 
 def _after_resolve(state: OrchestrationState) -> str:
@@ -837,6 +913,7 @@ def _build_graph():
     graph = StateGraph(OrchestrationState)
     graph.add_node("load_context", _load_context)
     graph.add_node("classify_intent", _classify_intent)
+    graph.add_node("resolve_context_reference", _resolve_context_reference)
     graph.add_node("resolve_target_files", _resolve_target_files)
     graph.add_node("ask_clarification", _ask_clarification)
     graph.add_node("recommend_change_targets", _recommend_change_targets)
@@ -852,6 +929,7 @@ def _build_graph():
     graph.set_entry_point("load_context")
     graph.add_edge("load_context", "classify_intent")
     graph.add_conditional_edges("classify_intent", _after_classify)
+    graph.add_edge("resolve_context_reference", "resolve_target_files")
     graph.add_conditional_edges("resolve_target_files", _after_resolve)
     graph.add_edge("ask_clarification", END)
     graph.add_edge("recommend_change_targets", END)
@@ -884,6 +962,12 @@ def _node_progress_message(node_name: str, node_state: dict[str, Any]) -> str | 
     if node_name == "classify_intent":
         intent = node_state.get("intent", "")
         return f"Intent: {intent.replace('_', ' ')}" if intent else "Classifying intent"
+    if node_name == "resolve_context_reference":
+        ref = node_state.get("context_reference")
+        if ref and getattr(ref, "refers_to_previous_context", False):
+            files = getattr(ref, "target_files", [])
+            return f"Reference resolved: {files[0]}" if files else "Context reference resolved"
+        return "Resolving context reference"
     if node_name == "resolve_target_files":
         selected = node_state.get("selected_file")
         return f"Target: {selected}" if selected else "Resolving target file"
@@ -1056,13 +1140,6 @@ def _command_for_task(text: str) -> tuple[list[str], str]:
     if any(p in lowered for p in ("git status", "git 상태", "현재 git", "현재 상태 확인")):
         return ["git", "status", "--short"], "Check the current repository working tree status."
     return ["git", "status", "--short"], "Check the current repository working tree status."
-
-
-def _is_confirmation(text: str) -> bool:
-    lowered = text.lower().strip(" .!?")
-    if lowered in CONFIRMATION_PHRASES:
-        return True
-    return len(lowered) <= 28 and any(phrase in lowered for phrase in CONFIRMATION_PHRASES)
 
 
 def _extract_file_hints(text: str) -> list[str]:
@@ -1264,8 +1341,6 @@ def _classify_with_llm(
 def _find_previous_write_instruction(request: AgentRunRequest) -> str | None:
     for message in reversed(request.conversation_history):
         if message.role != "user":
-            continue
-        if _is_confirmation(message.content):
             continue
         if _has_write_language(message.content):
             return message.content

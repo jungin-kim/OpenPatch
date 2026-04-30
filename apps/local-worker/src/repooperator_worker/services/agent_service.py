@@ -46,22 +46,6 @@ _WRITE_INTENT_KEYWORDS = frozenset({
     "바꿔줘", "만들어줘", "구현해줘", "추가해줘", "삭제해줘",
 })
 
-# Short confirmation phrases that mean "yes, apply the previous suggestion".
-# These are short enough that they won't reliably hit _WRITE_INTENT_KEYWORDS on
-# their own, but combined with a previous assistant suggestion they should
-# trigger proposal generation.
-_WRITE_CONFIRMATION_PHRASES = frozenset({
-    # Korean
-    "응", "그래", "ㅇㅇ", "넵", "네",
-    "바꿔줘", "수정해줘", "수정해달라", "수정해달라니까",
-    "적용해줘", "그대로 해줘", "그대로해줘", "해줘", "해",
-    "고쳐줘", "변경해줘", "바꿔", "적용해",
-    # English
-    "yes", "yep", "yup", "yeah", "ok", "okay", "sure", "go ahead",
-    "apply that", "apply it", "do it", "make that change", "make the change",
-    "apply", "do that", "just do it",
-})
-
 _FILE_HINT_RE = re.compile(r'\b([\w./\\-]+\.[a-zA-Z]{1,6})\b', re.ASCII)
 
 _SYSTEM_PROMPT = """\
@@ -79,24 +63,6 @@ which additional files should be inspected.
 - Do not speculate about code that is not shown in the context.
 - Mention which files you drew from when it adds clarity (e.g. "In main.py, …").
 - Keep answers focused and practical."""
-
-
-def _is_confirmation_phrase(task: str) -> bool:
-    """Return True if the task is a short write confirmation with no new content."""
-    stripped = task.strip().lower().rstrip("!?.")
-    # Exact match against known confirmation phrases
-    if stripped in _WRITE_CONFIRMATION_PHRASES:
-        return True
-    # Short messages (≤ 15 chars) that contain a confirmation keyword but no file
-    # hints are very likely confirmations ("응 바꿔줘", "수정해달라니까", …).
-    if len(stripped) <= 20:
-        tokens = re.findall(r'\w+', stripped)
-        has_confirmation = any(tok in _WRITE_CONFIRMATION_PHRASES for tok in tokens)
-        non_ascii_has_confirmation = any(ph in stripped for ph in _WRITE_CONFIRMATION_PHRASES if not ph.isascii())
-        if has_confirmation or non_ascii_has_confirmation:
-            return True
-    return False
-
 
 def _extract_pending_context_from_history(
     history: list,
@@ -223,24 +189,14 @@ def _build_minimal_run_response(request: AgentRunRequest, *, response: str, resp
 
 
 def _find_original_user_instruction(history: list) -> str | None:
-    """Return the most recent user message that looks like a write instruction.
-
-    Walks history in reverse to find the user turn that preceded the assistant's
-    suggestion, so the proposal uses the original intent rather than the terse
-    confirmation phrase.
-    """
+    """Return the most recent user message that looks like a write instruction."""
     for msg in reversed(history):
         if getattr(msg, "role", None) != "user":
             continue
         content = getattr(msg, "content", "") or ""
-        # Skip the confirmation phrase itself (it will be the last user message)
-        if _is_confirmation_phrase(content):
-            continue
-        # If this user message had write intent, use it as the instruction
         has_keyword, _ = detect_write_intent(content)
         if has_keyword:
             return content
-        # Return the first non-confirmation user message regardless
         return content
     return None
 
@@ -288,15 +244,15 @@ def _route_write_request(
         candidate_list = "\n".join(f"- `{c}`" for c in candidates)
         return _build_minimal_run_response(
             request,
-            response=f"I found multiple files that could match. Which one should I modify?\n\n{candidate_list}",
+            response=f"I found multiple possible targets. Choose one to continue:\n\n{candidate_list}",
         )
 
     if not resolved_path and not file_hints:
         return _build_minimal_run_response(
             request,
             response=(
-                "I need one safe target file before generating a diff. "
-                "Choose a file from the repository or ask RepoOperator to recommend files to inspect first."
+                "I need one target from the repository context before preparing a diff. "
+                "Choose a recent file, name a symbol, or ask RepoOperator to recommend targets."
             ),
         )
 
@@ -349,45 +305,7 @@ def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
 
     settings = get_settings()
 
-    # ── Step 1: Write confirmation check ─────────────────────────────────────
-    # Detect short follow-up phrases that mean "apply what you just suggested".
-    is_confirmation = _is_confirmation_phrase(request.task)
-    if is_confirmation and request.conversation_history:
-        pending_hints, pending_text = _extract_pending_context_from_history(
-            request.conversation_history
-        )
-        logger.info(
-            "agent_service: write confirmation detected, pending_hints=%r",
-            pending_hints,
-        )
-
-        if settings.write_mode not in {WRITE_MODE_WRITE_WITH_APPROVAL, WRITE_MODE_AUTO_APPLY}:
-            return _build_minimal_run_response(
-                request,
-                response=(
-                    "This looks like a change request. "
-                    "Switch the permission mode to **Auto review** to let RepoOperator "
-                    "propose a diff for your approval."
-                ),
-                response_type="permission_required",
-            )
-
-        if pending_hints:
-            # Reconstruct the original user instruction from history
-            original_instruction = _find_original_user_instruction(request.conversation_history)
-            instruction = original_instruction or pending_text
-            return _route_write_request(request, pending_hints, instruction)
-
-        # No file hints in history — ask what to modify
-        return _build_minimal_run_response(
-            request,
-            response=(
-                "I need one safe target file before generating a diff. "
-                "Choose a file from the repository or ask RepoOperator to recommend files to inspect first."
-            ),
-        )
-
-    # ── Step 2: Direct write intent ──────────────────────────────────────────
+    # ── Direct write intent legacy fallback ──────────────────────────────────
     is_write, file_hints = detect_write_intent(request.task)
 
     if is_write:

@@ -211,6 +211,12 @@ class AgentRunResponse(BaseModel):
     thread_context_files: list[str] = []
     thread_context_symbols: list[str] = []
     context_source: str | None = None
+    context_reference_resolver: str | None = None
+    resolved_reference_type: str | None = None
+    resolved_files: list[str] = []
+    resolved_symbols: list[str] = []
+    reference_confidence: float | None = None
+    reference_clarification_needed: bool | None = None
 
 
 class LocalBranchSummary(BaseModel):

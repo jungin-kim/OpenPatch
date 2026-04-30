@@ -170,6 +170,12 @@ export type AgentRunPayload = {
   thread_context_files?: string[];
   thread_context_symbols?: string[];
   context_source?: string | null;
+  context_reference_resolver?: string | null;
+  resolved_reference_type?: string | null;
+  resolved_files?: string[];
+  resolved_symbols?: string[];
+  reference_confidence?: number | null;
+  reference_clarification_needed?: boolean | null;
 };
 
 export type CommandApprovalPayload = {
