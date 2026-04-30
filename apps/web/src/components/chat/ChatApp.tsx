@@ -14,7 +14,7 @@ import {
   listThreads,
   LocalWorkerClientError,
   openRepository,
-  runAgentTask,
+  streamAgentTask,
   runApprovedCommand,
   saveThread,
   updatePermissionMode,
@@ -26,6 +26,7 @@ import {
   type RepoOpenPayload,
   type ThreadRecordPayload,
 } from "@/lib/local-worker-client";
+import { ProgressTimeline, type ProgressStep } from "./ProgressTimeline";
 import {
   proposalFromRunPayload,
   type ChangeProposal,
@@ -102,6 +103,7 @@ export function ChatApp() {
   const [branchActionPending, setBranchActionPending] = useState(false);
   const [branchActionError, setBranchActionError] = useState<string | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
 
   // ── Health check ─────────────────────────────────────────────────────────
@@ -621,6 +623,7 @@ export function ChatApp() {
     updateActiveThread(messagesWithUser);
     setQuestion("");
     setQuestionPending(true);
+    setProgressSteps([]);
 
     // Build conversation history from the last 10 messages (user + assistant only)
     // so the backend can resolve write confirmations against prior suggestions.
@@ -634,13 +637,27 @@ export function ChatApp() {
       }));
 
     try {
-      const payload = await runAgentTask({
+      const streamInput = {
         project_path: repoResult.project_path,
         git_provider: repoResult.git_provider,
         branch: repoResult.branch || undefined,
         task: userMessage.content,
         conversation_history: conversationHistory,
-      });
+      };
+
+      let payload: AgentRunPayload | null = null;
+
+      for await (const event of streamAgentTask(streamInput)) {
+        if (event.type === "progress") {
+          setProgressSteps((prev) => [...prev, { node: event.node, message: event.message }]);
+        } else if (event.type === "done") {
+          payload = event.result;
+        } else if (event.type === "error") {
+          throw new Error(event.message);
+        }
+      }
+
+      if (!payload) throw new Error("No result received from agent.");
 
       let assistantMessage: ChatMessage;
 
@@ -702,6 +719,7 @@ export function ChatApp() {
       updateActiveThread(messagesWithError);
     } finally {
       setQuestionPending(false);
+      setProgressSteps([]);
     }
   }
 
@@ -997,6 +1015,7 @@ export function ChatApp() {
           messages={messages}
           repoResult={repoResult}
           questionPending={questionPending}
+          progressSteps={progressSteps}
           gitProvider={gitProvider}
           writeMode={writeMode}
           onProposalStatusChange={handleProposalStatusChange}

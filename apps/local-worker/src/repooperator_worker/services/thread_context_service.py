@@ -71,8 +71,12 @@ def resolve_followup_file(request: AgentRunRequest, context: ThreadContext) -> t
             return relative_path, "recent_thread"
     if _refers_to_previous_file(lowered) and context.last_analyzed_file:
         return context.last_analyzed_file, "recent_thread"
-    if context.last_proposed_target_file and _refers_to_previous_change(lowered):
-        return context.last_proposed_target_file, "recent_thread"
+    if _refers_to_previous_change(lowered):
+        # Prefer an already-proposed target; fall back to the most recently analyzed file.
+        if context.last_proposed_target_file:
+            return context.last_proposed_target_file, "recent_thread"
+        if context.last_analyzed_file:
+            return context.last_analyzed_file, "recent_thread"
     return None, "retrieval"
 
 
@@ -111,10 +115,15 @@ def _refers_to_previous_file(lowered: str) -> bool:
             "that file",
             "the file",
             "same file",
+            "this file",
             "그 파일",
             "이 파일",
             "방금 파일",
             "위 파일",
+            "해당 파일",
+            "방금 본",
+            "방금 분석한",
+            "아까 파일",
         )
     )
 
@@ -123,13 +132,34 @@ def _refers_to_previous_change(lowered: str) -> bool:
     return any(
         phrase in lowered
         for phrase in (
+            # English
             "that change",
             "same change",
             "proposal",
+            "apply that",
+            "apply it",
+            "make that change",
+            "go ahead",
+            "do it",
+            "as suggested",
+            "as you suggested",
+            "like you said",
+            # Korean
             "이대로",
             "그대로",
             "제안",
             "수정",
+            "이 내용",
+            "이내용",
+            "그 내용",
+            "그내용",
+            "방금 내용",
+            "방금 말한",
+            "방금 제안",
+            "응 적용",
+            "이대로 적용",
+            "그대로 적용",
+            "방금 대로",
         )
     )
 

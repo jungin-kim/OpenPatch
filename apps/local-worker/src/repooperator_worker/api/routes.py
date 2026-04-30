@@ -1,6 +1,7 @@
 import time
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from repooperator_worker.config import get_settings
 from repooperator_worker.schemas import (
@@ -43,6 +44,7 @@ from repooperator_worker.schemas import (
 )
 from repooperator_worker.services.edit_service import propose_file_edit
 from repooperator_worker.services.agent_service import run_agent_task
+from repooperator_worker.services.agent_orchestration_graph import stream_agent_orchestration_graph
 from repooperator_worker.services.command_runner import run_command
 from repooperator_worker.services.command_service import (
     list_command_approvals,
@@ -499,6 +501,24 @@ def agent_run(request: AgentRunRequest) -> AgentRunResponse:
                 status="ok",
                 latency_ms=int((time.perf_counter() - start) * 1000),
             )
+
+
+@router.post("/agent/run/stream")
+def agent_run_stream(request: AgentRunRequest) -> StreamingResponse:
+    def generate():
+        for event_data in stream_agent_orchestration_graph(request):
+            yield f"data: {event_data}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.post("/agent/propose-file", response_model=AgentProposeFileResponse)

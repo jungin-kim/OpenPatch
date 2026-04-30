@@ -8,6 +8,7 @@ import {
   type ChangeProposal,
   type ProposalStatus,
 } from "./ProposalCard";
+import { ProgressTimeline, type ProgressStep } from "./ProgressTimeline";
 
 export type ChatMessage = {
   id: string;
@@ -242,6 +243,7 @@ interface ChatMessagesProps {
   messages: ChatMessage[];
   repoResult: RepoOpenPayload | null;
   questionPending: boolean;
+  progressSteps?: ProgressStep[];
   gitProvider: string;
   writeMode?: "basic" | "auto_review" | "full_access";
   onProposalStatusChange?: (id: string, status: ProposalStatus, message?: string) => void;
@@ -253,6 +255,7 @@ export function ChatMessages({
   messages,
   repoResult,
   questionPending,
+  progressSteps = [],
   gitProvider,
   writeMode = "basic",
   onProposalStatusChange,
@@ -459,11 +462,15 @@ export function ChatMessages({
           {questionPending && (
             <div className="message-group message-group-assistant">
               <span className="message-role-label">RepoOperator</span>
-              <div className="typing-indicator">
-                <span className="typing-dot" />
-                <span className="typing-dot" />
-                <span className="typing-dot" />
-              </div>
+              {progressSteps.length > 0 ? (
+                <ProgressTimeline steps={progressSteps} done={false} />
+              ) : (
+                <div className="typing-indicator">
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                  <span className="typing-dot" />
+                </div>
+              )}
             </div>
           )}
         </>

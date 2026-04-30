@@ -376,6 +376,62 @@ export async function runAgentTask(input: {
   return parseWorkerResponse<AgentRunPayload>(response);
 }
 
+export type AgentProgressEvent =
+  | { type: "progress"; node: string; message: string }
+  | { type: "done"; result: AgentRunPayload }
+  | { type: "error"; message: string };
+
+export async function* streamAgentTask(input: {
+  project_path: string;
+  git_provider?: string;
+  branch?: string;
+  task: string;
+  conversation_history?: ConversationMessage[];
+}): AsyncGenerator<AgentProgressEvent> {
+  const response = await fetch("/api/worker/agent/run/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new LocalWorkerClientError(text || "Stream request failed.", response.status);
+  }
+
+  if (!response.body) {
+    throw new LocalWorkerClientError("No response body for stream.", 500);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const dataStr = line.slice(6).trim();
+        if (dataStr === "[DONE]") return;
+        try {
+          yield JSON.parse(dataStr) as AgentProgressEvent;
+        } catch {
+          // skip malformed events
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function readRepositoryFile(input: {
   project_path: string;
   relative_path: string;

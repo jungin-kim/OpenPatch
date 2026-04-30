@@ -1497,6 +1497,46 @@ select {
   padding: 0 4px;
 }
 
+/* ── Progress timeline ─────────────────────────────── */
+
+.progress-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 0 8px;
+  max-width: 100%;
+}
+
+.progress-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 0.76rem;
+  background: var(--surface-raised, rgba(0,0,0,0.04));
+  color: var(--muted);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.progress-step-active {
+  color: var(--accent, #6366f1);
+  border-color: var(--accent, #6366f1);
+  background: rgba(99, 102, 241, 0.07);
+  animation: progress-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.progress-step-icon {
+  font-size: 0.8em;
+  line-height: 1;
+}
+
 /* ── Tool card (collapsible metadata) ─────────────── */
 
 .tool-card {

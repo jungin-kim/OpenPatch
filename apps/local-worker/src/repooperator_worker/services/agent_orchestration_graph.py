@@ -337,6 +337,14 @@ def _resolve_target_files(state: OrchestrationState) -> dict[str, Any]:
                 "selected_file": pending["selected_file"],
                 "instruction": _find_previous_write_instruction(request) or request.task,
             }
+        # No file found via pending/followup — try thread context last-analyzed file directly
+        thread_context: ThreadContext = state.get("thread_context") or ThreadContext(request.project_path, request.branch)
+        if thread_context.last_analyzed_file:
+            return {
+                "selected_file": thread_context.last_analyzed_file,
+                "instruction": _find_previous_write_instruction(request) or request.task,
+                "graph_path": f"{state.get('graph_path', '')}->resolve_target_files_fallback",
+            }
 
     if intent == "write_request" and pending.get("selected_file"):
         return {
@@ -377,13 +385,29 @@ def _permission_required(state: OrchestrationState) -> dict[str, Any]:
 def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
     candidates = state.get("candidates", [])
+    thread_context: ThreadContext = state.get("thread_context") or ThreadContext(request.project_path, request.branch)
+
     if candidates:
         rendered = "\n".join(f"- `{candidate}`" for candidate in candidates)
         response = f"I found multiple files that could match. Which one should I modify?\n\n{rendered}"
+    elif thread_context.last_analyzed_file:
+        # We have recent context — suggest the file rather than asking blindly
+        response = (
+            f"Should I apply this change to `{thread_context.last_analyzed_file}`? "
+            "Reply with the file name to confirm, or share a different path."
+        )
+        candidates = [thread_context.last_analyzed_file]
+    elif thread_context.recent_files:
+        file_list = "\n".join(f"- `{f}`" for f in thread_context.recent_files[:5])
+        response = (
+            f"Which file should I modify? Recent files from this session:\n\n{file_list}\n\n"
+            "Reply with the file name, or describe the change you want and I will recommend a target."
+        )
+        candidates = list(thread_context.recent_files[:5])
     else:
         response = (
-            "I could not identify a safe target file for this change request yet. "
-            "Share a file path, or ask RepoOperator to recommend files to inspect first."
+            "Which file should I modify? "
+            "Mention the file name in your request, or ask me to recommend files to inspect first."
         )
     result = _base_response(
         request,
@@ -393,8 +417,8 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
         intent_classification=state.get("intent"),
         graph_path="clarification",
         skills_used=state.get("skills_used", []),
-        thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
-        thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
+        thread_context_files=thread_context.recent_files,
+        thread_context_symbols=thread_context.symbol_names,
         context_source=state.get("context_source"),
     )
     return {"result": result, "graph_path": "clarification"}
@@ -584,26 +608,110 @@ def _answer_read_only(state: OrchestrationState) -> dict[str, Any]:
 
 
 def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
+    import shutil
+
     request = state["request"]
+    thread_context = state.get("thread_context") or ThreadContext(request.project_path, request.branch)
+    tc_files = thread_context.recent_files
+    tc_symbols = thread_context.symbol_names
+
+    # Check glab availability first
+    glab_path = shutil.which("glab")
+
+    if not glab_path:
+        # Suggest install with an approval card structure
+        install_cmd, install_reason = _detect_glab_install_command()
+        if install_cmd:
+            from repooperator_worker.services.command_service import preview_command
+
+            preview = preview_command(install_cmd, reason=install_reason)
+            result_response = _base_response(
+                request,
+                response=(
+                    "`glab` (the GitLab CLI) is needed to read merge request information from the active repository, "
+                    "but it is not installed.\n\n"
+                    f"Install command: `{' '.join(install_cmd)}`\n\n"
+                    "Approve the installation below, or install it manually and retry."
+                ),
+                response_type="command_approval",
+                command_approval=preview,
+                intent_classification=state.get("intent"),
+                graph_path="local_tool_request_install_prompt",
+                thread_context_files=tc_files,
+                thread_context_symbols=tc_symbols,
+                context_source=state.get("context_source"),
+            )
+        else:
+            result_response = _base_response(
+                request,
+                response=(
+                    "`glab` (the GitLab CLI) is needed to read merge request information, but it is not installed.\n\n"
+                    "Install it manually:\n"
+                    "- macOS: `brew install glab`\n"
+                    "- Linux: `brew install glab` or `snap install glab`\n"
+                    "- See: https://gitlab.com/gitlab-org/cli#installation\n\n"
+                    "After installing, run `glab auth login` and retry."
+                ),
+                response_type="assistant_answer",
+                intent_classification=state.get("intent"),
+                graph_path="local_tool_request_missing_glab",
+                thread_context_files=tc_files,
+                thread_context_symbols=tc_symbols,
+                context_source=state.get("context_source"),
+            )
+        return {"result": result_response, "graph_path": "local_tool_request"}
+
+    # glab is installed — check auth status
+    try:
+        import subprocess
+
+        auth_check = subprocess.run(
+            ["glab", "auth", "status"],
+            cwd=_get_repo_cwd(request),
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+        if auth_check.returncode != 0:
+            result_response = _base_response(
+                request,
+                response=(
+                    "`glab` is installed but not authenticated with GitLab.\n\n"
+                    "Run:\n```\nglab auth login\n```\n"
+                    "or set `GITLAB_TOKEN` / `GLAB_TOKEN` environment variable and restart the worker.\n\n"
+                    f"Auth status output:\n```\n{(auth_check.stderr or auth_check.stdout or '').strip()[:800]}\n```"
+                ),
+                response_type="assistant_answer",
+                intent_classification=state.get("intent"),
+                graph_path="local_tool_request_auth_required",
+                thread_context_files=tc_files,
+                thread_context_symbols=tc_symbols,
+                context_source=state.get("context_source"),
+            )
+            return {"result": result_response, "graph_path": "local_tool_request"}
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    # glab authenticated — run mr list
     try:
         from repooperator_worker.services.tool_service import run_tool
 
         result = run_tool(["glab", "mr", "list"])
         if result.get("returncode") == 0:
-            output = result.get("stdout", "").strip() or "No merge requests were returned."
-            response = "GitLab merge requests from the active repository:\n\n```text\n" + output + "\n```"
+            output = result.get("stdout", "").strip() or "No open merge requests found."
+            response = "GitLab merge requests for the active repository:\n\n```text\n" + output + "\n```"
             status = "assistant_answer"
         else:
+            err = (result.get("stderr") or result.get("stdout") or "No output").strip()
             response = (
-                "I could not read GitLab merge requests with `glab mr list`.\n\n"
-                f"```text\n{result.get('stderr') or result.get('stdout') or 'No output'}\n```"
+                "I could not list merge requests with `glab mr list`.\n\n"
+                f"```text\n{err[:1000]}\n```\n\n"
+                "Check that you are in a GitLab repository and `glab` is authenticated."
             )
-            status = "proposal_error"
+            status = "assistant_answer"
     except (ValueError, RuntimeError) as exc:
-        response = (
-            "RepoOperator can read merge requests through the local GitLab CLI (`glab`), "
-            f"but it is not ready for this repository yet: {exc}"
-        )
+        response = f"Could not run `glab mr list`: {exc}"
         status = "assistant_answer"
 
     result_response = _base_response(
@@ -613,11 +721,29 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
         intent_classification=state.get("intent"),
         graph_path="local_tool_request",
         skills_used=state.get("skills_used", []),
-        thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
-        thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
+        thread_context_files=tc_files,
+        thread_context_symbols=tc_symbols,
         context_source=state.get("context_source"),
     )
     return {"result": result_response, "graph_path": "local_tool_request"}
+
+
+def _detect_glab_install_command() -> tuple[list[str], str]:
+    """Return (install_argv, reason) for the best available package manager, or ([], '') if none found."""
+    import shutil
+
+    if shutil.which("brew"):
+        return ["brew", "install", "glab"], "Install the GitLab CLI using Homebrew. This uses the network."
+    if shutil.which("snap"):
+        return ["snap", "install", "glab"], "Install the GitLab CLI using snap. This uses the network."
+    return [], ""
+
+
+def _get_repo_cwd(request: AgentRunRequest) -> str | None:
+    try:
+        return str(resolve_project_path(request.project_path))
+    except Exception:
+        return None
 
 
 def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
@@ -752,6 +878,70 @@ def run_agent_orchestration_graph(request: AgentRunRequest) -> AgentRunResponse:
     return result
 
 
+def _node_progress_message(node_name: str, node_state: dict[str, Any]) -> str | None:
+    if node_name == "load_context":
+        return "Loading repository context"
+    if node_name == "classify_intent":
+        intent = node_state.get("intent", "")
+        return f"Intent: {intent.replace('_', ' ')}" if intent else "Classifying intent"
+    if node_name == "resolve_target_files":
+        selected = node_state.get("selected_file")
+        return f"Target: {selected}" if selected else "Resolving target file"
+    if node_name == "generate_change_plan":
+        return "Planning changes"
+    if node_name == "generate_patch":
+        return "Generating diff"
+    if node_name == "validate_patch":
+        return "Validating"
+    if node_name == "return_proposal":
+        return "Proposal ready"
+    if node_name == "answer_read_only":
+        return "Generating answer"
+    if node_name == "ask_clarification":
+        return "Asking for clarification"
+    if node_name == "recommend_change_targets":
+        return "Identifying change targets"
+    if node_name == "run_local_tool_request":
+        return "Running GitLab tool"
+    if node_name == "run_local_command_request":
+        return "Running command"
+    if node_name == "permission_required":
+        return "Checking permissions"
+    if node_name == "proposal_error":
+        return "Proposal failed"
+    return None
+
+
+def stream_agent_orchestration_graph(request: AgentRunRequest):
+    """Generator that yields JSON-encoded SSE event payloads for LangGraph progress."""
+    initial_state: dict[str, Any] = {"request": request}
+    accumulated_result: AgentRunResponse | None = None
+
+    try:
+        for update in _COMPILED_GRAPH.stream(initial_state, stream_mode="updates"):
+            node_name = next(iter(update)) if update else None
+            if not node_name:
+                continue
+            node_state: dict[str, Any] = update.get(node_name) or {}
+
+            if "result" in node_state and node_state["result"] is not None:
+                accumulated_result = node_state["result"]
+
+            message = _node_progress_message(node_name, node_state)
+            if message:
+                yield json.dumps({"type": "progress", "node": node_name, "message": message})
+
+    except Exception as exc:
+        logger.exception("Streaming graph error: %s", exc)
+        yield json.dumps({"type": "error", "message": str(exc)})
+        return
+
+    if accumulated_result is not None:
+        yield json.dumps({"type": "done", "result": accumulated_result.model_dump()})
+    else:
+        yield json.dumps({"type": "error", "message": "Agent did not produce a result."})
+
+
 def _has_write_language(text: str) -> bool:
     lowered = text.lower()
     tokens = set(re.findall(r"[A-Za-z0-9_]+", lowered))
@@ -770,13 +960,22 @@ def _is_repo_analysis(text: str) -> bool:
 
 def _is_local_tool_request(text: str) -> bool:
     lowered = text.lower()
-    return (
+    has_mr_keyword = (
         "mr 목록" in lowered
+        or "mr정보" in lowered
+        or "mr 정보" in lowered
         or "merge request" in lowered
         or "merge requests" in lowered
         or "pull request" in lowered
+        or "pr 정보" in lowered
+        or "pr정보" in lowered
         or re.search(r"\bmr\b", lowered) is not None
-    ) and any(token in lowered for token in {"show", "list", "보여", "목록", "현재", "read"})
+    )
+    has_show_action = any(
+        token in lowered
+        for token in {"show", "list", "보여", "목록", "현재", "read", "알려줘", "알려", "설명", "보여줘"}
+    )
+    return has_mr_keyword and has_show_action
 
 
 def _is_local_command_request(text: str) -> bool:
@@ -784,14 +983,37 @@ def _is_local_command_request(text: str) -> bool:
     return any(
         phrase in lowered
         for phrase in {
+            # Git status / inspect
             "git 상태",
             "git status",
+            "현재 git",
+            "현재 브랜치",
+            "git branch",
+            "현재 상태 확인",
+            "git diff",
+            "git log",
+            # Commit
+            "커밋해줘",
+            "커밋 해줘",
+            "commit 해줘",
+            "commit해줘",
+            "커밋해달라",
+            "방금 수정한 내용 커밋",
+            "방금 파일 커밋",
+            "이 내용 커밋",
+            "이내용 반영해서 커밋",
+            "커밋",
+            # Push
             "git push",
+            "푸시해줘",
+            "push 해줘",
+            # Install
             "npm install",
             "pip install",
+            # Dangerous
             "rm -rf",
             "ls /",
-            "현재 git",
+            # Generic
             "command",
             "run ",
             "실행",
@@ -809,15 +1031,31 @@ def _command_for_task(text: str) -> tuple[list[str], str]:
         match = re.search(r"rm\s+-rf\s+([^\s]+)", text, flags=re.IGNORECASE)
         target = match.group(1) if match else "/tmp/something"
         return ["rm", "-rf", target], "Delete files recursively. This is destructive."
-    if "git push" in lowered:
-        return ["git", "push"], "Push commits to the configured remote. This requires review."
+    if any(p in lowered for p in ("git push", "푸시해줘", "push 해줘")):
+        return ["git", "push"], "Push commits to the configured remote. This requires explicit approval."
     if "ls /" in lowered:
         match = re.search(r"ls\s+([/][^\s]+)", text, flags=re.IGNORECASE)
         target = match.group(1) if match else "/"
         return ["ls", target], "List a path outside the repository."
-    if "git status" in lowered or "git 상태" in lowered or "현재 git" in lowered:
+    if any(p in lowered for p in (
+        "커밋해줘", "커밋 해줘", "commit해줘", "commit 해줘", "커밋해달라",
+        "방금 수정한 내용 커밋", "방금 파일 커밋", "이 내용 커밋", "이내용 반영해서 커밋",
+    )):
+        # First run git status to understand what would be committed.
+        # The commit itself requires approval — return status as the first step.
+        return ["git", "status", "--short"], (
+            "Check which files are staged/modified before committing. "
+            "Review the status, then approve git add + git commit."
+        )
+    if any(p in lowered for p in ("git diff", "변경 사항")):
+        return ["git", "diff", "--stat"], "Show a summary of file changes in the working tree."
+    if any(p in lowered for p in ("git log", "커밋 내역", "commit 내역")):
+        return ["git", "log", "--oneline", "-10"], "Show the last 10 commit log entries."
+    if any(p in lowered for p in ("git branch", "현재 브랜치", "브랜치 확인")):
+        return ["git", "branch", "--show-current"], "Show the currently checked-out branch."
+    if any(p in lowered for p in ("git status", "git 상태", "현재 git", "현재 상태 확인")):
         return ["git", "status", "--short"], "Check the current repository working tree status."
-    return ["pwd"], "Show the active repository working directory."
+    return ["git", "status", "--short"], "Check the current repository working tree status."
 
 
 def _is_confirmation(text: str) -> bool:
