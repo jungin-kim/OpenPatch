@@ -1,4 +1,4 @@
-"""LangGraph orchestration for read-only answers and write proposals."""
+"""LangGraph orchestration for repository answers, proposals, and tool plans."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from repooperator_worker.schemas import (
     AgentRunRequest,
     AgentRunResponse,
 )
+from repooperator_worker.services.active_repository import get_active_repository
 from repooperator_worker.services.common import resolve_project_path
 from repooperator_worker.services.context_service import build_query_aware_context
 from repooperator_worker.services.edit_service import propose_file_edit
@@ -43,8 +44,9 @@ Intent = Literal[
     "write_request",
     "write_confirmation",
     "file_clarification_answer",
-    "local_tool_request",
     "local_command_request",
+    "git_workflow_request",
+    "gitlab_mr_request",
     "ambiguous",
 ]
 
@@ -65,63 +67,52 @@ SUPPORTED_SUFFIXES = {
     ".sh",
 }
 
-WRITE_KEYWORDS = {
-    "change",
-    "update",
-    "fix",
-    "modify",
-    "refactor",
-    "add",
-    "remove",
-    "delete",
-    "highlight",
-    "implement",
-    "edit",
-    "rewrite",
-    "replace",
-    "insert",
-    "improve",
-    "enhance",
-    "optimize",
-    "review",
-    "proposal",
-    "propose",
-    "최적화",
-    "검토",
-    "제안",
-    "수정",
-    "바꿔",
-    "고쳐",
-    "변경",
-    "개선",
-    "적용",
-}
-
-RECOMMEND_TARGET_KEYWORDS = {
-    "recommend",
-    "suggest",
-    "what file",
-    "which file",
-    "where should",
-    "파일 추천",
-    "파일을 추천",
-    "파일 제안",
-    "수정할 파일",
-    "수정해야 할 파일",
-    "어떤 파일",
-}
-
-REPO_ANALYSIS_KEYWORDS = {
-    "analyze project",
-    "project analysis",
-    "analyze repository",
-    "repository analysis",
-    "프로젝트를 분석",
-    "프로젝트 분석",
-    "레포지토리 분석",
-}
-
 FILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./\\-]+")
+
+SUPPORTED_INTENTS: set[str] = {
+    "read_only_question",
+    "repo_analysis",
+    "recommend_change_targets",
+    "write_request",
+    "write_confirmation",
+    "file_clarification_answer",
+    "local_command_request",
+    "git_workflow_request",
+    "gitlab_mr_request",
+    "ambiguous",
+}
+
+CLASSIFIER_SYSTEM_PROMPT = """\
+You are RepoOperator's intent classifier. Decide what the user is asking the
+repository agent to do. Return JSON only; do not include markdown or prose.
+
+Schema:
+{
+  "intent": "read_only_question|repo_analysis|recommend_change_targets|write_request|write_confirmation|file_clarification_answer|local_command_request|git_workflow_request|gitlab_mr_request|ambiguous",
+  "confidence": 0.0,
+  "target_files": [],
+  "target_symbols": [],
+  "requested_action": "short action summary",
+  "needs_tool": null,
+  "needs_clarification": false,
+  "clarification_question": null
+}
+
+Intent guidance:
+- read_only_question: answer or explain code without changing files or running local commands.
+- repo_analysis: inspect the repository structure and explain architecture or health.
+- recommend_change_targets: recommend concrete files to inspect or improve; do not require a file first.
+- write_request: user asks for a code/file change or a change proposal.
+- write_confirmation: user confirms a previous suggestion/proposal should be applied or prepared.
+- file_clarification_answer: user chooses from previously offered candidate files.
+- local_command_request: user asks to run a local command such as git status, npm install, or shell command.
+- git_workflow_request: user asks to commit, push, inspect branch/status/diff/log, or otherwise perform git workflow steps.
+- gitlab_mr_request: user asks about GitLab merge requests, pipelines, or MR creation.
+- ambiguous: there is not enough context to safely decide.
+
+Use recent thread context, pending candidates, and pending proposals. Korean and
+English requests are both expected. Do not expose hidden reasoning.
+"""
 
 
 class PendingState(TypedDict, total=False):
@@ -139,6 +130,14 @@ class OrchestrationState(TypedDict, total=False):
     confidence: float
     intent_reason: str
     file_hints: list[str]
+    target_files: list[str]
+    target_symbols: list[str]
+    requested_action: str | None
+    needs_tool: str | None
+    needs_clarification: bool
+    clarification_question: str | None
+    classifier: str
+    validation_status: str
     candidates: list[str]
     selected_file: str | None
     instruction: str
@@ -198,10 +197,25 @@ def _context_reference_debug(state: OrchestrationState) -> dict[str, Any]:
     return {
         "context_reference_resolver": trace.get("context_reference_resolver"),
         "resolved_reference_type": trace.get("resolved_reference_type"),
-        "resolved_files": trace.get("resolved_files") or [],
-        "resolved_symbols": trace.get("resolved_symbols") or [],
         "reference_confidence": trace.get("confidence"),
         "reference_clarification_needed": trace.get("clarification_needed"),
+    }
+
+
+def _classifier_debug(state: OrchestrationState) -> dict[str, Any]:
+    resolved_files = []
+    if state.get("selected_file"):
+        resolved_files = [state["selected_file"]]
+    elif state.get("target_files"):
+        resolved_files = state.get("target_files", [])
+    elif state.get("candidates"):
+        resolved_files = state.get("candidates", [])
+    return {
+        "classifier": state.get("classifier") or "llm",
+        "classifier_confidence": state.get("confidence"),
+        "resolved_files": resolved_files,
+        "resolved_symbols": state.get("target_symbols") or [],
+        "validation_status": state.get("validation_status") or "pending",
     }
 
 
@@ -239,60 +253,91 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
         "thread_context": thread_context,
         "context_source": "retrieval",
         "context_reference": None,
+        "classifier": "llm",
+        "validation_status": "not_started",
         "graph_path": "load_context",
     }
+
+
+def _validate_active_repository_context(state: OrchestrationState) -> dict[str, Any]:
+    request = state["request"]
+    active_repository = get_active_repository()
+    if active_repository is None:
+        return {"graph_path": f"{state.get('graph_path', '')}->validate_active_repository"}
+    if request.git_provider and active_repository.git_provider != request.git_provider:
+        raise ValueError(
+            "Active repository source changed before the answer was generated. "
+            "Open the selected repository again and retry."
+        )
+    if active_repository.project_path != request.project_path:
+        raise ValueError(
+            "Active repository context does not match this agent request. "
+            f"Active: {active_repository.git_provider}:{active_repository.project_path}; "
+            f"request: {request.git_provider or 'unknown'}:{request.project_path}."
+        )
+    if request.branch and active_repository.branch and request.branch != active_repository.branch:
+        raise ValueError(
+            "Active repository branch changed before the answer was generated. "
+            f"Active branch: {active_repository.branch}; request branch: {request.branch}."
+        )
+    return {"graph_path": f"{state.get('graph_path', '')}->validate_active_repository"}
 
 
 def _classify_intent(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
     pending = state.get("pending", {})
-    task = request.task.strip()
-    file_hints = _extract_file_hints(task)
+    thread_context: ThreadContext = state.get("thread_context") or ThreadContext(
+        request.project_path,
+        request.branch,
+    )
+    file_hints = _extract_file_hints(request.task)
+    classification = _classify_with_llm(state, file_hints)
+    if classification is None:
+        classification = _fallback_classification(state, file_hints)
 
-    intent: Intent = "read_only_question"
-    confidence = 0.72
-    reason = "deterministic"
+    intent = _normalize_intent(classification.get("intent"))
+    confidence = _safe_float(classification.get("confidence"), default=0.0)
+    target_files = _validate_classifier_files(
+        request.project_path,
+        [str(item) for item in classification.get("target_files") or []],
+    )
+    target_symbols = [
+        str(symbol)
+        for symbol in (classification.get("target_symbols") or [])
+        if str(symbol) in thread_context.symbols or str(symbol).strip()
+    ][:8]
 
-    # 1. Definite: user is answering a pending clarification
-    if pending.get("candidates") and _matches_pending_candidate(task, pending["candidates"]):
-        intent = "file_clarification_answer"
-        confidence = 0.96
+    if not target_files and target_symbols:
+        target_files = _validate_classifier_files(
+            request.project_path,
+            [thread_context.symbols[symbol] for symbol in target_symbols if symbol in thread_context.symbols],
+        )
 
-    # 2. Definite: domain-specific tool/command requests (deterministic is reliable here)
-    elif _is_recommend_change_targets(task):
-        intent = "recommend_change_targets"
-        confidence = 0.9
-    elif _is_repo_analysis(task):
-        intent = "repo_analysis"
-        confidence = 0.86
-    elif _is_local_tool_request(task):
-        intent = "local_tool_request"
-        confidence = 0.9
-    elif _is_local_command_request(task):
-        intent = "local_command_request"
-        confidence = 0.9
+    candidates = []
+    if intent == "file_clarification_answer" and pending.get("candidates"):
+        selected = _select_from_candidates(request.task, pending["candidates"])
+        if selected:
+            target_files = [selected]
+        else:
+            candidates = list(pending["candidates"])
 
-    # 3. Definite: explicit file hints + write language = write_request
-    elif file_hints and _has_write_language(task):
-        intent = "write_request"
-        confidence = 0.94
-
-    # 4. Likely write: write keywords present (no explicit file yet — resolve_context_reference handles target)
-    elif _has_write_language(task):
-        intent = "write_request"
-        confidence = 0.82
-
-    # 5. Ambiguous: use LLM to classify when there is prior suggestion context
-    elif pending.get("suggestion"):
-        llm_intent = _classify_with_llm(request, pending, file_hints)
-        if llm_intent:
-            intent, confidence, reason = llm_intent
+    if classification.get("needs_clarification") and not candidates:
+        candidates = target_files or pending.get("candidates") or thread_context.recent_files[:8]
 
     return {
         "intent": intent,
         "confidence": confidence,
-        "intent_reason": reason,
+        "intent_reason": str(classification.get("requested_action") or ""),
         "file_hints": file_hints,
+        "target_files": target_files,
+        "target_symbols": target_symbols,
+        "requested_action": classification.get("requested_action"),
+        "needs_tool": classification.get("needs_tool"),
+        "needs_clarification": bool(classification.get("needs_clarification")),
+        "clarification_question": classification.get("clarification_question"),
+        "classifier": str(classification.get("classifier") or "llm"),
+        "candidates": candidates,
+        "validation_status": "classified",
         "graph_path": f"{state.get('graph_path', '')}->classify_intent",
     }
 
@@ -327,6 +372,7 @@ def _resolve_target_files(state: OrchestrationState) -> dict[str, Any]:
                 selected_target_file=proposal_file,
                 intent_classification=intent,
                 graph_path="write_confirmation_existing_proposal",
+                **_classifier_debug(state),
             )
             return {"result": result}
         if pending.get("selected_file"):
@@ -348,12 +394,21 @@ def _resolve_target_files(state: OrchestrationState) -> dict[str, Any]:
         return {
             "selected_file": pending["selected_file"],
             "instruction": request.task,
+            "validation_status": "target_file_valid",
+            "graph_path": f"{state.get('graph_path', '')}->resolve_target_files",
+        }
+    if intent in {"write_request", "write_confirmation", "file_clarification_answer"} and state.get("target_files"):
+        return {
+            "selected_file": state["target_files"][0],
+            "instruction": _find_previous_write_instruction(request) or request.task,
+            "validation_status": "target_file_valid",
             "graph_path": f"{state.get('graph_path', '')}->resolve_target_files",
         }
     if intent == "write_request" and state.get("candidates"):
         return {
             "selected_file": None,
             "candidates": state.get("candidates", []),
+            "validation_status": "needs_clarification",
             "graph_path": f"{state.get('graph_path', '')}->resolve_target_files",
         }
 
@@ -364,6 +419,7 @@ def _resolve_target_files(state: OrchestrationState) -> dict[str, Any]:
     return {
         "selected_file": selected,
         "candidates": candidates,
+        "validation_status": "target_file_valid" if selected else "needs_clarification",
         "graph_path": f"{state.get('graph_path', '')}->resolve_target_files",
     }
 
@@ -382,6 +438,7 @@ def _permission_required(state: OrchestrationState) -> dict[str, Any]:
         thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
         thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
         context_source=state.get("context_source"),
+        **_classifier_debug(state),
     )
     return {"result": result, "graph_path": "permission_required"}
 
@@ -393,7 +450,7 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
     context_ref = state.get("context_reference")
 
     # Use LLM-generated clarification question when available
-    llm_question = (context_ref.clarification_question if context_ref else None)
+    llm_question = state.get("clarification_question") or (context_ref.clarification_question if context_ref else None)
 
     if candidates:
         rendered = "\n".join(f"- `{candidate}`" for candidate in candidates)
@@ -435,6 +492,7 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
         thread_context_symbols=thread_context.symbol_names,
         context_source=state.get("context_source"),
         **_context_reference_debug(state),
+        **_classifier_debug(state),
     )
     return {"result": result, "graph_path": "clarification"}
 
@@ -495,6 +553,7 @@ def _recommend_change_targets(state: OrchestrationState) -> dict[str, Any]:
         thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
         context_source=state.get("context_source"),
         **_context_reference_debug(state),
+        **_classifier_debug(state),
     ).model_copy(
         update={
             "context_summary": context.summary,
@@ -519,6 +578,7 @@ def _generate_change_plan(state: OrchestrationState) -> dict[str, Any]:
     return {
         "plan": plan,
         "instruction": state.get("instruction") or request.task,
+        "validation_status": state.get("validation_status") or "target_file_valid",
         "graph_path": f"{state.get('graph_path', '')}->generate_change_plan",
     }
 
@@ -552,12 +612,12 @@ def _validate_patch(state: OrchestrationState) -> dict[str, Any]:
     if proposal is None:
         return {"error": state.get("error") or "No proposal was generated."}
     if proposal.relative_path != state.get("selected_file"):
-        return {"error": "Proposal target did not match the selected file."}
+        return {"error": "Proposal target did not match the selected file.", "validation_status": "invalid_proposal_target"}
     if proposal.original_content == proposal.proposed_content:
-        return {"error": "Proposal did not change the selected file."}
+        return {"error": "Proposal did not change the selected file.", "validation_status": "invalid_empty_change"}
     if not proposal.proposed_content.strip():
-        return {"error": "Proposal replacement content was empty."}
-    return {"graph_path": f"{state.get('graph_path', '')}->validate_patch"}
+        return {"error": "Proposal replacement content was empty.", "validation_status": "invalid_empty_replacement"}
+    return {"validation_status": "valid_proposal", "graph_path": f"{state.get('graph_path', '')}->validate_patch"}
 
 
 def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
@@ -580,6 +640,7 @@ def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
         thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
         context_source=state.get("context_source"),
         **_context_reference_debug(state),
+        **_classifier_debug(state),
     ).model_copy(update={"model": proposal.model})
     return {"result": result, "graph_path": "proposal"}
 
@@ -599,6 +660,7 @@ def _proposal_error(state: OrchestrationState) -> dict[str, Any]:
         thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
         thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
         context_source=state.get("context_source"),
+        **_classifier_debug(state),
     )
     return {"result": result, "graph_path": "proposal_error"}
 
@@ -619,6 +681,11 @@ def _answer_read_only(state: OrchestrationState) -> dict[str, Any]:
             "graph_path": "read_only",
             "agent_flow": "langgraph",
             "skills_used": state.get("skills_used", []),
+            "classifier": state.get("classifier") or "llm",
+            "classifier_confidence": state.get("confidence"),
+            "resolved_files": state.get("target_files") or [],
+            "resolved_symbols": state.get("target_symbols") or [],
+            "validation_status": state.get("validation_status") or "classified",
         }
     )
     return {"result": result, "graph_path": "read_only"}
@@ -657,6 +724,7 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
                 thread_context_files=tc_files,
                 thread_context_symbols=tc_symbols,
                 context_source=state.get("context_source"),
+                **_classifier_debug(state),
             )
         else:
             result_response = _base_response(
@@ -675,6 +743,7 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
                 thread_context_files=tc_files,
                 thread_context_symbols=tc_symbols,
                 context_source=state.get("context_source"),
+                **_classifier_debug(state),
             )
         return {"result": result_response, "graph_path": "local_tool_request"}
 
@@ -705,6 +774,7 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
                 thread_context_files=tc_files,
                 thread_context_symbols=tc_symbols,
                 context_source=state.get("context_source"),
+                **_classifier_debug(state),
             )
             return {"result": result_response, "graph_path": "local_tool_request"}
     except (OSError, subprocess.TimeoutExpired):
@@ -741,6 +811,7 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
         thread_context_files=tc_files,
         thread_context_symbols=tc_symbols,
         context_source=state.get("context_source"),
+        **_classifier_debug(state),
     )
     return {"result": result_response, "graph_path": "local_tool_request"}
 
@@ -767,7 +838,7 @@ def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
     from repooperator_worker.services.command_service import preview_command, run_command_with_policy
 
-    command, reason = _command_for_task(request.task)
+    command, reason = _command_for_classification(state)
     preview = preview_command(command, reason=reason)
     if preview.get("blocked"):
         result = _base_response(
@@ -778,6 +849,7 @@ def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
             intent_classification=state.get("intent"),
             graph_path="command_denied",
             context_source=state.get("context_source"),
+            **_classifier_debug(state),
         )
         return {"result": result, "graph_path": "command_denied"}
     if preview.get("needs_approval"):
@@ -789,6 +861,7 @@ def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
             intent_classification=state.get("intent"),
             graph_path="command_approval",
             context_source=state.get("context_source"),
+            **_classifier_debug(state),
         )
         return {"result": result, "graph_path": "command_approval"}
     try:
@@ -805,6 +878,7 @@ def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
             intent_classification=state.get("intent"),
             graph_path="command_result",
             context_source=state.get("context_source"),
+            **_classifier_debug(state),
         )
         return {"result": result, "graph_path": "command_result"}
     except (ValueError, RuntimeError, PermissionError) as exc:
@@ -816,6 +890,7 @@ def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
             intent_classification=state.get("intent"),
             graph_path="command_error",
             context_source=state.get("context_source"),
+            **_classifier_debug(state),
         )
         return {"result": result, "graph_path": "command_error"}
 
@@ -879,9 +954,9 @@ def _after_classify(state: OrchestrationState) -> str:
     intent = state.get("intent")
     if intent == "read_only_question":
         return "answer_read_only"
-    if intent == "local_tool_request":
+    if intent == "gitlab_mr_request":
         return "run_local_tool_request"
-    if intent == "local_command_request":
+    if intent in {"local_command_request", "git_workflow_request"}:
         return "run_local_command_request"
     if intent in {"repo_analysis", "recommend_change_targets"}:
         return "recommend_change_targets"
@@ -912,6 +987,7 @@ def _after_validate(state: OrchestrationState) -> str:
 def _build_graph():
     graph = StateGraph(OrchestrationState)
     graph.add_node("load_context", _load_context)
+    graph.add_node("validate_active_repository", _validate_active_repository_context)
     graph.add_node("classify_intent", _classify_intent)
     graph.add_node("resolve_context_reference", _resolve_context_reference)
     graph.add_node("resolve_target_files", _resolve_target_files)
@@ -927,7 +1003,8 @@ def _build_graph():
     graph.add_node("run_local_tool_request", _run_local_tool_request)
     graph.add_node("run_local_command_request", _run_local_command_request)
     graph.set_entry_point("load_context")
-    graph.add_edge("load_context", "classify_intent")
+    graph.add_edge("load_context", "validate_active_repository")
+    graph.add_edge("validate_active_repository", "classify_intent")
     graph.add_conditional_edges("classify_intent", _after_classify)
     graph.add_edge("resolve_context_reference", "resolve_target_files")
     graph.add_conditional_edges("resolve_target_files", _after_resolve)
@@ -959,6 +1036,8 @@ def run_agent_orchestration_graph(request: AgentRunRequest) -> AgentRunResponse:
 def _node_progress_message(node_name: str, node_state: dict[str, Any]) -> str | None:
     if node_name == "load_context":
         return "Loading repository context"
+    if node_name == "validate_active_repository":
+        return "Validating active repository"
     if node_name == "classify_intent":
         intent = node_state.get("intent", "")
         return f"Intent: {intent.replace('_', ' ')}" if intent else "Classifying intent"
@@ -1026,119 +1105,30 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
         yield json.dumps({"type": "error", "message": "Agent did not produce a result."})
 
 
-def _has_write_language(text: str) -> bool:
-    lowered = text.lower()
-    tokens = set(re.findall(r"[A-Za-z0-9_]+", lowered))
-    return any(keyword in tokens or keyword in lowered for keyword in WRITE_KEYWORDS)
+def _command_for_classification(state: OrchestrationState) -> tuple[list[str], str]:
+    """Plan a deterministic command only after LLM intent classification."""
+    action = str(state.get("requested_action") or "").strip().lower()
+    tool = str(state.get("needs_tool") or "").strip().lower()
 
-
-def _is_recommend_change_targets(text: str) -> bool:
-    lowered = text.lower()
-    return any(keyword in lowered for keyword in RECOMMEND_TARGET_KEYWORDS)
-
-
-def _is_repo_analysis(text: str) -> bool:
-    lowered = text.lower()
-    return any(keyword in lowered for keyword in REPO_ANALYSIS_KEYWORDS)
-
-
-def _is_local_tool_request(text: str) -> bool:
-    lowered = text.lower()
-    has_mr_keyword = (
-        "mr 목록" in lowered
-        or "mr정보" in lowered
-        or "mr 정보" in lowered
-        or "merge request" in lowered
-        or "merge requests" in lowered
-        or "pull request" in lowered
-        or "pr 정보" in lowered
-        or "pr정보" in lowered
-        or re.search(r"\bmr\b", lowered) is not None
-    )
-    has_show_action = any(
-        token in lowered
-        for token in {"show", "list", "보여", "목록", "현재", "read", "알려줘", "알려", "설명", "보여줘"}
-    )
-    return has_mr_keyword and has_show_action
-
-
-def _is_local_command_request(text: str) -> bool:
-    lowered = text.lower()
-    return any(
-        phrase in lowered
-        for phrase in {
-            # Git status / inspect
-            "git 상태",
-            "git status",
-            "현재 git",
-            "현재 브랜치",
-            "git branch",
-            "현재 상태 확인",
-            "git diff",
-            "git log",
-            # Commit
-            "커밋해줘",
-            "커밋 해줘",
-            "commit 해줘",
-            "commit해줘",
-            "커밋해달라",
-            "방금 수정한 내용 커밋",
-            "방금 파일 커밋",
-            "이 내용 커밋",
-            "이내용 반영해서 커밋",
-            "커밋",
-            # Push
-            "git push",
-            "푸시해줘",
-            "push 해줘",
-            # Install
-            "npm install",
-            "pip install",
-            # Dangerous
-            "rm -rf",
-            "ls /",
-            # Generic
-            "command",
-            "run ",
-            "실행",
-        }
-    )
-
-
-def _command_for_task(text: str) -> tuple[list[str], str]:
-    lowered = text.lower()
-    if "npm install" in lowered:
+    if tool == "npm" or "install_dependencies" in action or action == "npm_install":
         return ["npm", "install"], "Install project dependencies. This may modify files and use the network."
-    if "pip install" in lowered:
+    if tool == "pip" or action == "pip_install":
         return ["pip", "install"], "Install Python dependencies. This may modify the environment and use the network."
-    if "rm -rf" in lowered:
-        match = re.search(r"rm\s+-rf\s+([^\s]+)", text, flags=re.IGNORECASE)
-        target = match.group(1) if match else "/tmp/something"
-        return ["rm", "-rf", target], "Delete files recursively. This is destructive."
-    if any(p in lowered for p in ("git push", "푸시해줘", "push 해줘")):
+    if "delete_recursive" in action:
+        return ["rm", "-rf", "/tmp/something"], "Delete files recursively. This is destructive."
+    if "push" in action:
         return ["git", "push"], "Push commits to the configured remote. This requires explicit approval."
-    if "ls /" in lowered:
-        match = re.search(r"ls\s+([/][^\s]+)", text, flags=re.IGNORECASE)
-        target = match.group(1) if match else "/"
-        return ["ls", target], "List a path outside the repository."
-    if any(p in lowered for p in (
-        "커밋해줘", "커밋 해줘", "commit해줘", "commit 해줘", "커밋해달라",
-        "방금 수정한 내용 커밋", "방금 파일 커밋", "이 내용 커밋", "이내용 반영해서 커밋",
-    )):
-        # First run git status to understand what would be committed.
-        # The commit itself requires approval — return status as the first step.
+    if "commit" in action:
         return ["git", "status", "--short"], (
-            "Check which files are staged/modified before committing. "
-            "Review the status, then approve git add + git commit."
+            "Check which files are staged or modified before preparing a commit. "
+            "RepoOperator will propose the commit steps after reviewing status."
         )
-    if any(p in lowered for p in ("git diff", "변경 사항")):
+    if "diff" in action:
         return ["git", "diff", "--stat"], "Show a summary of file changes in the working tree."
-    if any(p in lowered for p in ("git log", "커밋 내역", "commit 내역")):
+    if "log" in action:
         return ["git", "log", "--oneline", "-10"], "Show the last 10 commit log entries."
-    if any(p in lowered for p in ("git branch", "현재 브랜치", "브랜치 확인")):
+    if "branch" in action:
         return ["git", "branch", "--show-current"], "Show the currently checked-out branch."
-    if any(p in lowered for p in ("git status", "git 상태", "현재 git", "현재 상태 확인")):
-        return ["git", "status", "--short"], "Check the current repository working tree status."
     return ["git", "status", "--short"], "Check the current repository working tree status."
 
 
@@ -1298,50 +1288,183 @@ def _levenshtein(a: str, b: str) -> int:
 
 
 def _classify_with_llm(
-    request: AgentRunRequest,
-    pending: PendingState,
+    state: OrchestrationState,
     file_hints: list[str],
-) -> tuple[Intent, float, str] | None:
+) -> dict[str, Any] | None:
+    request = state["request"]
+    pending = state.get("pending", {})
+    thread_context: ThreadContext = state.get("thread_context") or ThreadContext(
+        request.project_path,
+        request.branch,
+    )
+    recent_messages = [
+        {"role": message.role, "content": message.content[:500]}
+        for message in request.conversation_history[-8:]
+        if message.role in {"user", "assistant"}
+    ]
+    classifier_hints = {
+        "file_hints": file_hints,
+        "has_pending_candidates": bool(pending.get("candidates")),
+        "has_pending_proposal": bool(pending.get("proposal_file")),
+        "recent_files_count": len(thread_context.recent_files),
+        "recent_symbols_count": len(thread_context.symbols),
+    }
     try:
         client = OpenAICompatibleModelClient()
         text = client.generate_text(
             ModelGenerationRequest(
-                system_prompt=(
-                    "Classify the user's repository assistant message. "
-                    "Return JSON only: {\"intent\":\"read_only_question|write_request|write_confirmation|file_clarification_answer|ambiguous\","
-                    "\"confidence\":0.0,\"reason\":\"short\"}."
-                ),
+                system_prompt=CLASSIFIER_SYSTEM_PROMPT,
                 user_prompt=json.dumps(
                     {
                         "message": request.task,
-                        "file_hints": file_hints,
+                        "active_repo": request.project_path,
+                        "active_branch": request.branch,
+                        "recent_messages": recent_messages,
+                        "last_analyzed_file": thread_context.last_analyzed_file,
+                        "recent_files": thread_context.recent_files[:8],
+                        "mentioned_symbols": thread_context.symbol_names[:12],
                         "pending_candidates": pending.get("candidates", []),
+                        "pending_proposal": pending.get("proposal_file"),
+                        "pending_selected_file": pending.get("selected_file"),
+                        "pending_suggestion": (pending.get("suggestion") or "")[:500],
+                        "classifier_hints": classifier_hints,
                     },
                     ensure_ascii=False,
                 ),
             )
         )
-        payload = json.loads(text.strip().strip("`"))
-        intent = payload.get("intent")
-        if intent in {
-            "read_only_question",
-            "repo_analysis",
-            "recommend_change_targets",
-            "write_request",
-            "write_confirmation",
-            "file_clarification_answer",
-            "ambiguous",
-        }:
-            return intent, float(payload.get("confidence", 0.6)), "llm"
+        payload = _parse_classifier_json(text)
+        if payload and _normalize_intent(payload.get("intent")) in SUPPORTED_INTENTS:
+            payload["classifier"] = "llm"
+            return payload
     except Exception as exc:  # noqa: BLE001
-        logger.debug("LLM intent classification fallback used: %r", exc)
+        logger.info("LLM intent classification unavailable; using deterministic fallback hints: %r", exc)
     return None
+
+
+def _parse_classifier_json(text: str) -> dict[str, Any] | None:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = "\n".join(lines)
+    try:
+        payload = json.loads(cleaned)
+        return payload if isinstance(payload, dict) else None
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not match:
+            return None
+        try:
+            payload = json.loads(match.group(0))
+            return payload if isinstance(payload, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+
+def _normalize_intent(value: Any) -> Intent:
+    intent = str(value or "ambiguous").strip()
+    if intent == "local_tool_request":
+        return "gitlab_mr_request"
+    if intent in SUPPORTED_INTENTS:
+        return intent  # type: ignore[return-value]
+    return "ambiguous"
+
+
+def _safe_float(value: Any, *, default: float) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _validate_classifier_files(project_path: str, files: list[str]) -> list[str]:
+    if not files:
+        return []
+    try:
+        repo_path = resolve_project_path(project_path).resolve()
+    except (OSError, ValueError):
+        return []
+    valid: list[str] = []
+    for item in files:
+        if not item:
+            continue
+        candidate = (repo_path / item.lstrip("/")).resolve()
+        try:
+            candidate.relative_to(repo_path)
+        except ValueError:
+            continue
+        if candidate.is_file():
+            relative = str(candidate.relative_to(repo_path))
+            if relative not in valid:
+                valid.append(relative)
+    return valid
+
+
+def _fallback_classification(state: OrchestrationState, file_hints: list[str]) -> dict[str, Any]:
+    """Low-priority fallback used only when the configured model is unavailable."""
+    request = state["request"]
+    pending = state.get("pending", {})
+    lowered = request.task.lower()
+    if pending.get("candidates") and _matches_pending_candidate(request.task, pending["candidates"]):
+        return _classification_payload(
+            intent="file_clarification_answer",
+            confidence=0.7,
+            requested_action="select_candidate",
+            classifier="deterministic_fallback",
+        )
+    if file_hints:
+        return _classification_payload(
+            intent="write_request",
+            confidence=0.55,
+            target_files=file_hints,
+            requested_action="edit_file",
+            classifier="deterministic_fallback",
+        )
+    if "mr" in lowered or "merge request" in lowered:
+        return _classification_payload(
+            intent="gitlab_mr_request",
+            confidence=0.55,
+            requested_action="list_merge_requests",
+            needs_tool="glab",
+            classifier="deterministic_fallback",
+        )
+    return _classification_payload(
+        intent="read_only_question",
+        confidence=0.4,
+        requested_action="answer",
+        classifier="deterministic_fallback",
+    )
+
+
+def _classification_payload(
+    *,
+    intent: str,
+    confidence: float,
+    target_files: list[str] | None = None,
+    target_symbols: list[str] | None = None,
+    requested_action: str,
+    needs_tool: str | None = None,
+    classifier: str,
+) -> dict[str, Any]:
+    return {
+        "intent": intent,
+        "confidence": confidence,
+        "target_files": target_files or [],
+        "target_symbols": target_symbols or [],
+        "requested_action": requested_action,
+        "needs_tool": needs_tool,
+        "needs_clarification": False,
+        "clarification_question": None,
+        "classifier": classifier,
+    }
 
 
 def _find_previous_write_instruction(request: AgentRunRequest) -> str | None:
     for message in reversed(request.conversation_history):
-        if message.role != "user":
-            continue
-        if _has_write_language(message.content):
+        if message.role == "user":
             return message.content
     return None

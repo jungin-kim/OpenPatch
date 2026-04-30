@@ -158,6 +158,24 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
               <span className="tool-meta-value">{metadata.intent_classification}</span>
             </div>
           )}
+          {metadata.classifier && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Classifier</span>
+              <span className="tool-meta-value">{metadata.classifier}</span>
+            </div>
+          )}
+          {metadata.classifier_confidence !== undefined && metadata.classifier_confidence !== null && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Classifier confidence</span>
+              <span className="tool-meta-value">{Math.round(metadata.classifier_confidence * 100)}%</span>
+            </div>
+          )}
+          {metadata.validation_status && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Validation</span>
+              <span className="tool-meta-value">{metadata.validation_status}</span>
+            </div>
+          )}
           {metadata.graph_path && (
             <div className="tool-meta-item">
               <span className="tool-meta-label">Graph path</span>

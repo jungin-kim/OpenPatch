@@ -152,7 +152,7 @@ export type AgentRunPayload = {
   files_read: string[];
   response: string;
   // Write-intent routing fields
-  response_type?: "assistant_answer" | "change_proposal" | "permission_required" | "clarification" | "proposal_error" | "command_approval" | "command_result" | "command_denied" | "command_error";
+  response_type?: "assistant_answer" | "change_proposal" | "permission_required" | "clarification" | "proposal_error" | "command_approval" | "command_result" | "command_denied" | "command_error" | "agent_error";
   proposal_relative_path?: string | null;
   proposal_original_content?: string | null;
   proposal_proposed_content?: string | null;
@@ -176,6 +176,9 @@ export type AgentRunPayload = {
   resolved_symbols?: string[];
   reference_confidence?: number | null;
   reference_clarification_needed?: boolean | null;
+  classifier?: string | null;
+  classifier_confidence?: number | null;
+  validation_status?: string | null;
 };
 
 export type CommandApprovalPayload = {

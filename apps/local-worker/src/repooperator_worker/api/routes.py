@@ -452,8 +452,34 @@ def agent_run(request: AgentRunRequest) -> AgentRunResponse:
     run_id = new_run_id()
     start = time.perf_counter()
     response: AgentRunResponse | None = None
+    record_event(
+        event_type="agent_run_started",
+        repo=request.project_path,
+        branch=request.branch,
+        summary=request.task,
+    )
     try:
         response = run_agent_task(request).model_copy(update={"run_id": run_id})
+        record_event(
+            event_type="agent_classifier",
+            repo=request.project_path,
+            branch=request.branch,
+            status=response.response_type,
+            summary=(
+                f"classifier={response.classifier or 'unknown'} "
+                f"intent={response.intent_classification or 'unknown'} "
+                f"confidence={response.classifier_confidence if response.classifier_confidence is not None else 'unknown'}"
+            ),
+            files=response.resolved_files or response.files_read,
+        )
+        record_event(
+            event_type="agent_validation",
+            repo=request.project_path,
+            branch=request.branch,
+            status=response.validation_status or "unknown",
+            summary=response.graph_path or "",
+            files=response.files_read,
+        )
         for file_path in response.files_read:
             record_event(
                 event_type="file_read",

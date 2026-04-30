@@ -217,6 +217,9 @@ class AgentRunResponse(BaseModel):
     resolved_symbols: list[str] = []
     reference_confidence: float | None = None
     reference_clarification_needed: bool | None = None
+    classifier: str | None = None
+    classifier_confidence: float | None = None
+    validation_status: str | None = None
 
 
 class LocalBranchSummary(BaseModel):
