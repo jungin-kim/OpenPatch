@@ -50,6 +50,7 @@ class Settings:
     repooperator_config_path: Path
     repooperator_home_dir: Path
     configured_git_provider: str | None
+    configured_repository_sources: list[dict]
     configured_model_connection_mode: str | None
     configured_model_provider: str | None
     configured_model_name: str | None
@@ -128,6 +129,7 @@ def get_settings() -> Settings:
         repooperator_config_path=repooperator_config_path,
         repooperator_home_dir=repooperator_config_path.parent,
         configured_git_provider=_resolve_configured_git_provider(runtime_config),
+        configured_repository_sources=_resolve_configured_repository_sources(runtime_config),
         configured_model_connection_mode=_resolve_configured_model_connection_mode(runtime_config),
         configured_model_provider=_resolve_configured_model_provider(runtime_config),
         configured_model_name=_resolve_configured_model_name(runtime_config),
@@ -208,6 +210,46 @@ def _resolve_configured_git_provider(runtime_config: dict) -> str | None:
     if provider in {"gitlab", "github", "local"}:
         return provider
     return None
+
+
+def _resolve_configured_repository_sources(runtime_config: dict) -> list[dict]:
+    sources: list[dict] = []
+    for source in _iter_repository_source_configs(runtime_config):
+        provider = _normalize_optional_value(source.get("provider"))
+        if provider not in {"gitlab", "github", "local"}:
+            continue
+        sources.append(_safe_repository_source_summary(source))
+    provider_config = runtime_config.get("gitProvider")
+    if isinstance(provider_config, dict):
+        provider = _normalize_optional_value(provider_config.get("provider"))
+        if provider in {"gitlab", "github", "local"}:
+            sources.insert(0, _safe_repository_source_summary(provider_config))
+    return _dedupe_repository_source_summaries(sources)
+
+
+def _safe_repository_source_summary(source: dict) -> dict:
+    provider = _normalize_optional_value(source.get("provider"))
+    summary = {
+        "provider": provider,
+        "baseUrl": _normalize_optional_url(source.get("baseUrl")),
+        "tokenConfigured": bool(_normalize_optional_value(source.get("token"))),
+    }
+    owner = _normalize_optional_value(source.get("owner"))
+    if owner:
+        summary["owner"] = owner
+    return summary
+
+
+def _dedupe_repository_source_summaries(sources: list[dict]) -> list[dict]:
+    seen: set[tuple[str | None, str | None, str | None]] = set()
+    deduped: list[dict] = []
+    for source in sources:
+        key = (source.get("provider"), source.get("baseUrl"), source.get("owner"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(source)
+    return deduped
 
 
 _LOCAL_RUNTIME_PROVIDERS = {"ollama", "vllm"}

@@ -33,6 +33,9 @@ def get_debug_runtime_status() -> dict:
             "source": active.git_provider if active else None,
             "project_path": active.project_path if active else None,
             "branch": active.branch if active else None,
+            "configured_default_source": settings.configured_git_provider,
+            "configured_sources": settings.configured_repository_sources,
+            "effective_sources": settings.configured_repository_sources,
         },
         "agent": {
             "orchestration_mode": "LangGraph",

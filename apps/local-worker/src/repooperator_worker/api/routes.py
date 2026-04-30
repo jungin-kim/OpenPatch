@@ -108,6 +108,7 @@ def health() -> HealthResponse:
         repo_base_dir=str(settings.repo_base_dir),
         configured_git_provider=settings.configured_git_provider,
         configured_repository_source=settings.configured_git_provider,
+        configured_repository_sources=settings.configured_repository_sources,
         configured_model_connection_mode=settings.configured_model_connection_mode,
         configured_model_provider=settings.configured_model_provider,
         configured_model_name=settings.configured_model_name,
@@ -138,6 +139,9 @@ def admin_reload_config() -> dict:
         "configured_model_provider": settings.configured_model_provider,
         "configured_model_name": settings.configured_model_name,
         "configured_model_base_url": settings.openai_base_url,
+        "configured_git_provider": settings.configured_git_provider,
+        "configured_repository_sources": settings.configured_repository_sources,
+        "effective_repository_sources": settings.configured_repository_sources,
         "config_loaded_at": settings.config_loaded_at,
         "config_source_path": str(settings.repooperator_config_path),
         "config_hash": settings.config_hash,
@@ -515,6 +519,25 @@ def agent_run(request: AgentRunRequest) -> AgentRunResponse:
                 branch=request.branch,
                 summary=response.response,
                 files=[response.proposal_relative_path] if response.proposal_relative_path else [],
+            )
+        if response.response_type == "edit_applied":
+            for record in response.edit_archive:
+                record_event(
+                    event_type="file_edited",
+                    repo=request.project_path,
+                    branch=request.branch,
+                    summary=(
+                        f"Edited {record.get('file_path')} "
+                        f"+{record.get('additions', 0)} -{record.get('deletions', 0)}"
+                    ),
+                    files=[record.get("file_path")] if record.get("file_path") else [],
+                )
+            record_event(
+                event_type="final_summary",
+                repo=request.project_path,
+                branch=request.branch,
+                summary=response.response,
+                files=[record.get("file_path") for record in response.edit_archive if record.get("file_path")],
             )
         maybe_record_from_agent_run(request, response)
         return response

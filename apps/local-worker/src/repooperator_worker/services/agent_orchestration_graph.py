@@ -26,11 +26,13 @@ from repooperator_worker.schemas import (
     AgentProposeFileRequest,
     AgentRunRequest,
     AgentRunResponse,
+    FileWriteRequest,
 )
 from repooperator_worker.services.active_repository import get_active_repository
 from repooperator_worker.services.common import resolve_project_path
 from repooperator_worker.services.context_service import build_query_aware_context
 from repooperator_worker.services.edit_service import propose_file_edit
+from repooperator_worker.services.file_service import write_text_file
 from repooperator_worker.services.model_client import (
     ModelGenerationRequest,
     OpenAICompatibleModelClient,
@@ -228,7 +230,7 @@ def _base_response(
         context_summary="",
         top_level_entries=[],
         readme_included=False,
-        diff_included=response_type == "change_proposal",
+        diff_included=response_type in {"change_proposal", "edit_applied"},
         is_git_repository=True,
         files_read=files_read or [],
         response=response,
@@ -317,6 +319,17 @@ def _activity_event(
         "command": command,
         "proposal_id": proposal_id,
     }
+
+
+def _finalize_activity_events(events: list[dict[str, Any]], *, status: str = "completed") -> list[dict[str, Any]]:
+    finalized: list[dict[str, Any]] = []
+    now = _utc_now()
+    for event in events:
+        if event.get("status") == "running":
+            finalized.append({**event, "status": status, "ended_at": event.get("ended_at") or now})
+        else:
+            finalized.append(event)
+    return finalized
 
 
 def _context_reference_debug(state: OrchestrationState) -> dict[str, Any]:
@@ -894,21 +907,30 @@ def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
     proposal = state["proposal"]
     proposal_id = f"proposal-{uuid.uuid4().hex[:10]}"
+    write_text_file(
+        FileWriteRequest(
+            project_path=request.project_path,
+            relative_path=proposal.relative_path,
+            content=proposal.proposed_content,
+        )
+    )
     edit_archive = [
         _edit_archive_record(
             file_path=proposal.relative_path,
-            status="proposed",
+            status="modified",
             original=proposal.original_content,
             proposed=proposal.proposed_content,
             summary=proposal.context_summary,
             proposal_id=proposal_id,
             plan_id=state.get("plan_id"),
+            apply_result=f"Modified {proposal.relative_path}",
         )
     ]
+    summary = _generate_edit_result_summary(request, state, edit_archive)
     result = _base_response(
         request,
-        response=f"Proposed change to `{proposal.relative_path}`. Review the diff and apply if it looks correct.",
-        response_type="change_proposal",
+        response=summary,
+        response_type="edit_applied",
         files_read=[proposal.relative_path],
         proposal_relative_path=proposal.relative_path,
         proposal_original_content=proposal.original_content,
@@ -919,9 +941,9 @@ def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
         recommendation_context=state.get("recommendation_context"),
         proposal_validation_status=state.get("validation_status"),
         intent_classification=state.get("intent"),
-        graph_path="proposal",
+        graph_path="edit_applied",
         loop_iteration=state.get("loop_iteration", 1),
-        stop_reason="waiting_for_apply",
+        stop_reason="completed",
         skills_used=state.get("skills_used", []),
         thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
         thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
@@ -929,7 +951,63 @@ def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
         **_context_reference_debug(state),
         **_classifier_debug(state),
     ).model_copy(update={"model": proposal.model})
-    return {"result": result, "graph_path": "proposal"}
+    return {"result": result, "graph_path": "edit_applied"}
+
+
+def _generate_edit_result_summary(
+    request: AgentRunRequest,
+    state: OrchestrationState,
+    edit_archive: list[dict[str, Any]],
+) -> str:
+    files = [record["file_path"] for record in edit_archive]
+    stats = ", ".join(
+        f"`{record['file_path']}` +{record['additions']} -{record['deletions']}"
+        for record in edit_archive
+    )
+    plan = state.get("plan") or state.get("instruction") or request.task
+    tests = _suggest_tests_for_changed_files(files)
+    fallback = (
+        f"Modified {', '.join(f'`{file}`' for file in files)}.\n\n"
+        f"What changed: {stats}.\n\n"
+        f"Why: {plan[:500]}\n\n"
+        "RepoOperator has not committed, pushed, or created a merge request."
+    )
+    if tests:
+        fallback += "\n\nSuggested verification:\n" + "\n".join(f"- `{test}`" for test in tests)
+    try:
+        response = OpenAICompatibleModelClient().generate_text(
+            ModelGenerationRequest(
+                system_prompt=(
+                    "You are RepoOperator. Write a concise post-edit summary for the user. "
+                    "Mention what changed, why, changed files, behavior impact, and suggested verification. "
+                    "State naturally that no commit, push, or MR was created. "
+                    + language_guidance_for_task(request.task)
+                ),
+                user_prompt=json.dumps(
+                    {
+                        "user_request": request.task,
+                        "plan": plan,
+                        "edit_archive": edit_archive,
+                        "suggested_tests": tests,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        cleaned, _ = clean_user_visible_response(response, user_task=request.task)
+        return cleaned or fallback
+    except (ValueError, RuntimeError):
+        return fallback
+
+
+def _suggest_tests_for_changed_files(files: list[str]) -> list[str]:
+    if any(file.endswith(".py") for file in files):
+        return ["python -m pytest"]
+    if any(file.endswith((".ts", ".tsx", ".js", ".jsx")) for file in files):
+        return ["npm test"]
+    if any("dockerfile" in file.lower() or file.endswith((".yml", ".yaml")) for file in files):
+        return ["git diff --stat"]
+    return ["git diff --stat"]
 
 
 def _proposal_error(state: OrchestrationState) -> dict[str, Any]:
@@ -1645,10 +1723,9 @@ def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
 
     combined_text = _format_plan_summary(steps, step_results, request)
 
-    # Use last write proposal if present, otherwise assistant_answer
-    last_proposal = next(
-        (r for r in reversed(step_results) if r.get("proposal_path")), None
-    )
+    applied_edits = [r for r in step_results if r.get("edit_archive")]
+    edit_archive = [record for result in applied_edits for record in result.get("edit_archive", [])]
+    last_edit = applied_edits[-1] if applied_edits else None
     all_files = list({r["file"] for r in step_results if r.get("file")})
     plan_steps_summary = [
         {
@@ -1665,8 +1742,12 @@ def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
     thread_context = state.get("thread_context") or ThreadContext(request.project_path, request.branch)
     result_response = _base_response(
         request,
-        response=combined_text,
-        response_type="change_proposal" if last_proposal else "assistant_answer",
+        response=(
+            _generate_edit_result_summary(request, state, edit_archive)
+            if edit_archive
+            else combined_text
+        ),
+        response_type="edit_applied" if edit_archive else "assistant_answer",
         files_read=all_files,
         intent_classification="multi_step_request",
         graph_path="decompose_and_execute",
@@ -1674,11 +1755,13 @@ def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
         thread_context_files=thread_context.recent_files,
         thread_context_symbols=thread_context.symbol_names,
         context_source=state.get("context_source"),
-        proposal_relative_path=last_proposal["proposal_path"] if last_proposal else None,
-        proposal_original_content=last_proposal["original_content"] if last_proposal else None,
-        proposal_proposed_content=last_proposal["proposed_content"] if last_proposal else None,
-        proposal_context_summary=last_proposal.get("context_summary") if last_proposal else None,
-        selected_target_file=last_proposal["proposal_path"] if last_proposal else None,
+        proposal_relative_path=last_edit["proposal_path"] if last_edit else None,
+        proposal_original_content=last_edit["original_content"] if last_edit else None,
+        proposal_proposed_content=last_edit["proposed_content"] if last_edit else None,
+        proposal_context_summary=last_edit.get("context_summary") if last_edit else None,
+        selected_target_file=last_edit["proposal_path"] if last_edit else None,
+        edit_archive=edit_archive,
+        stop_reason="completed",
         plan_steps_summary=plan_steps_summary,
         **_classifier_debug(state),
     )
@@ -1788,8 +1871,6 @@ def _execute_plan_step(
 
     if intent == "write" and file:
         try:
-            from repooperator_worker.services.edit_service import propose_file_edit
-
             proposal = propose_file_edit(
                 AgentProposeFileRequest(
                     project_path=request.project_path,
@@ -1797,16 +1878,32 @@ def _execute_plan_step(
                     instruction=instruction,
                 )
             )
+            write_text_file(
+                FileWriteRequest(
+                    project_path=request.project_path,
+                    relative_path=proposal.relative_path,
+                    content=proposal.proposed_content,
+                )
+            )
+            edit_record = _edit_archive_record(
+                file_path=proposal.relative_path,
+                status="modified",
+                original=proposal.original_content,
+                proposed=proposal.proposed_content,
+                summary=proposal.context_summary,
+                proposal_id=f"proposal-{uuid.uuid4().hex[:10]}",
+            )
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             return {
                 "step_index": step.get("step_index", 0),
                 "file": file,
                 "intent": "write",
-                "response": f"Proposed changes to `{file}`.",
+                "response": f"Modified `{file}`.",
                 "proposal_path": proposal.relative_path,
                 "original_content": proposal.original_content,
                 "proposed_content": proposal.proposed_content,
                 "context_summary": proposal.context_summary,
+                "edit_archive": [edit_record],
                 "elapsed_ms": elapsed_ms,
             }
         except (ValueError, RuntimeError) as exc:
@@ -1874,7 +1971,7 @@ def _format_plan_summary(
         file = result.get("file") or step.get("file") or ""
         label = f"**Step {i + 1}: {desc}**"
         if result.get("proposal_path"):
-            parts.append(f"{label}\n\nProposed changes to `{file}`. Review the diff and apply when ready.\n")
+            parts.append(f"{label}\n\nModified `{file}` after validation.\n")
         else:
             response = str(result.get("response", "No output."))
             parts.append(f"{label}\n\n{response[:800]}\n")
@@ -1966,10 +2063,7 @@ def _after_classify(state: OrchestrationState) -> str:
         return "recommend_change_targets"
     if intent == "multi_step_request":
         return "decompose_and_execute"
-    if state.get("settings").write_mode not in {
-        WRITE_MODE_WRITE_WITH_APPROVAL,
-        WRITE_MODE_AUTO_APPLY,
-    }:
+    if state.get("settings").permission_mode not in {"basic", "auto_review", "full_access"}:
         return "permission_required"
     # File clarification answers already have candidates set — skip context ref resolution
     if intent == "file_clarification_answer":
@@ -2119,7 +2213,7 @@ def _activity_for_node(
         detail = str(node_state.get("validation_status") or "")
     elif node_name == "return_proposal":
         phase = "Editing"
-        label = "Generated proposal"
+        label = "Applied validated edit"
         result = node_state.get("result")
         if result:
             proposal_id = (result.edit_archive or [{}])[0].get("proposal_id") if getattr(result, "edit_archive", None) else None
@@ -2188,6 +2282,7 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
     initial_state: dict[str, Any] = {"request": request}
     accumulated_result: AgentRunResponse | None = None
     started = time.perf_counter()
+    last_activity_elapsed_ms = 0
     run_id = f"run-{uuid.uuid4().hex[:12]}"
     activity_events: list[dict[str, Any]] = []
 
@@ -2214,6 +2309,15 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
             )
             if payload:
+                elapsed_ms = int(payload.get("elapsed_ms") or 0)
+                payload["duration_ms"] = max(0, elapsed_ms - last_activity_elapsed_ms)
+                last_activity_elapsed_ms = elapsed_ms
+                if activity_events and activity_events[-1].get("status") == "running":
+                    activity_events[-1] = {
+                        **activity_events[-1],
+                        "status": "completed",
+                        "ended_at": payload.get("started_at") or _utc_now(),
+                    }
                 activity_events.append(payload)
                 yield json.dumps(payload)
 
@@ -2223,6 +2327,7 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
         return
 
     if accumulated_result is not None:
+        activity_events = _finalize_activity_events(activity_events)
         stop_reason = accumulated_result.stop_reason or (
             "waiting_for_apply"
             if accumulated_result.response_type == "change_proposal"

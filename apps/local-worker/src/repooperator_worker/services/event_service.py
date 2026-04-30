@@ -62,8 +62,11 @@ def record_agent_run(
         "proposal_id": response.proposal_relative_path if response else None,
         "error": error,
     }
-    with _runs_file().open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    try:
+        with _runs_file().open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError:
+        pass
     return record
 
 
@@ -92,8 +95,11 @@ def record_event(
         "command": command,
         "error": error,
     }
-    with _runs_file().open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    try:
+        with _runs_file().open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError:
+        pass
     return record
 
 

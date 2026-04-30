@@ -58,8 +58,11 @@ def add_memory(
         "created_at": _now_iso(),
         "tags": tags or [],
     }
-    with _memory_file().open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    try:
+        with _memory_file().open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError:
+        return record
     from repooperator_worker.services.event_service import record_event
 
     record_event(
@@ -94,6 +97,20 @@ def maybe_record_from_agent_run(request: AgentRunRequest, response: AgentRunResp
                 tags=["proposal", "pending-approval"],
             )
         )
+    if response.response_type == "edit_applied" and response.edit_archive:
+        for record in response.edit_archive:
+            file_path = record.get("file_path")
+            if not file_path:
+                continue
+            records.append(
+                add_memory(
+                    memory_type="applied_edit_summary",
+                    content=f"Modified {file_path}: {record.get('summary') or response.response}",
+                    source="agent_run",
+                    repo=request.project_path,
+                    tags=["file-edit", "auto-applied"],
+                )
+            )
     return records
 
 

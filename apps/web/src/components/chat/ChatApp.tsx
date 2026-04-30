@@ -111,6 +111,25 @@ export function ChatApp() {
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<string[]>([]);
 
+  function normalizeActivityEvents(events?: AgentRunPayload["activity_events"]): ProgressStep[] {
+    return (events || []).map((event) => ({
+      id: event.id,
+      runId: event.run_id,
+      phase: event.phase,
+      label: event.label ?? event.message,
+      detail: event.detail,
+      message: event.message,
+      status: event.status,
+      startedAt: event.started_at,
+      endedAt: event.ended_at,
+      durationMs: event.duration_ms,
+      elapsedMs: event.elapsed_ms,
+      files: event.files,
+      command: event.command,
+      proposalId: event.proposal_id,
+    }));
+  }
+
   // ── Health check ─────────────────────────────────────────────────────────
   async function refreshHealthCheck(options: { syncProvider?: boolean } = {}) {
     setConnectionState("checking");
@@ -125,6 +144,15 @@ export function ChatApp() {
       setConfiguredModelName(payload.configured_model_name || "");
       setWriteMode(payload.permission_mode ?? "basic");
       if (options.syncProvider && nextSource) setGitProvider(nextSource);
+      if (payload.configured_repository_sources?.length) {
+        const currentProviderAvailable = payload.configured_repository_sources.some(
+          (source) => source.provider === gitProvider,
+        );
+        if (!currentProviderAvailable && options.syncProvider) {
+          const firstProvider = payload.configured_repository_sources.find((source) => source.provider)?.provider;
+          if (firstProvider) setGitProvider(firstProvider);
+        }
+      }
       if (payload.recent_projects?.length) {
         setManualProjectPath((cur) => cur || payload.recent_projects?.[0] || "");
       }
@@ -689,8 +717,13 @@ export function ChatApp() {
           });
         } else if (event.type === "progress_delta") {
           setProgressSteps((prev) => {
+            const completedPrev = prev.map((step, index) =>
+              index === prev.length - 1 && step.status === "running"
+                ? { ...step, status: "completed" }
+                : step,
+            );
             const next = [
-              ...prev,
+              ...completedPrev,
               {
                 id: event.id,
                 runId: event.run_id,
@@ -727,6 +760,8 @@ export function ChatApp() {
       if (!payload) throw new Error("No result received from agent.");
 
       let assistantMessage: ChatMessage;
+      const finalProgressSteps = normalizeActivityEvents(payload.activity_events);
+      capturedProgressSteps = finalProgressSteps.length > 0 ? finalProgressSteps : capturedProgressSteps;
 
       if (
         payload.response_type === "change_proposal" &&

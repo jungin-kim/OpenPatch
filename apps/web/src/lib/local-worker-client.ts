@@ -9,6 +9,12 @@ export type WorkerHealthPayload = {
   repo_base_dir: string;
   configured_git_provider?: string | null;
   configured_repository_source?: string | null;
+  configured_repository_sources?: Array<{
+    provider?: string | null;
+    baseUrl?: string | null;
+    tokenConfigured?: boolean;
+    owner?: string;
+  }>;
   configured_model_connection_mode?: string | null;
   configured_model_provider?: string | null;
   configured_model_name?: string | null;
@@ -155,7 +161,7 @@ export type AgentRunPayload = {
   files_read: string[];
   response: string;
   // Write-intent routing fields
-  response_type?: "assistant_answer" | "change_proposal" | "permission_required" | "clarification" | "proposal_error" | "command_approval" | "command_result" | "command_denied" | "command_error" | "agent_error";
+  response_type?: "assistant_answer" | "change_proposal" | "edit_applied" | "permission_required" | "clarification" | "proposal_error" | "command_approval" | "command_result" | "command_denied" | "command_error" | "agent_error";
   proposal_relative_path?: string | null;
   proposal_original_content?: string | null;
   proposal_proposed_content?: string | null;

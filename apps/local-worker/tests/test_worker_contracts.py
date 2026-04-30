@@ -319,6 +319,55 @@ class WorkerContractTests(unittest.TestCase):
             self.assertEqual(updated["permissions"]["mode"], "auto_review")
             self.assertEqual(updated["permissions"]["writeMode"], "write-with-approval")
 
+    def test_repository_sources_are_loaded_as_list_with_default_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            config_path = Path(temp_home) / ".repooperator" / "config.json"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "gitProvider": {
+                            "provider": "github",
+                            "baseUrl": "https://github.com",
+                            "token": "github-secret",
+                        },
+                        "repositorySources": [
+                            {
+                                "provider": "gitlab",
+                                "baseUrl": "https://gitlab.example.com",
+                                "token": "gitlab-secret",
+                            },
+                            {
+                                "provider": "github",
+                                "baseUrl": "https://github.com",
+                                "token": "github-secret",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "HOME": temp_home,
+                    "REPOOPERATOR_CONFIG_PATH": "",
+                    "GITHUB_BASE_URL": "",
+                    "GITHUB_TOKEN": "",
+                    "GITLAB_BASE_URL": "",
+                    "GITLAB_TOKEN": "",
+                },
+                clear=False,
+            ):
+                settings = get_settings()
+
+        self.assertEqual(settings.configured_git_provider, "github")
+        providers = [source["provider"] for source in settings.configured_repository_sources]
+        self.assertIn("github", providers)
+        self.assertIn("gitlab", providers)
+        self.assertTrue(all("token" not in source for source in settings.configured_repository_sources))
+        self.assertTrue(all("tokenConfigured" in source for source in settings.configured_repository_sources))
+
     def test_runtime_model_settings_are_loaded_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
             config_path = Path(temp_home) / ".repooperator" / "config.json"

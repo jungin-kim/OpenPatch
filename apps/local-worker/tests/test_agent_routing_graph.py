@@ -123,15 +123,16 @@ class AgentRoutingGraphTests(unittest.TestCase):
                 request,
             )
 
-        self.assertEqual(result.response_type, "change_proposal")
+        self.assertEqual(result.response_type, "edit_applied")
         self.assertEqual(result.intent_classification, "write_confirmation")
         self.assertEqual(result.proposal_relative_path, "trim_videos.py")
         self.assertEqual(result.classifier, "llm")
-        self.assertEqual(result.stop_reason, "waiting_for_apply")
+        self.assertEqual(result.stop_reason, "completed")
         self.assertGreaterEqual(result.loop_iteration, 1)
         self.assertEqual(result.edit_archive[0]["file_path"], "trim_videos.py")
-        self.assertEqual(result.edit_archive[0]["status"], "proposed")
+        self.assertEqual(result.edit_archive[0]["status"], "modified")
         self.assertGreater(result.edit_archive[0]["additions"], 0)
+        self.assertIn("ValueError", (self.repo / "trim_videos.py").read_text(encoding="utf-8"))
 
     def test_read_followup_keeps_symbol_context(self) -> None:
         history = [
@@ -348,7 +349,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
                 },
                 request,
             )
-        self.assertEqual(result.response_type, "change_proposal")
+        self.assertEqual(result.response_type, "edit_applied")
         self.assertEqual(result.proposal_relative_path, "docker-compose.yml")
 
     def test_recommendation_followup_uses_structured_context(self) -> None:
@@ -430,7 +431,7 @@ class AgentRoutingGraphTests(unittest.TestCase):
                 request,
             )
 
-        self.assertEqual(result.response_type, "change_proposal")
+        self.assertEqual(result.response_type, "edit_applied")
         self.assertTrue(result.recommendation_context_loaded)
         self.assertEqual(result.proposal_relative_path, "trim_videos.py")
 
@@ -584,6 +585,15 @@ class AgentRoutingGraphTests(unittest.TestCase):
         final = next(event for event in events if event.get("type") == "final_message")
         self.assertGreaterEqual(len(final["result"]["activity_events"]), 3)
         self.assertEqual(final["result"]["stop_reason"], "completed")
+        self.assertFalse(
+            any(event.get("status") == "running" for event in final["result"]["activity_events"])
+        )
+        durations = [
+            event.get("duration_ms")
+            for event in final["result"]["activity_events"]
+            if event.get("duration_ms") is not None
+        ]
+        self.assertTrue(all(duration >= 0 for duration in durations))
 
 
 if __name__ == "__main__":

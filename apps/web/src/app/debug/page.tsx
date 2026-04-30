@@ -13,7 +13,14 @@ type RuntimeDebug = {
     approval?: Record<string, boolean>;
     tools?: Record<string, string>;
   };
-  repository?: { source?: string | null; project_path?: string | null; branch?: string | null };
+  repository?: {
+    source?: string | null;
+    project_path?: string | null;
+    branch?: string | null;
+    configured_default_source?: string | null;
+    configured_sources?: Array<{ provider?: string | null; baseUrl?: string | null; tokenConfigured?: boolean; owner?: string }>;
+    effective_sources?: Array<{ provider?: string | null; baseUrl?: string | null; tokenConfigured?: boolean; owner?: string }>;
+  };
   agent?: { orchestration_mode?: string };
   recent_runs?: Array<Record<string, unknown>>;
 };
@@ -146,6 +153,23 @@ function Dashboard({ runtime }: { runtime: RuntimeDebug | null }) {
         <Row label="Source" value={runtime?.repository?.source ?? "-"} />
         <Row label="Project" value={runtime?.repository?.project_path ?? "-"} />
         <Row label="Branch" value={runtime?.repository?.branch ?? "-"} />
+        <Row label="Default source" value={runtime?.repository?.configured_default_source ?? "-"} />
+        <Row
+          label="Configured sources"
+          value={
+            runtime?.repository?.configured_sources?.length
+              ? runtime.repository.configured_sources.map(formatSource).join(", ")
+              : "-"
+          }
+        />
+        <Row
+          label="Effective sources"
+          value={
+            runtime?.repository?.effective_sources?.length
+              ? runtime.repository.effective_sources.map(formatSource).join(", ")
+              : "-"
+          }
+        />
       </Card>
       <Card title="Permissions">
         <Row label="Mode" value={runtime?.permissions?.mode ?? "-"} />
@@ -154,6 +178,14 @@ function Dashboard({ runtime }: { runtime: RuntimeDebug | null }) {
       </Card>
     </div>
   );
+}
+
+function formatSource(source: { provider?: string | null; baseUrl?: string | null; tokenConfigured?: boolean; owner?: string }): string {
+  const bits = [source.provider || "unknown"];
+  if (source.baseUrl) bits.push(source.baseUrl);
+  if (source.owner) bits.push(`owner: ${source.owner}`);
+  bits.push(source.tokenConfigured ? "token configured" : "no token");
+  return bits.join(" · ");
 }
 
 function Agents({ runtime }: { runtime: RuntimeDebug | null }) {

@@ -7,6 +7,7 @@ class HealthResponse(BaseModel):
     repo_base_dir: str
     configured_git_provider: str | None = None
     configured_repository_source: str | None = None
+    configured_repository_sources: list[dict] = []
     configured_model_connection_mode: str | None = None
     configured_model_provider: str | None = None
     configured_model_name: str | None = None
