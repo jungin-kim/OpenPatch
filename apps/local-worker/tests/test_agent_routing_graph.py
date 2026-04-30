@@ -18,7 +18,10 @@ from repooperator_worker.schemas import (  # noqa: E402
     AgentRunResponse,
     ConversationMessage,
 )
-from repooperator_worker.services.agent_orchestration_graph import run_agent_orchestration_graph  # noqa: E402
+from repooperator_worker.services.agent_orchestration_graph import (  # noqa: E402
+    run_agent_orchestration_graph,
+    stream_agent_orchestration_graph,
+)
 from repooperator_worker.services.agent_service import run_agent_task  # noqa: E402
 
 
@@ -124,6 +127,11 @@ class AgentRoutingGraphTests(unittest.TestCase):
         self.assertEqual(result.intent_classification, "write_confirmation")
         self.assertEqual(result.proposal_relative_path, "trim_videos.py")
         self.assertEqual(result.classifier, "llm")
+        self.assertEqual(result.stop_reason, "waiting_for_apply")
+        self.assertGreaterEqual(result.loop_iteration, 1)
+        self.assertEqual(result.edit_archive[0]["file_path"], "trim_videos.py")
+        self.assertEqual(result.edit_archive[0]["status"], "proposed")
+        self.assertGreater(result.edit_archive[0]["additions"], 0)
 
     def test_read_followup_keeps_symbol_context(self) -> None:
         history = [
@@ -543,6 +551,39 @@ class AgentRoutingGraphTests(unittest.TestCase):
         self.assertEqual(result.response_type, "agent_error")
         self.assertEqual(result.graph_path, "agent_error")
         self.assertNotIn("Switch the permission mode", result.response)
+
+    def test_stream_activity_uses_product_labels_not_internal_nodes(self) -> None:
+        request = self._request("summarize the most recent commit")
+        _ClassifierClient.response = {
+            "intent": "git_workflow_request",
+            "confidence": 0.95,
+            "target_files": [],
+            "target_symbols": [],
+            "requested_action": "recent_commit",
+            "git_action": "git_recent_commit",
+            "needs_tool": "git",
+            "needs_clarification": False,
+            "clarification_question": None,
+        }
+        with patch(
+            "repooperator_worker.services.agent_orchestration_graph.OpenAICompatibleModelClient",
+            return_value=_ClassifierClient(),
+        ), patch(
+            "repooperator_worker.services.agent_orchestration_graph.get_active_repository",
+            return_value=None,
+        ):
+            events = [json.loads(item) for item in stream_agent_orchestration_graph(request)]
+
+        activity = [event for event in events if event.get("type") == "progress_delta"]
+        labels = [event.get("label", "") for event in activity]
+        serialized_labels = " ".join(labels)
+        self.assertTrue(any(label == "Prepared Git workflow" for label in labels))
+        self.assertNotIn("load_context", serialized_labels)
+        self.assertNotIn("classify_intent", serialized_labels)
+        self.assertNotIn("final_answer", serialized_labels)
+        final = next(event for event in events if event.get("type") == "final_message")
+        self.assertGreaterEqual(len(final["result"]["activity_events"]), 3)
+        self.assertEqual(final["result"]["stop_reason"], "completed")
 
 
 if __name__ == "__main__":

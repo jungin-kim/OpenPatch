@@ -676,7 +676,14 @@ export function ChatApp() {
       for await (const event of streamAgentTask(streamInput)) {
         if (event.type === "progress") {
           setProgressSteps((prev) => {
-            const next = [...prev, { node: event.node, message: event.message, phase: "context", status: "running" }];
+            const next = [
+              ...prev,
+              {
+                phase: "Thinking",
+                label: event.message || "Working",
+                status: "running",
+              },
+            ];
             capturedProgressSteps = next;
             return next;
           });
@@ -685,11 +692,20 @@ export function ChatApp() {
             const next = [
               ...prev,
               {
-                node: event.node ?? event.phase ?? "progress",
+                id: event.id,
+                runId: event.run_id,
                 phase: event.phase,
+                label: event.label ?? event.message,
+                detail: event.detail,
                 message: event.message,
                 status: event.status,
+                startedAt: event.started_at,
+                endedAt: event.ended_at,
+                durationMs: event.duration_ms,
                 elapsedMs: event.elapsed_ms,
+                files: event.files,
+                command: event.command,
+                proposalId: event.proposal_id,
               },
             ];
             capturedProgressSteps = next;
@@ -1028,7 +1044,28 @@ export function ChatApp() {
       if (msg.proposal?.id === id) {
         appliedProposal = msg.proposal;
         proposalMetadata = msg.metadata;
-        return { ...msg, proposal: { ...msg.proposal, status } };
+        const updatedArchive = msg.metadata?.edit_archive?.map((record) => ({
+          ...record,
+          status,
+          apply_result:
+            status === "applied"
+              ? `Applied changes to ${msg.proposal?.relativePath}`
+              : status === "rejected"
+                ? "Proposal rejected."
+                : status === "failed"
+                  ? "Apply failed."
+                  : record.apply_result,
+        }));
+        return {
+          ...msg,
+          proposal: { ...msg.proposal, status },
+          metadata: msg.metadata
+            ? {
+                ...msg.metadata,
+                edit_archive: updatedArchive ?? msg.metadata.edit_archive,
+              }
+            : msg.metadata,
+        };
       }
       return msg;
     });

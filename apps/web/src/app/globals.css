@@ -1501,17 +1501,39 @@ select {
 
 .progress-timeline {
   display: grid;
-  gap: 6px;
-  padding: 6px 0 8px;
+  gap: 10px;
+  padding: 8px 0 10px;
   max-width: 100%;
+}
+
+.progress-groups {
+  display: grid;
+  gap: 8px;
+}
+
+.progress-group {
+  display: grid;
+  gap: 6px;
+}
+
+.progress-group-title {
+  color: var(--foreground);
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0;
+}
+
+.progress-group-steps {
+  display: grid;
+  gap: 6px;
 }
 
 .progress-step {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-radius: var(--radius-sm);
   font-size: 0.76rem;
   background: var(--surface-raised, rgba(0,0,0,0.04));
@@ -1524,34 +1546,61 @@ select {
   color: var(--accent, #6366f1);
   border-color: var(--accent, #6366f1);
   background: rgba(99, 102, 241, 0.07);
-  animation: progress-pulse 1.4s ease-in-out infinite;
 }
 
-@keyframes progress-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+.progress-step-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--muted);
 }
 
-.progress-step-icon {
-  font-size: 0.8em;
-  line-height: 1;
+.progress-step-running .progress-step-marker,
+.progress-step-active .progress-step-marker {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+}
+
+.progress-step-failed .progress-step-marker {
+  background: #c0392b;
+}
+
+.progress-step-waiting .progress-step-marker {
+  background: #c58b22;
 }
 
 .progress-step-content {
   display: grid;
   gap: 2px;
+  min-width: 0;
 }
 
-.progress-step-phase {
+.progress-step-label {
   color: var(--foreground);
-  font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0;
+}
+
+.progress-step-detail,
+.progress-step-related {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.progress-step-related code {
+  font-size: 0.72rem;
+}
+
+.progress-step-status {
+  font-size: 0.68rem;
   text-transform: uppercase;
+  letter-spacing: 0;
+  color: var(--muted);
 }
 
 .progress-step-time {
   font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 .progress-step-live {
@@ -1563,15 +1612,20 @@ select {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 2px 6px;
+  padding: 5px 2px 2px;
   font-size: 0.72rem;
   color: var(--muted);
   background: none;
   border: none;
-  cursor: pointer;
+  cursor: default;
   width: 100%;
   text-align: left;
   gap: 8px;
+  font-weight: 700;
+}
+
+.progress-timeline-header:not(:disabled) {
+  cursor: pointer;
 }
 
 .progress-timeline-header:hover {
@@ -1586,8 +1640,8 @@ select {
 .progress-timeline-summary {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: 10px;
+  padding: 7px 10px;
   font-size: 0.72rem;
   color: var(--muted);
   background: var(--surface-raised, rgba(0,0,0,0.04));
@@ -1602,14 +1656,73 @@ select {
   border-color: var(--accent, #6366f1);
 }
 
-.progress-timeline-summary-icon {
-  font-size: 0.8em;
-}
-
 .progress-timeline-expand {
   opacity: 0.6;
   font-size: 0.65rem;
   margin-left: 2px;
+}
+
+.changed-files-archive {
+  margin: 8px 0 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.changed-files-title {
+  color: var(--foreground);
+  font-weight: 750;
+  font-size: 0.78rem;
+  margin-bottom: 8px;
+}
+
+.changed-files-list {
+  display: grid;
+  gap: 8px;
+}
+
+.changed-file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.changed-file-path {
+  color: var(--foreground);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.changed-file-summary {
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin-top: 2px;
+}
+
+.changed-file-stats {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.changed-file-add {
+  color: #3fa869;
+}
+
+.changed-file-del {
+  color: #c0392b;
+}
+
+.changed-file-status {
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
 }
 
 .reasoning-panel {

@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { AgentRunPayload, CommandResultPayload, RepoOpenPayload } from "@/lib/local-worker-client";
+import type {
+  AgentRunPayload,
+  CommandResultPayload,
+  EditArchiveRecord,
+  RepoOpenPayload,
+} from "@/lib/local-worker-client";
 import { MarkdownContent } from "./MarkdownContent";
 import {
   ProposalCard,
@@ -86,6 +91,32 @@ function CommandResultCard({ result }: { result: CommandResultPayload }) {
         <summary>Output</summary>
         <pre>{result.stdout || result.stderr || "No output"}</pre>
       </details>
+    </div>
+  );
+}
+
+function ChangedFilesArchive({ records }: { records?: EditArchiveRecord[] }) {
+  if (!records?.length) return null;
+  return (
+    <div className="changed-files-archive">
+      <div className="changed-files-title">Changed files</div>
+      <div className="changed-files-list">
+        {records.map((record) => (
+          <div key={`${record.proposal_id || record.file_path}-${record.status}`} className="changed-file-row">
+            <div>
+              <div className="changed-file-path">{record.file_path}</div>
+              {record.summary ? <div className="changed-file-summary">{record.summary}</div> : null}
+            </div>
+            <div className="changed-file-stats">
+              <span className="changed-file-add">+{record.additions}</span>
+              <span className="changed-file-del">-{record.deletions}</span>
+              <span className={`changed-file-status changed-file-status-${record.status}`}>
+                {record.status}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -390,6 +421,24 @@ export function ChatMessages({
       lines.push(`Proposal: ${message.proposal.relativePath}`);
       lines.push(`Status: ${message.proposal.status}`);
     }
+    if (message.metadata?.edit_archive?.length) {
+      lines.push("Changed files:");
+      for (const record of message.metadata.edit_archive) {
+        lines.push(
+          `- ${record.file_path} +${record.additions} -${record.deletions} (${record.status})${record.summary ? `: ${record.summary}` : ""}`,
+        );
+      }
+    }
+    if (message.progressSteps?.length) {
+      lines.push("Work log:");
+      for (const step of message.progressSteps) {
+        lines.push(`- ${step.phase || "Activity"}: ${step.label || step.message || "Worked"}${step.detail ? ` — ${step.detail}` : ""}`);
+      }
+    }
+    if (message.metadata?.reasoning) {
+      lines.push("Reasoning / Thinking:");
+      lines.push(message.metadata.reasoning);
+    }
     if (message.metadata?.selected_target_file) {
       lines.push(`Target file: ${message.metadata.selected_target_file}`);
     }
@@ -488,11 +537,17 @@ export function ChatMessages({
                 </button>
               </div>
               {msg.proposal ? (
-                <ProposalCard
-                  proposal={msg.proposal}
-                  writeMode={writeMode}
-                  onStatusChange={onProposalStatusChange ?? (() => {})}
-                />
+                <>
+                  {msg.progressSteps && msg.progressSteps.length > 0 ? (
+                    <ProgressTimeline steps={msg.progressSteps} done={true} />
+                  ) : null}
+                  <ChangedFilesArchive records={msg.metadata?.edit_archive} />
+                  <ProposalCard
+                    proposal={msg.proposal}
+                    writeMode={writeMode}
+                    onStatusChange={onProposalStatusChange ?? (() => {})}
+                  />
+                </>
               ) : msg.role === "assistant" && msg.metadata?.response_type === "permission_required" ? (
                 <div className="message-bubble message-bubble-permission">
                   <div className="permission-callout">
@@ -546,6 +601,7 @@ export function ChatMessages({
                   {msg.progressSteps && msg.progressSteps.length > 0 ? (
                     <ProgressTimeline steps={msg.progressSteps} done={true} />
                   ) : null}
+                  <ChangedFilesArchive records={msg.metadata?.edit_archive} />
                   {msg.metadata?.reasoning ? (
                     <details className="reasoning-panel">
                       <summary>Reasoning / Thinking</summary>

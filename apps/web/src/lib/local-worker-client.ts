@@ -205,6 +205,41 @@ export type AgentRunPayload = {
     elapsed_ms?: number | null;
     has_proposal?: boolean;
   }>;
+  activity_events?: AgentActivityEvent[];
+  edit_archive?: EditArchiveRecord[];
+  loop_iteration?: number;
+  stop_reason?: string | null;
+};
+
+export type AgentActivityEvent = {
+  type?: "progress_delta" | string;
+  id?: string;
+  run_id?: string;
+  phase?: string;
+  label?: string;
+  detail?: string;
+  message?: string;
+  status?: "pending" | "running" | "completed" | "failed" | "waiting" | string;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_ms?: number | null;
+  elapsed_ms?: number | null;
+  files?: string[];
+  command?: string | null;
+  proposal_id?: string | null;
+};
+
+export type EditArchiveRecord = {
+  file_path: string;
+  status: "proposed" | "applied" | "rejected" | "failed" | string;
+  additions: number;
+  deletions: number;
+  summary?: string | null;
+  timestamp?: string | null;
+  proposal_id?: string | null;
+  plan_id?: string | null;
+  apply_result?: string | null;
+  tests?: string[];
 };
 
 export type CommandApprovalPayload = {
@@ -414,7 +449,7 @@ export async function runAgentTask(input: {
 
 export type AgentProgressEvent =
   | { type: "progress"; node: string; message: string }
-  | { type: "progress_delta"; node?: string; phase?: string; message: string; status?: "running" | "completed" | "failed" | string; elapsed_ms?: number }
+  | (AgentActivityEvent & { type: "progress_delta" })
   | { type: "assistant_delta"; delta: string }
   | { type: "reasoning_delta"; delta: string; source?: string }
   | { type: "command_delta"; delta?: string; message?: string }

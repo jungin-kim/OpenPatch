@@ -1,13 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type ProgressStep = {
-  node: string;
+  id?: string;
+  runId?: string;
   phase?: string;
-  message: string;
+  label?: string;
+  detail?: string;
+  message?: string;
   status?: string;
-  elapsedMs?: number;
+  startedAt?: string | null;
+  endedAt?: string | null;
+  durationMs?: number | null;
+  elapsedMs?: number | null;
+  files?: string[];
+  command?: string | null;
+  proposalId?: string | null;
 };
 
 type Props = {
@@ -15,24 +24,17 @@ type Props = {
   done: boolean;
 };
 
-const NODE_ICONS: Record<string, string> = {
-  load_context: "📂",
-  classify_intent: "🔍",
-  resolve_target_files: "🎯",
-  generate_change_plan: "📝",
-  generate_patch: "⚡",
-  validate_patch: "✅",
-  return_proposal: "📋",
-  answer_read_only: "💬",
-  ask_clarification: "❓",
-  recommend_change_targets: "📌",
-  decompose_and_execute: "🔀",
-  plan_step: "▶",
-  run_local_tool_request: "🛠",
-  run_local_command_request: "⚙️",
-  permission_required: "🔒",
-  proposal_error: "⚠️",
-};
+const PHASE_ORDER = [
+  "Thinking",
+  "Repository",
+  "Searching",
+  "Reading files",
+  "Planning",
+  "Editing",
+  "Commands",
+  "Applying changes",
+  "Finished",
+];
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -43,14 +45,20 @@ function formatDuration(ms: number): string {
   return `${m}m ${s}s`;
 }
 
+function statusLabel(status?: string): string {
+  if (status === "waiting") return "waiting";
+  if (status === "failed") return "failed";
+  if (status === "completed") return "done";
+  if (status === "running") return "running";
+  return status || "done";
+}
+
 export function ProgressTimeline({ steps, done }: Props) {
   const [collapsed, setCollapsed] = useState(false);
-  // Live seconds counter for the currently-running last step
   const [liveSec, setLiveSec] = useState(0);
   const lastStepCountRef = useRef(0);
   const lastStepStartRef = useRef(Date.now());
 
-  // Reset live timer when a new step arrives
   useEffect(() => {
     if (steps.length > lastStepCountRef.current) {
       lastStepStartRef.current = Date.now();
@@ -59,7 +67,6 @@ export function ProgressTimeline({ steps, done }: Props) {
     }
   }, [steps.length]);
 
-  // Tick live timer while running
   useEffect(() => {
     if (done) return;
     const timer = setInterval(() => {
@@ -68,16 +75,28 @@ export function ProgressTimeline({ steps, done }: Props) {
     return () => clearInterval(timer);
   }, [done]);
 
-  // Auto-collapse after run completes (with a small delay so user sees the final state)
   useEffect(() => {
     if (!done) return;
-    const timeout = setTimeout(() => setCollapsed(true), 2800);
+    const timeout = setTimeout(() => setCollapsed(true), 2400);
     return () => clearTimeout(timeout);
   }, [done]);
 
+  const grouped = useMemo(() => {
+    const buckets = new Map<string, ProgressStep[]>();
+    for (const step of steps) {
+      const phase = step.phase || "Thinking";
+      buckets.set(phase, [...(buckets.get(phase) || []), step]);
+    }
+    return Array.from(buckets.entries()).sort(([a], [b]) => {
+      const ai = PHASE_ORDER.indexOf(a);
+      const bi = PHASE_ORDER.indexOf(b);
+      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    });
+  }, [steps]);
+
   if (steps.length === 0) return null;
 
-  const totalMs = steps[steps.length - 1]?.elapsedMs;
+  const totalMs = steps[steps.length - 1]?.elapsedMs ?? steps[steps.length - 1]?.durationMs ?? undefined;
 
   if (done && collapsed) {
     return (
@@ -85,56 +104,68 @@ export function ProgressTimeline({ steps, done }: Props) {
         type="button"
         className="progress-timeline-summary"
         onClick={() => setCollapsed(false)}
-        title="Show steps"
+        title="Show agent activity"
       >
-        <span className="progress-timeline-summary-icon">⏱</span>
-        <span>Worked for {totalMs !== undefined ? formatDuration(totalMs) : "…"}</span>
-        <span className="progress-timeline-expand">▸</span>
+        <span>Worked for {totalMs !== undefined ? formatDuration(totalMs) : "a moment"}</span>
+        <span className="progress-timeline-expand">Show work log</span>
       </button>
     );
   }
 
   return (
-    <div className="progress-timeline">
-      {done && (
-        <button
-          type="button"
-          className="progress-timeline-header"
-          onClick={() => setCollapsed(true)}
-          title="Collapse"
-        >
-          <span>
-            {totalMs !== undefined ? `Worked for ${formatDuration(totalMs)}` : "Completed"}
-          </span>
-          <span className="progress-timeline-collapse">▾ hide</span>
-        </button>
-      )}
-      {steps.map((step, i) => {
-        const isLast = i === steps.length - 1;
-        const isActive = isLast && !done;
-        // Per-step duration: delta from the previous step's elapsed time
-        const prevMs = steps[i - 1]?.elapsedMs ?? 0;
-        const stepMs =
-          step.elapsedMs !== undefined ? step.elapsedMs - prevMs : undefined;
+    <section className="progress-timeline" aria-label="Agent activity">
+      <button
+        type="button"
+        className="progress-timeline-header"
+        onClick={() => done && setCollapsed(true)}
+        disabled={!done}
+        title={done ? "Collapse work log" : "Agent activity"}
+      >
+        <span>{done && totalMs !== undefined ? `Worked for ${formatDuration(totalMs)}` : "Agent Activity"}</span>
+        {done ? <span className="progress-timeline-collapse">hide</span> : null}
+      </button>
+      <div className="progress-groups">
+        {grouped.map(([phase, phaseSteps]) => (
+          <div key={phase} className="progress-group">
+            <div className="progress-group-title">{phase}</div>
+            <div className="progress-group-steps">
+              {phaseSteps.map((step, i) => {
+                const isLast = steps[steps.length - 1] === step;
+                const isActive = isLast && !done && step.status !== "completed";
+                const time =
+                  step.durationMs !== undefined && step.durationMs !== null
+                    ? formatDuration(step.durationMs)
+                    : step.elapsedMs !== undefined && step.elapsedMs !== null
+                      ? formatDuration(step.elapsedMs)
+                      : isActive
+                        ? `${liveSec}s`
+                        : null;
 
-        return (
-          <div
-            key={`${step.node}-${i}`}
-            className={`progress-step${isActive ? " progress-step-active" : ""}`}
-          >
-            <span className="progress-step-icon">{NODE_ICONS[step.node] ?? "▸"}</span>
-            <span className="progress-step-content">
-              <span className="progress-step-phase">{step.phase || step.node}</span>
-              <span>{step.message}</span>
-            </span>
-            {isActive ? (
-              <span className="progress-step-time progress-step-live">{liveSec}s…</span>
-            ) : stepMs !== undefined ? (
-              <span className="progress-step-time">{formatDuration(stepMs)}</span>
-            ) : null}
+                return (
+                  <div
+                    key={step.id || `${phase}-${i}-${step.label || step.message}`}
+                    className={`progress-step progress-step-${step.status || "completed"}${isActive ? " progress-step-active" : ""}`}
+                  >
+                    <span className="progress-step-marker" aria-hidden="true" />
+                    <span className="progress-step-content">
+                      <span className="progress-step-label">{step.label || step.message || "Working"}</span>
+                      {step.detail ? <span className="progress-step-detail">{step.detail}</span> : null}
+                      {step.files?.length ? (
+                        <span className="progress-step-related">{step.files.join(", ")}</span>
+                      ) : null}
+                      {step.command ? (
+                        <span className="progress-step-related"><code>{step.command}</code></span>
+                      ) : null}
+                    </span>
+                    <span className="progress-step-status">{statusLabel(step.status)}</span>
+                    {time ? <span className="progress-step-time">{time}</span> : null}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        );
-      })}
-    </div>
+        ))}
+      </div>
+    </section>
   );
 }

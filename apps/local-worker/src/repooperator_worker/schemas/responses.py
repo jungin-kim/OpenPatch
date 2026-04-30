@@ -239,6 +239,10 @@ class AgentRunResponse(BaseModel):
     classifier_confidence: float | None = None
     validation_status: str | None = None
     plan_steps_summary: list[dict] = []
+    activity_events: list[dict] = []
+    edit_archive: list[dict] = []
+    loop_iteration: int = 0
+    stop_reason: str | None = None
 
 
 class LocalBranchSummary(BaseModel):

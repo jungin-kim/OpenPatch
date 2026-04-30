@@ -9,6 +9,8 @@ import shlex
 import subprocess
 import time
 import uuid
+from datetime import datetime, timezone
+from difflib import unified_diff
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Literal, TypedDict
@@ -195,6 +197,9 @@ class OrchestrationState(TypedDict, total=False):
     pasted_prompt_or_spec: bool
     apply_spec_to_repo: bool
     plan_step_events: list[dict]  # SSE events emitted during multi-step execution
+    activity_events: list[dict[str, Any]]
+    loop_iteration: int
+    stop_reason: str | None
 
 
 def _base_response(
@@ -233,6 +238,85 @@ def _base_response(
         configured_model=settings.configured_model_name,
         **extra,
     )
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _line_delta_counts(original: str, proposed: str) -> tuple[int, int]:
+    additions = 0
+    deletions = 0
+    for line in unified_diff(
+        (original or "").splitlines(),
+        (proposed or "").splitlines(),
+        lineterm="",
+    ):
+        if line.startswith(("+++", "---", "@@")):
+            continue
+        if line.startswith("+"):
+            additions += 1
+        elif line.startswith("-"):
+            deletions += 1
+    return additions, deletions
+
+
+def _edit_archive_record(
+    *,
+    file_path: str,
+    status: str,
+    original: str,
+    proposed: str,
+    summary: str | None = None,
+    proposal_id: str | None = None,
+    plan_id: str | None = None,
+    apply_result: str | None = None,
+    tests: list[str] | None = None,
+) -> dict[str, Any]:
+    additions, deletions = _line_delta_counts(original, proposed)
+    return {
+        "file_path": file_path,
+        "status": status,
+        "additions": additions,
+        "deletions": deletions,
+        "summary": summary or "Prepared a reviewed file change.",
+        "timestamp": _utc_now(),
+        "proposal_id": proposal_id or f"proposal-{uuid.uuid4().hex[:10]}",
+        "plan_id": plan_id,
+        "apply_result": apply_result,
+        "tests": tests or [],
+    }
+
+
+def _activity_event(
+    *,
+    run_id: str,
+    phase: str,
+    label: str,
+    detail: str = "",
+    status: str = "completed",
+    elapsed_ms: int | None = None,
+    files: list[str] | None = None,
+    command: str | None = None,
+    proposal_id: str | None = None,
+) -> dict[str, Any]:
+    now = _utc_now()
+    return {
+        "type": "progress_delta",
+        "id": f"activity-{uuid.uuid4().hex[:10]}",
+        "run_id": run_id,
+        "phase": phase,
+        "label": label,
+        "detail": detail,
+        "status": status,
+        "started_at": now,
+        "ended_at": now if status in {"completed", "failed", "waiting"} else None,
+        "duration_ms": elapsed_ms,
+        "elapsed_ms": elapsed_ms,
+        "files": files or [],
+        "command": command,
+        "proposal_id": proposal_id,
+    }
 
 
 def _context_reference_debug(state: OrchestrationState) -> dict[str, Any]:
@@ -328,6 +412,9 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
         "classifier": "llm",
         "validation_status": "not_started",
         "graph_path": "load_context",
+        "loop_iteration": 0,
+        "stop_reason": None,
+        "activity_events": [],
     }
 
 
@@ -806,6 +893,18 @@ def _validate_patch(state: OrchestrationState) -> dict[str, Any]:
 def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
     proposal = state["proposal"]
+    proposal_id = f"proposal-{uuid.uuid4().hex[:10]}"
+    edit_archive = [
+        _edit_archive_record(
+            file_path=proposal.relative_path,
+            status="proposed",
+            original=proposal.original_content,
+            proposed=proposal.proposed_content,
+            summary=proposal.context_summary,
+            proposal_id=proposal_id,
+            plan_id=state.get("plan_id"),
+        )
+    ]
     result = _base_response(
         request,
         response=f"Proposed change to `{proposal.relative_path}`. Review the diff and apply if it looks correct.",
@@ -816,10 +915,13 @@ def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
         proposal_proposed_content=proposal.proposed_content,
         proposal_context_summary=proposal.context_summary,
         selected_target_file=proposal.relative_path,
+        edit_archive=edit_archive,
         recommendation_context=state.get("recommendation_context"),
         proposal_validation_status=state.get("validation_status"),
         intent_classification=state.get("intent"),
         graph_path="proposal",
+        loop_iteration=state.get("loop_iteration", 1),
+        stop_reason="waiting_for_apply",
         skills_used=state.get("skills_used", []),
         thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
         thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
@@ -1525,20 +1627,21 @@ def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
 
     for i, step in enumerate(steps):
         elapsed_start = int((time.perf_counter() - started) * 1000)
-        plan_events.append({
-            "type": "progress_delta",
-            "node": "plan_step",
-            "phase": "planning",
-            "message": f"Step {i + 1}/{len(steps)}: {step.get('description', 'Processing')}",
-            "status": "running",
-            "elapsed_ms": elapsed_start,
-        })
+        plan_events.append(_activity_event(
+            run_id=f"run-{uuid.uuid4().hex[:10]}",
+            phase="Planning",
+            label=f"Plan step {i + 1} of {len(steps)}",
+            detail=str(step.get("description") or "Processing repository step"),
+            status="running",
+            elapsed_ms=elapsed_start,
+            files=[str(step.get("file"))] if step.get("file") else [],
+        ))
 
         result = _execute_plan_step(state, step, step_results)
         step_results.append(result)
 
         elapsed_end = int((time.perf_counter() - started) * 1000)
-        plan_events[-1] = {**plan_events[-1], "status": "completed", "elapsed_ms": elapsed_end}
+        plan_events[-1] = {**plan_events[-1], "status": "completed", "elapsed_ms": elapsed_end, "ended_at": _utc_now()}
 
     combined_text = _format_plan_summary(steps, step_results, request)
 
@@ -1778,6 +1881,73 @@ def _format_plan_summary(
     return "\n---\n\n".join(parts)
 
 
+MAX_LOOP_ITERATIONS = 8
+
+
+def _controller_llm(state: OrchestrationState) -> dict[str, Any]:
+    """Controller checkpoint for the agent loop.
+
+    The classifier decides the current task category first; this controller then
+    records a task goal and lightweight plan context before the next action is
+    selected. Safety-critical validation still happens in the action nodes.
+    """
+    request = state["request"]
+    intent = state.get("intent") or "ambiguous"
+    existing_steps = state.get("plan_steps") or []
+    if existing_steps:
+        plan_steps = existing_steps
+    elif intent in {"write_request", "write_confirmation", "file_clarification_answer"}:
+        plan_steps = ["Resolve target context", "Draft a safe edit", "Validate the proposed diff"]
+    elif intent in {"repo_analysis", "recommend_change_targets", "review_recommendation"}:
+        plan_steps = ["Inspect relevant repository context", "Analyze findings", "Recommend next steps"]
+    elif intent in {"git_workflow_request", "gitlab_mr_request", "local_command_request"}:
+        plan_steps = ["Inspect repository/tool state", "Classify command risk", "Prepare an approval-safe result"]
+    elif intent == "apply_spec_to_repo":
+        plan_steps = ["Understand the pasted specification", "Identify affected areas", "Present a plan before edits"]
+    else:
+        plan_steps = ["Load context", "Answer with repository evidence"]
+
+    return {
+        "task_goal": request.task[:240],
+        "plan_steps": plan_steps,
+        "loop_iteration": 1,
+        "graph_path": f"{state.get('graph_path', '')}->controller_llm",
+    }
+
+
+def _decide_next_action(state: OrchestrationState) -> dict[str, Any]:
+    iteration = int(state.get("loop_iteration") or 0)
+    if iteration > MAX_LOOP_ITERATIONS:
+        result = _base_response(
+            state["request"],
+            response=(
+                "RepoOperator reached its planning limit for this run. "
+                "I kept the observations gathered so far; ask me to continue if you want another pass."
+            ),
+            response_type="assistant_answer",
+            intent_classification=state.get("intent"),
+            graph_path="loop_guardrail_max_iterations",
+            stop_reason="max_iterations",
+            loop_iteration=iteration,
+            **_classifier_debug(state),
+        )
+        return {"result": result, "stop_reason": "max_iterations"}
+    return {
+        "current_step": _next_action_for_intent(state),
+        "graph_path": f"{state.get('graph_path', '')}->decide_next_action",
+    }
+
+
+def _next_action_for_intent(state: OrchestrationState) -> str:
+    return _after_classify(state)
+
+
+def _after_decide_next_action(state: OrchestrationState) -> str:
+    if state.get("result") is not None:
+        return END
+    return str(state.get("current_step") or _next_action_for_intent(state))
+
+
 def _after_classify(state: OrchestrationState) -> str:
     intent = state.get("intent")
     if intent in {"pasted_prompt_or_spec", "apply_spec_to_repo"}:
@@ -1827,6 +1997,8 @@ def _build_graph():
     graph.add_node("load_context", _load_context)
     graph.add_node("validate_active_repository", _validate_active_repository_context)
     graph.add_node("classify_intent", _classify_intent)
+    graph.add_node("controller_llm", _controller_llm)
+    graph.add_node("decide_next_action", _decide_next_action)
     graph.add_node("resolve_context_reference", _resolve_context_reference)
     graph.add_node("resolve_target_files", _resolve_target_files)
     graph.add_node("ask_clarification", _ask_clarification)
@@ -1847,7 +2019,9 @@ def _build_graph():
     graph.set_entry_point("load_context")
     graph.add_edge("load_context", "validate_active_repository")
     graph.add_edge("validate_active_repository", "classify_intent")
-    graph.add_conditional_edges("classify_intent", _after_classify)
+    graph.add_edge("classify_intent", "controller_llm")
+    graph.add_edge("controller_llm", "decide_next_action")
+    graph.add_conditional_edges("decide_next_action", _after_decide_next_action)
     graph.add_edge("resolve_context_reference", "resolve_target_files")
     graph.add_conditional_edges("resolve_target_files", _after_resolve)
     graph.add_edge("ask_clarification", END)
@@ -1876,56 +2050,137 @@ def run_agent_orchestration_graph(request: AgentRunRequest) -> AgentRunResponse:
     result = final_state.get("result")
     if result is None:
         raise RuntimeError("Agent orchestration graph did not produce a result.")
-    return result
+    stop_reason = result.stop_reason or (
+        "waiting_for_apply" if result.response_type == "change_proposal" else "completed"
+    )
+    return result.model_copy(
+        update={
+            "run_id": result.run_id or f"run-{uuid.uuid4().hex[:12]}",
+            "loop_iteration": result.loop_iteration or int(final_state.get("loop_iteration") or 1),
+            "stop_reason": stop_reason,
+        }
+    )
 
 
-def _node_progress_message(node_name: str, node_state: dict[str, Any]) -> str | None:
+def _activity_for_node(
+    node_name: str,
+    node_state: dict[str, Any],
+    *,
+    run_id: str,
+    elapsed_ms: int,
+) -> dict[str, Any] | None:
+    """Map internal graph updates to user-facing agent activity events."""
+    phase = "Thinking"
+    label = ""
+    detail = ""
+    files: list[str] = []
+    command: str | None = None
+    proposal_id: str | None = None
+    status = "completed" if node_state.get("result") is not None else "running"
+
     if node_name == "load_context":
-        return "Loading repository context"
-    if node_name == "validate_active_repository":
-        return "Validating active repository"
-    if node_name == "classify_intent":
-        intent = node_state.get("intent", "")
-        return f"Intent: {intent.replace('_', ' ')}" if intent else "Classifying intent"
-    if node_name == "resolve_context_reference":
+        label = "Loaded thread context"
+        detail = "Restored repository, branch, recent files, pending proposals, and skills."
+    elif node_name == "validate_active_repository":
+        phase = "Repository"
+        label = "Validated active repository"
+    elif node_name == "classify_intent":
+        label = "Understood the task"
+        intent = str(node_state.get("intent") or "").replace("_", " ")
+        detail = f"Classified as {intent}." if intent else ""
+    elif node_name == "controller_llm":
+        label = "Planning task"
+        steps = node_state.get("plan_steps") or []
+        detail = f"Prepared {len(steps)} step{'s' if len(steps) != 1 else ''}." if steps else ""
+    elif node_name == "decide_next_action":
+        label = "Selected next action"
+        detail = "Chose the next safe repository action from the current plan."
+    elif node_name == "resolve_context_reference":
+        label = "Resolved recent context"
         ref = node_state.get("context_reference")
-        if ref and getattr(ref, "refers_to_previous_context", False):
-            files = getattr(ref, "target_files", [])
-            return f"Reference resolved: {files[0]}" if files else "Context reference resolved"
-        return "Resolving context reference"
-    if node_name == "resolve_target_files":
+        ref_files = getattr(ref, "target_files", []) if ref else []
+        files = list(ref_files[:4])
+        detail = f"Using {files[0]} from recent thread context." if files else "Checked recent files, symbols, and proposals."
+    elif node_name == "resolve_target_files":
+        phase = "Reading files"
         selected = node_state.get("selected_file")
-        return f"Target: {selected}" if selected else "Resolving target file"
-    if node_name == "generate_change_plan":
-        return "Planning changes"
-    if node_name == "generate_patch":
-        return "Generating diff"
-    if node_name == "validate_patch":
-        return "Validating"
-    if node_name == "return_proposal":
-        return "Proposal ready"
-    if node_name == "answer_read_only":
-        return "Generating answer"
-    if node_name == "ask_clarification":
-        return "Asking for clarification"
-    if node_name == "recommend_change_targets":
-        return "Identifying change targets"
-    if node_name == "decompose_and_execute":
-        steps = node_state.get("plan_step_events")
-        n = len(steps) if steps else 0
-        return f"Executed {n} step plan" if n else "Executing multi-step plan"
-    if node_name == "run_local_tool_request":
-        return "Running GitLab tool"
-    if node_name == "run_local_command_request":
-        return "Running command"
-    if node_name == "plan_git_workflow":
-        action = node_state.get("git_action")
-        return f"Planning Git workflow: {str(action).replace('_', ' ')}" if action else "Planning Git workflow"
-    if node_name == "permission_required":
-        return "Checking permissions"
-    if node_name == "proposal_error":
-        return "Proposal failed"
-    return None
+        label = "Selected target file" if selected else "Checked candidate files"
+        files = [selected] if selected else list(node_state.get("candidates") or [])[:4]
+        detail = selected or "Waiting for a safe file selection."
+    elif node_name == "generate_change_plan":
+        phase = "Planning"
+        label = "Prepared edit plan"
+    elif node_name == "generate_patch":
+        phase = "Editing"
+        label = "Drafted file changes"
+    elif node_name == "validate_patch":
+        phase = "Editing"
+        label = "Validated proposed edit"
+        detail = str(node_state.get("validation_status") or "")
+    elif node_name == "return_proposal":
+        phase = "Editing"
+        label = "Generated proposal"
+        result = node_state.get("result")
+        if result:
+            proposal_id = (result.edit_archive or [{}])[0].get("proposal_id") if getattr(result, "edit_archive", None) else None
+            files = [result.proposal_relative_path] if result.proposal_relative_path else []
+    elif node_name == "answer_read_only":
+        phase = "Finished"
+        label = "Prepared answer"
+    elif node_name == "ask_clarification":
+        phase = "Finished"
+        label = "Need clarification"
+        status = "waiting"
+    elif node_name == "recommend_change_targets":
+        phase = "Planning"
+        label = "Identified improvement candidates"
+        result = node_state.get("result")
+        files = list(getattr(result, "files_read", []) or [])[:6] if result else []
+    elif node_name == "handle_pasted_spec":
+        phase = "Planning"
+        label = "Reviewed pasted specification"
+    elif node_name == "resolve_recommendation_followup":
+        phase = "Planning"
+        label = "Loaded prior recommendations"
+    elif node_name == "decompose_and_execute":
+        phase = "Planning"
+        steps = node_state.get("plan_step_events") or []
+        label = "Completed multi-step plan" if steps else "Prepared multi-step plan"
+        detail = f"{len(steps)} planned step{'s' if len(steps) != 1 else ''}."
+    elif node_name == "run_local_tool_request":
+        phase = "Commands"
+        label = "Checked GitLab workflow"
+        command = "glab mr list"
+    elif node_name == "run_local_command_request":
+        phase = "Commands"
+        label = "Prepared command"
+    elif node_name == "plan_git_workflow":
+        phase = "Commands"
+        label = "Prepared Git workflow"
+        planned = node_state.get("commands_planned") or []
+        command = planned[0] if planned else None
+    elif node_name == "permission_required":
+        phase = "Finished"
+        label = "Waiting for permission"
+        status = "waiting"
+    elif node_name == "proposal_error":
+        phase = "Editing"
+        label = "Could not produce a valid edit"
+        status = "failed"
+    else:
+        return None
+
+    return _activity_event(
+        run_id=run_id,
+        phase=phase,
+        label=label,
+        detail=detail,
+        status=status,
+        elapsed_ms=elapsed_ms,
+        files=files,
+        command=command,
+        proposal_id=proposal_id,
+    )
 
 
 def stream_agent_orchestration_graph(request: AgentRunRequest):
@@ -1933,6 +2188,8 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
     initial_state: dict[str, Any] = {"request": request}
     accumulated_result: AgentRunResponse | None = None
     started = time.perf_counter()
+    run_id = f"run-{uuid.uuid4().hex[:12]}"
+    activity_events: list[dict[str, Any]] = []
 
     try:
         for update in _COMPILED_GRAPH.stream(initial_state, stream_mode="updates"):
@@ -1946,19 +2203,18 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
 
             # Emit per-step events from multi-step execution before the node summary
             for step_event in node_state.get("plan_step_events", []):
+                step_event = {**step_event, "run_id": run_id}
+                activity_events.append(step_event)
                 yield json.dumps(step_event)
 
-            message = _node_progress_message(node_name, node_state)
-            if message:
-                phase = _progress_phase_for_node(node_name)
-                payload = {
-                    "type": "progress_delta",
-                    "node": node_name,
-                    "phase": phase,
-                    "message": message,
-                    "status": "completed" if node_state.get("result") is not None else "running",
-                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
-                }
+            payload = _activity_for_node(
+                node_name,
+                node_state,
+                run_id=run_id,
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+            )
+            if payload:
+                activity_events.append(payload)
                 yield json.dumps(payload)
 
     except Exception as exc:
@@ -1967,6 +2223,19 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
         return
 
     if accumulated_result is not None:
+        stop_reason = accumulated_result.stop_reason or (
+            "waiting_for_apply"
+            if accumulated_result.response_type == "change_proposal"
+            else "completed"
+        )
+        accumulated_result = accumulated_result.model_copy(
+            update={
+                "run_id": accumulated_result.run_id or run_id,
+                "activity_events": activity_events,
+                "loop_iteration": accumulated_result.loop_iteration or 1,
+                "stop_reason": stop_reason,
+            }
+        )
         if accumulated_result.reasoning:
             yield json.dumps(
                 {
