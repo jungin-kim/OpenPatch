@@ -58,6 +58,7 @@ Intent = Literal[
     "local_command_request",
     "git_workflow_request",
     "gitlab_mr_request",
+    "multi_step_request",
     "ambiguous",
 ]
 
@@ -91,6 +92,7 @@ SUPPORTED_INTENTS: set[str] = {
     "local_command_request",
     "git_workflow_request",
     "gitlab_mr_request",
+    "multi_step_request",
     "ambiguous",
 }
 
@@ -100,7 +102,7 @@ repository agent to do. Return JSON only; do not include markdown or prose.
 
 Schema:
 {
-  "intent": "read_only_question|repo_analysis|recommend_change_targets|review_recommendation|write_request|write_confirmation|file_clarification_answer|local_command_request|git_workflow_request|gitlab_mr_request|ambiguous",
+  "intent": "read_only_question|repo_analysis|recommend_change_targets|review_recommendation|write_request|write_confirmation|file_clarification_answer|local_command_request|git_workflow_request|gitlab_mr_request|multi_step_request|ambiguous",
   "confidence": 0.0,
   "target_files": [],
   "target_symbols": [],
@@ -116,13 +118,19 @@ Intent guidance:
 - repo_analysis: inspect the repository structure and explain architecture or health.
 - recommend_change_targets: recommend concrete files to inspect or improve; do not require a file first.
 - review_recommendation: review a file, symbol, or recent context and list concrete improvement suggestions without preparing a diff.
-- write_request: user asks for a code/file change or a change proposal.
+- write_request: user asks for a code/file change or a change proposal (single file).
 - write_confirmation: user confirms a previous suggestion/proposal should be applied or prepared.
 - file_clarification_answer: user chooses from previously offered candidate files.
 - local_command_request: user asks to run a local command such as git status, npm install, or shell command.
 - git_workflow_request: user asks to commit, push, inspect branch/status/diff/log, or otherwise perform git workflow steps.
 - gitlab_mr_request: user asks about GitLab merge requests, pipelines, or MR creation.
+- multi_step_request: user asks to perform 2 or more sequential operations (e.g. analyze A, analyze B, then update C; or modify file X and also fix file Y).
 - ambiguous: there is not enough context to safely decide.
+
+multi_step_request examples:
+- "analyze fr_pair.py, analyze fr_folder.py, then update requirements_docker.txt"
+- "read config.py and utils.py and summarize both, then update README.md"
+- "check models/user.py and models/post.py and refactor both for consistency"
 
 Use recent thread context, pending candidates, and pending proposals. Korean and
 English requests are both expected. Do not expose hidden reasoning.
@@ -174,6 +182,7 @@ class OrchestrationState(TypedDict, total=False):
     thread_context: ThreadContext
     context_source: str
     context_reference: Any  # ContextReferenceResult | None
+    plan_step_events: list[dict]  # SSE events emitted during multi-step execution
 
 
 def _base_response(
@@ -1344,6 +1353,276 @@ def _resolve_context_reference(state: OrchestrationState) -> dict[str, Any]:
     return updates
 
 
+def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
+    """Execute a multi-step task: decompose, run each step, return combined result."""
+    request = state["request"]
+    started = time.perf_counter()
+    plan_events: list[dict] = []
+    step_results: list[dict[str, Any]] = []
+
+    steps = _parse_task_steps_with_llm(state)
+    if not steps:
+        # Fallback: treat as single write_request
+        return {
+            "intent": "write_request",
+            "graph_path": f"{state.get('graph_path', '')}->decompose_fallback",
+        }
+
+    for i, step in enumerate(steps):
+        elapsed_start = int((time.perf_counter() - started) * 1000)
+        plan_events.append({
+            "type": "progress_delta",
+            "node": "plan_step",
+            "phase": "planning",
+            "message": f"Step {i + 1}/{len(steps)}: {step.get('description', 'Processing')}",
+            "status": "running",
+            "elapsed_ms": elapsed_start,
+        })
+
+        result = _execute_plan_step(state, step, step_results)
+        step_results.append(result)
+
+        elapsed_end = int((time.perf_counter() - started) * 1000)
+        plan_events[-1] = {**plan_events[-1], "status": "completed", "elapsed_ms": elapsed_end}
+
+    combined_text = _format_plan_summary(steps, step_results, request)
+
+    # Use last write proposal if present, otherwise assistant_answer
+    last_proposal = next(
+        (r for r in reversed(step_results) if r.get("proposal_path")), None
+    )
+    all_files = list({r["file"] for r in step_results if r.get("file")})
+    plan_steps_summary = [
+        {
+            "step_index": r.get("step_index", i),
+            "description": steps[i].get("description", ""),
+            "intent": r.get("intent", "read"),
+            "file": r.get("file"),
+            "elapsed_ms": r.get("elapsed_ms"),
+            "has_proposal": bool(r.get("proposal_path")),
+        }
+        for i, r in enumerate(step_results)
+    ]
+
+    thread_context = state.get("thread_context") or ThreadContext(request.project_path, request.branch)
+    result_response = _base_response(
+        request,
+        response=combined_text,
+        response_type="change_proposal" if last_proposal else "assistant_answer",
+        files_read=all_files,
+        intent_classification="multi_step_request",
+        graph_path="decompose_and_execute",
+        skills_used=state.get("skills_used", []),
+        thread_context_files=thread_context.recent_files,
+        thread_context_symbols=thread_context.symbol_names,
+        context_source=state.get("context_source"),
+        proposal_relative_path=last_proposal["proposal_path"] if last_proposal else None,
+        proposal_original_content=last_proposal["original_content"] if last_proposal else None,
+        proposal_proposed_content=last_proposal["proposed_content"] if last_proposal else None,
+        proposal_context_summary=last_proposal.get("context_summary") if last_proposal else None,
+        selected_target_file=last_proposal["proposal_path"] if last_proposal else None,
+        plan_steps_summary=plan_steps_summary,
+        **_classifier_debug(state),
+    )
+    return {
+        "result": result_response,
+        "plan_step_events": plan_events,
+        "graph_path": "decompose_and_execute",
+    }
+
+
+def _parse_task_steps_with_llm(state: OrchestrationState) -> list[dict[str, Any]]:
+    """Use LLM to decompose a multi-step task into discrete steps."""
+    request = state["request"]
+    target_files = state.get("target_files", [])
+    file_hints = state.get("file_hints", [])
+    all_known = list(dict.fromkeys([*target_files, *file_hints]))[:12]
+
+    system_prompt = """\
+You are a task planner. Break the user's request into discrete steps. Return JSON array only.
+
+Schema: [{"step_index": 0, "description": "...", "intent": "read|write", "file": "relative/path/or/null", "instruction": "specific instruction for this step"}]
+
+intent:
+- "read": analyze, inspect, describe, summarize (no file change)
+- "write": modify, update, refactor, fix (requires a change proposal)
+
+Rules:
+- One file per step; keep steps focused
+- If analysis followed by modification of the same file, split into separate steps
+- Preserve the user's sequential intent ("analyze A, then update B")
+- Do not invent files not mentioned in the request or known context
+- Return 2–6 steps maximum
+"""
+    try:
+        response = OpenAICompatibleModelClient().generate_text(
+            ModelGenerationRequest(
+                system_prompt=system_prompt,
+                user_prompt=(
+                    f"User request: {request.task}\n\n"
+                    f"Known files: {', '.join(all_known) if all_known else 'none'}"
+                ),
+            )
+        )
+        steps = _parse_plan_json(response)
+        if steps:
+            return steps
+    except Exception:
+        logger.debug("LLM task decomposition failed; using file-hint fallback")
+
+    # Fallback: one step per target file (last one is write if there are multiple)
+    if not all_known:
+        return []
+    result: list[dict[str, Any]] = []
+    for i, f in enumerate(all_known[:6]):
+        is_last = i == len(all_known) - 1
+        intent = "write" if is_last and len(all_known) > 1 else "read"
+        result.append({
+            "step_index": i,
+            "description": ("Update" if intent == "write" else "Analyze") + f" {Path(f).name}",
+            "intent": intent,
+            "file": f,
+            "instruction": request.task,
+        })
+    return result
+
+
+def _parse_plan_json(response: str) -> list[dict[str, Any]]:
+    text = response.strip()
+    # Strip markdown fences
+    text = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("```").strip()
+    # Extract JSON array
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    if not match:
+        return []
+    try:
+        raw = json.loads(match.group(0))
+        if not isinstance(raw, list):
+            return []
+        steps: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            step: dict[str, Any] = {
+                "step_index": int(item.get("step_index", len(steps))),
+                "description": str(item.get("description", "Step")),
+                "intent": "write" if str(item.get("intent", "read")).lower() == "write" else "read",
+                "file": item.get("file") or None,
+                "instruction": str(item.get("instruction", "")),
+            }
+            steps.append(step)
+        return steps
+    except (json.JSONDecodeError, ValueError):
+        return []
+
+
+def _execute_plan_step(
+    state: OrchestrationState,
+    step: dict[str, Any],
+    prior_results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Execute a single plan step — read-only analysis or file change proposal."""
+    request = state["request"]
+    intent = step.get("intent", "read")
+    file: str | None = step.get("file")
+    instruction = step.get("instruction") or request.task
+    started = time.perf_counter()
+
+    if intent == "write" and file:
+        try:
+            from repooperator_worker.services.edit_service import propose_file_edit
+
+            proposal = propose_file_edit(
+                AgentProposeFileRequest(
+                    project_path=request.project_path,
+                    relative_path=file,
+                    instruction=instruction,
+                )
+            )
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            return {
+                "step_index": step.get("step_index", 0),
+                "file": file,
+                "intent": "write",
+                "response": f"Proposed changes to `{file}`.",
+                "proposal_path": proposal.relative_path,
+                "original_content": proposal.original_content,
+                "proposed_content": proposal.proposed_content,
+                "context_summary": proposal.context_summary,
+                "elapsed_ms": elapsed_ms,
+            }
+        except (ValueError, RuntimeError) as exc:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            return {
+                "step_index": step.get("step_index", 0),
+                "file": file,
+                "intent": "write",
+                "response": f"Could not generate proposal for `{file}`: {exc}",
+                "elapsed_ms": elapsed_ms,
+            }
+
+    # Read-only step — use file context + LLM
+    skills_context = state.get("skills_context") or ""
+    prior_context_parts = [
+        f"Prior analysis of {r['file']}:\n{str(r.get('response', ''))[:400]}"
+        for r in prior_results
+        if r.get("file") and r.get("intent") == "read"
+    ]
+    context = build_query_aware_context(request.project_path, instruction)
+
+    answer = ""
+    try:
+        answer = OpenAICompatibleModelClient().generate_text(
+            ModelGenerationRequest(
+                system_prompt=(
+                    "You are RepoOperator. Analyze the repository context and respond to the user's request. "
+                    "Be concise. Focus on the specific file if named.\n"
+                    + language_guidance_for_task(request.task)
+                ),
+                user_prompt="\n\n".join(
+                    part
+                    for part in [
+                        f"User request: {instruction}",
+                        *prior_context_parts[:2],
+                        skills_context[:500] if skills_context else None,
+                        context.to_prompt_context(),
+                    ]
+                    if part
+                ),
+            )
+        )
+        answer, _ = clean_user_visible_response(answer, user_task=request.task)
+    except (ValueError, RuntimeError) as exc:
+        answer = f"Could not analyze `{file or 'context'}`: {exc}"
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "step_index": step.get("step_index", 0),
+        "file": file,
+        "intent": "read",
+        "response": answer,
+        "elapsed_ms": elapsed_ms,
+    }
+
+
+def _format_plan_summary(
+    steps: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    request: AgentRunRequest,
+) -> str:
+    parts: list[str] = [f"Completed {len(steps)} step{'s' if len(steps) != 1 else ''}:\n"]
+    for i, (step, result) in enumerate(zip(steps, results)):
+        desc = step.get("description", f"Step {i + 1}")
+        file = result.get("file") or step.get("file") or ""
+        label = f"**Step {i + 1}: {desc}**"
+        if result.get("proposal_path"):
+            parts.append(f"{label}\n\nProposed changes to `{file}`. Review the diff and apply when ready.\n")
+        else:
+            response = str(result.get("response", "No output."))
+            parts.append(f"{label}\n\n{response[:800]}\n")
+    return "\n---\n\n".join(parts)
+
+
 def _after_classify(state: OrchestrationState) -> str:
     intent = state.get("intent")
     if intent == "read_only_question":
@@ -1358,6 +1637,8 @@ def _after_classify(state: OrchestrationState) -> str:
         return "answer_read_only"
     if intent in {"repo_analysis", "recommend_change_targets"}:
         return "recommend_change_targets"
+    if intent == "multi_step_request":
+        return "decompose_and_execute"
     if state.get("settings").write_mode not in {
         WRITE_MODE_WRITE_WITH_APPROVAL,
         WRITE_MODE_AUTO_APPLY,
@@ -1391,6 +1672,7 @@ def _build_graph():
     graph.add_node("resolve_target_files", _resolve_target_files)
     graph.add_node("ask_clarification", _ask_clarification)
     graph.add_node("recommend_change_targets", _recommend_change_targets)
+    graph.add_node("decompose_and_execute", _decompose_and_execute)
     graph.add_node("generate_change_plan", _generate_change_plan)
     graph.add_node("generate_patch", _generate_patch)
     graph.add_node("validate_patch", _validate_patch)
@@ -1419,6 +1701,7 @@ def _build_graph():
     graph.add_edge("run_local_tool_request", END)
     graph.add_edge("run_local_command_request", END)
     graph.add_edge("plan_git_workflow", END)
+    graph.add_edge("decompose_and_execute", END)
     return graph
 
 
@@ -1464,6 +1747,10 @@ def _node_progress_message(node_name: str, node_state: dict[str, Any]) -> str | 
         return "Asking for clarification"
     if node_name == "recommend_change_targets":
         return "Identifying change targets"
+    if node_name == "decompose_and_execute":
+        steps = node_state.get("plan_step_events")
+        n = len(steps) if steps else 0
+        return f"Executed {n} step plan" if n else "Executing multi-step plan"
     if node_name == "run_local_tool_request":
         return "Running GitLab tool"
     if node_name == "run_local_command_request":
@@ -1493,6 +1780,10 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
 
             if "result" in node_state and node_state["result"] is not None:
                 accumulated_result = node_state["result"]
+
+            # Emit per-step events from multi-step execution before the node summary
+            for step_event in node_state.get("plan_step_events", []):
+                yield json.dumps(step_event)
 
             message = _node_progress_message(node_name, node_state)
             if message:
@@ -1533,7 +1824,7 @@ def _progress_phase_for_node(node_name: str) -> str:
         return "context"
     if node_name in {"resolve_target_files", "ask_clarification"}:
         return "file_read"
-    if node_name in {"generate_change_plan", "recommend_change_targets"}:
+    if node_name in {"generate_change_plan", "recommend_change_targets", "decompose_and_execute", "plan_step"}:
         return "planning"
     if node_name in {"run_local_tool_request", "run_local_command_request", "plan_git_workflow"}:
         return "commands"

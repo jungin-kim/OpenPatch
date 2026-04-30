@@ -224,6 +224,7 @@ class AgentRunResponse(BaseModel):
     classifier: str | None = None
     classifier_confidence: float | None = None
     validation_status: str | None = None
+    plan_steps_summary: list[dict] = []
 
 
 class LocalBranchSummary(BaseModel):

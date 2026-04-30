@@ -17,6 +17,7 @@ export type ChatMessage = {
   timestamp: Date;
   metadata?: AgentRunPayload;
   proposal?: ChangeProposal;
+  progressSteps?: ProgressStep[];
 };
 
 function CommandApprovalCard({
@@ -518,6 +519,9 @@ export function ChatMessages({
                 </div>
               ) : msg.role === "assistant" ? (
                 <div className="message-bubble message-bubble-md">
+                  {msg.progressSteps && msg.progressSteps.length > 0 ? (
+                    <ProgressTimeline steps={msg.progressSteps} done={true} />
+                  ) : null}
                   {msg.metadata?.reasoning ? (
                     <details className="reasoning-panel">
                       <summary>Reasoning / Thinking</summary>

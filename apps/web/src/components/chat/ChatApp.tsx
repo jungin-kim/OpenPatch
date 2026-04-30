@@ -107,7 +107,9 @@ export function ChatApp() {
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [streamedReasoning, setStreamedReasoning] = useState("");
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
+  const queuedMessagesRef = useRef<string[]>([]);
 
   // ── Health check ─────────────────────────────────────────────────────────
   async function refreshHealthCheck(options: { syncProvider?: boolean } = {}) {
@@ -631,26 +633,26 @@ export function ChatApp() {
     }
   }
 
-  async function handleQuestionSubmit() {
-    if (!question.trim() || questionPending || !repoResult) return;
-
-    const userMessage: ChatMessage = {
-      id: `${Date.now()}-user`,
-      role: "user",
-      content: question.trim(),
-      timestamp: new Date(),
-    };
-    const messagesWithUser = [...messages, userMessage];
-    setMessages(messagesWithUser);
-    updateActiveThread(messagesWithUser);
-    setQuestion("");
+  async function runQuestion(taskText: string, currentMessages: ChatMessage[]) {
     setQuestionPending(true);
     setProgressSteps([]);
     setStreamedAnswer("");
     setStreamedReasoning("");
 
-    // Build conversation history from the last 10 messages (user + assistant only)
-    // so the backend can resolve write confirmations against prior suggestions.
+    const userMessage: ChatMessage = {
+      id: `${Date.now()}-user`,
+      role: "user",
+      content: taskText,
+      timestamp: new Date(),
+    };
+    const messagesWithUser = [...currentMessages, userMessage];
+    setMessages(messagesWithUser);
+    updateActiveThread(messagesWithUser);
+
+    // Capture progress steps at end of run for attaching to the message
+    let capturedProgressSteps: ProgressStep[] = [];
+
+    // Build conversation history
     const conversationHistory: ConversationMessage[] = messagesWithUser
       .filter((m) => m.role === "user" || m.role === "assistant")
       .slice(-10)
@@ -662,10 +664,10 @@ export function ChatApp() {
 
     try {
       const streamInput = {
-        project_path: repoResult.project_path,
-        git_provider: repoResult.git_provider,
-        branch: repoResult.branch || undefined,
-        task: userMessage.content,
+        project_path: repoResult!.project_path,
+        git_provider: repoResult!.git_provider,
+        branch: repoResult!.branch || undefined,
+        task: taskText,
         conversation_history: conversationHistory,
       };
 
@@ -673,18 +675,26 @@ export function ChatApp() {
 
       for await (const event of streamAgentTask(streamInput)) {
         if (event.type === "progress") {
-          setProgressSteps((prev) => [...prev, { node: event.node, message: event.message, phase: "context", status: "running" }]);
+          setProgressSteps((prev) => {
+            const next = [...prev, { node: event.node, message: event.message, phase: "context", status: "running" }];
+            capturedProgressSteps = next;
+            return next;
+          });
         } else if (event.type === "progress_delta") {
-          setProgressSteps((prev) => [
-            ...prev,
-            {
-              node: event.node ?? event.phase ?? "progress",
-              phase: event.phase,
-              message: event.message,
-              status: event.status,
-              elapsedMs: event.elapsed_ms,
-            },
-          ]);
+          setProgressSteps((prev) => {
+            const next = [
+              ...prev,
+              {
+                node: event.node ?? event.phase ?? "progress",
+                phase: event.phase,
+                message: event.message,
+                status: event.status,
+                elapsedMs: event.elapsed_ms,
+              },
+            ];
+            capturedProgressSteps = next;
+            return next;
+          });
         } else if (event.type === "assistant_delta") {
           setStreamedAnswer((prev) => prev + event.delta);
         } else if (event.type === "reasoning_delta") {
@@ -707,8 +717,8 @@ export function ChatApp() {
         payload.proposal_relative_path
       ) {
         const proposal = proposalFromRunPayload(payload, {
-          projectPath: repoResult.project_path,
-          branch: repoResult.branch,
+          projectPath: repoResult!.project_path,
+          branch: repoResult!.branch,
         });
         assistantMessage = {
           id: `${Date.now()}-proposal`,
@@ -717,6 +727,7 @@ export function ChatApp() {
           timestamp: new Date(),
           metadata: payload,
           proposal,
+          progressSteps: capturedProgressSteps.length > 0 ? capturedProgressSteps : undefined,
         };
       } else if (payload.response_type === "proposal_error") {
         assistantMessage = {
@@ -725,6 +736,7 @@ export function ChatApp() {
           content: payload.response,
           timestamp: new Date(),
           metadata: payload,
+          progressSteps: capturedProgressSteps.length > 0 ? capturedProgressSteps : undefined,
         };
       } else {
         assistantMessage = {
@@ -733,12 +745,14 @@ export function ChatApp() {
           content: payload.response,
           timestamp: new Date(),
           metadata: payload,
+          progressSteps: capturedProgressSteps.length > 0 ? capturedProgressSteps : undefined,
         };
       }
 
       const nextMessages = [...messagesWithUser, assistantMessage];
       setMessages(nextMessages);
       updateActiveThread(nextMessages);
+      return nextMessages;
     } catch (error) {
       const msg =
         error instanceof LocalWorkerClientError || error instanceof Error
@@ -754,16 +768,52 @@ export function ChatApp() {
             ? `The request timed out. The model may need more time — retry, or try a shorter request. Details: ${msg}`
             : `Error: ${msg}`,
           timestamp: new Date(),
+          progressSteps: capturedProgressSteps.length > 0 ? capturedProgressSteps : undefined,
         },
       ];
       setMessages(messagesWithError);
       updateActiveThread(messagesWithError);
+      return messagesWithError;
     } finally {
       setQuestionPending(false);
-      setProgressSteps([]);
-      setStreamedAnswer("");
-      setStreamedReasoning("");
+      // Keep progressSteps visible briefly before the message takes over
+      setTimeout(() => {
+        setProgressSteps([]);
+        setStreamedAnswer("");
+        setStreamedReasoning("");
+      }, 100);
     }
+  }
+
+  async function handleQuestionSubmit() {
+    if (!question.trim() || !repoResult) return;
+
+    const taskText = question.trim();
+    setQuestion("");
+
+    // If already running, queue the message
+    if (questionPending) {
+      setQueuedMessages((prev) => {
+        const next = [...prev, taskText];
+        queuedMessagesRef.current = next;
+        return next;
+      });
+      return;
+    }
+
+    // Run the question, then drain the queue
+    void (async () => {
+      let currentMessages = messages;
+      currentMessages = (await runQuestion(taskText, currentMessages)) ?? currentMessages;
+
+      // Drain queue: process each queued message in sequence
+      while (queuedMessagesRef.current.length > 0) {
+        const [next, ...rest] = queuedMessagesRef.current;
+        queuedMessagesRef.current = rest;
+        setQueuedMessages(rest);
+        currentMessages = (await runQuestion(next, currentMessages)) ?? currentMessages;
+      }
+    })();
   }
 
   function handleNewChat() {
@@ -1146,6 +1196,7 @@ export function ChatApp() {
           disabled={!repoResult}
           pending={questionPending}
           writeMode={writeMode}
+          queuedCount={queuedMessages.length}
         />
       }
     />

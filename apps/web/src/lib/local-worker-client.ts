@@ -183,6 +183,14 @@ export type AgentRunPayload = {
   commands_planned?: string[];
   commands_run?: string[];
   reasoning?: string | null;
+  plan_steps_summary?: Array<{
+    step_index: number;
+    description: string;
+    intent: string;
+    file?: string | null;
+    elapsed_ms?: number | null;
+    has_proposal?: boolean;
+  }>;
 };
 
 export type CommandApprovalPayload = {

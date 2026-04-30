@@ -1554,6 +1554,64 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
+.progress-step-live {
+  color: var(--accent, #6366f1);
+  font-weight: 600;
+}
+
+.progress-timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 2px 6px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  gap: 8px;
+}
+
+.progress-timeline-header:hover {
+  color: var(--foreground);
+}
+
+.progress-timeline-collapse {
+  opacity: 0.6;
+  font-size: 0.65rem;
+}
+
+.progress-timeline-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: var(--surface-raised, rgba(0,0,0,0.04));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+
+.progress-timeline-summary:hover {
+  color: var(--foreground);
+  border-color: var(--accent, #6366f1);
+}
+
+.progress-timeline-summary-icon {
+  font-size: 0.8em;
+}
+
+.progress-timeline-expand {
+  opacity: 0.6;
+  font-size: 0.65rem;
+  margin-left: 2px;
+}
+
 .reasoning-panel {
   margin-bottom: 10px;
   border: 1px solid var(--border);
@@ -1745,6 +1803,24 @@ select {
 .composer-send-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.composer-send-btn-queue {
+  background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+}
+
+.composer-queue-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px 8px;
+  font-size: 0.78rem;
+  color: var(--accent, #6366f1);
+  font-weight: 600;
+}
+
+.composer-queue-icon {
+  font-size: 0.85em;
 }
 
 /* ── Markdown message body ────────────────────────── */
