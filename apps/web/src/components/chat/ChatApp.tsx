@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   checkoutLocalBranch,
+  cancelAgentRun,
   createLocalBranch,
   getProviderBranches,
   getProviderProjects,
@@ -11,6 +12,7 @@ import {
   getRepositoryOpenPlan,
   getAgentRun,
   getAgentRunEvents,
+  getActiveAgentRuns,
   getWorkerHealth,
   generateApplySummary,
   listLocalBranches,
@@ -20,6 +22,7 @@ import {
   streamAgentTask,
   runApprovedCommand,
   saveThread,
+  steerAgentRun,
   updatePermissionMode,
   type AgentRunPayload,
   type ConversationMessage,
@@ -61,6 +64,13 @@ export type ChatThread = {
   messages: ChatMessage[];
   createdAt: Date;
   updatedAt: Date;
+};
+
+type QueuedMessage = {
+  id: string;
+  threadId: string;
+  text: string;
+  status: "queued" | "running" | "completed" | "cancelled" | "failed";
 };
 
 export function ChatApp() {
@@ -109,11 +119,18 @@ export function ChatApp() {
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [streamedReasoning, setStreamedReasoning] = useState("");
-  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeRunByThread, setActiveRunByThread] = useState<Record<string, string>>({});
+  const [inputMode, setInputMode] = useState<"queue" | "steer">("queue");
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
-  const queuedMessagesRef = useRef<string[]>([]);
+  const queuedMessagesRef = useRef<QueuedMessage[]>([]);
+  const activeThreadIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    activeThreadIdRef.current = activeThreadId;
+  }, [activeThreadId]);
 
   function normalizeActivityEvents(
     events?: AgentRunPayload["activity_events"],
@@ -143,13 +160,37 @@ export function ChatApp() {
       });
   }
 
-  function rememberActiveRun(runId: string | null) {
+  function activeRunStorageKey(threadId: string) {
+    return `repooperator-active-run-id:${threadId}`;
+  }
+
+  function rememberActiveRun(runId: string | null, threadId = activeThreadId) {
+    if (!threadId) return;
     setActiveRunId(runId);
+    setActiveRunByThread((current) => {
+      const next = { ...current };
+      if (runId) next[threadId] = runId;
+      else delete next[threadId];
+      return next;
+    });
     if (runId) {
-      window.localStorage.setItem("repooperator-active-run-id", runId);
+      window.localStorage.setItem(activeRunStorageKey(threadId), runId);
     } else {
-      window.localStorage.removeItem("repooperator-active-run-id");
+      window.localStorage.removeItem(activeRunStorageKey(threadId));
     }
+  }
+
+  function persistQueue(items: QueuedMessage[]) {
+    queuedMessagesRef.current = items;
+    window.localStorage.setItem("repooperator-queued-messages", JSON.stringify(items));
+  }
+
+  function setQueuedItems(updater: (items: QueuedMessage[]) => QueuedMessage[]) {
+    setQueuedMessages((current) => {
+      const next = updater(current);
+      persistQueue(next);
+      return next;
+    });
   }
 
   // ── Health check ─────────────────────────────────────────────────────────
@@ -206,12 +247,49 @@ export function ChatApp() {
 
   useEffect(() => {
     setSidebarCollapsed(window.localStorage.getItem("repooperator-sidebar-collapsed") === "true");
+    try {
+      const savedQueue = JSON.parse(window.localStorage.getItem("repooperator-queued-messages") || "[]") as QueuedMessage[];
+      const validQueue = Array.isArray(savedQueue)
+        ? savedQueue.filter((item) => item && item.id && item.threadId && item.text)
+        : [];
+      queuedMessagesRef.current = validQueue;
+      setQueuedMessages(validQueue);
+    } catch {
+      queuedMessagesRef.current = [];
+      setQueuedMessages([]);
+    }
   }, []);
 
   useEffect(() => {
-    const savedRunId = window.localStorage.getItem("repooperator-active-run-id");
+    if (connectionState !== "connected") return;
+    let cancelled = false;
+    async function loadActiveRuns() {
+      try {
+        const payload = await getActiveAgentRuns();
+        if (cancelled) return;
+        const next: Record<string, string> = {};
+        for (const run of payload.runs) {
+          if (run.thread_id) next[run.thread_id] = run.id;
+        }
+        setActiveRunByThread(next);
+      } catch {
+        // Active run indicators are a convenience; chat can still operate without them.
+      }
+    }
+    void loadActiveRuns();
+    const timer = window.setInterval(() => void loadActiveRuns(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [connectionState]);
+
+  useEffect(() => {
+    if (!activeThreadId) return;
+    const savedRunId = window.localStorage.getItem(activeRunStorageKey(activeThreadId));
     if (!savedRunId) return;
     const runId = savedRunId;
+    const threadId = activeThreadId;
     let cancelled = false;
     async function rehydrateRun() {
       try {
@@ -223,7 +301,7 @@ export function ChatApp() {
         if (run.status === "running") {
           setProgressSteps(normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"]));
           setQuestionPending(true);
-          setActiveRunId(runId);
+          rememberActiveRun(runId, threadId);
           return;
         }
         setProgressSteps(
@@ -231,7 +309,7 @@ export function ChatApp() {
             finalizeRunning: true,
           }),
         );
-        rememberActiveRun(null);
+        rememberActiveRun(null, threadId);
         setQuestionPending(false);
         if (run.final_result) {
           const assistantMessage: ChatMessage = {
@@ -252,14 +330,14 @@ export function ChatApp() {
           });
         }
       } catch {
-        rememberActiveRun(null);
+        rememberActiveRun(null, threadId);
       }
     }
     void rehydrateRun();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeThreadId]);
 
   function handleSidebarCollapsedChange() {
     setSidebarCollapsed((current) => {
@@ -578,6 +656,21 @@ export function ChatApp() {
     void persistThread(updatedThread);
   }
 
+  function updateThreadMessages(threadId: string, nextMessages: ChatMessage[], nextRepoResult?: RepoOpenPayload | null) {
+    const existingThread = threads.find((thread) => thread.id === threadId);
+    if (!existingThread) return;
+    const updatedThread: ChatThread = {
+      ...existingThread,
+      repoResult: nextRepoResult || existingThread.repoResult,
+      messages: nextMessages,
+      updatedAt: new Date(),
+    };
+    setThreads((prev) =>
+      prev.map((thread) => (thread.id === threadId ? updatedThread : thread)),
+    );
+    void persistThread(updatedThread);
+  }
+
   function buildThreadTitle(payload: RepoOpenPayload): string {
     const repoName = payload.project_path.split(/[\\/]/).filter(Boolean).at(-1);
     return repoName || payload.project_path;
@@ -800,8 +893,10 @@ export function ChatApp() {
   }
 
   async function runQuestion(taskText: string, currentMessages: ChatMessage[]) {
+    const runThreadId = activeThreadId;
+    if (!runThreadId || !repoResult) return currentMessages;
     setQuestionPending(true);
-    setProgressSteps([]);
+    if (activeThreadIdRef.current === runThreadId) setProgressSteps([]);
     setStreamedAnswer("");
     setStreamedReasoning("");
 
@@ -812,8 +907,8 @@ export function ChatApp() {
       timestamp: new Date(),
     };
     const messagesWithUser = [...currentMessages, userMessage];
-    setMessages(messagesWithUser);
-    updateActiveThread(messagesWithUser);
+    if (activeThreadIdRef.current === runThreadId) setMessages(messagesWithUser);
+    updateThreadMessages(runThreadId, messagesWithUser, repoResult);
 
     // Capture progress steps at end of run for attaching to the message
     let capturedProgressSteps: ProgressStep[] = [];
@@ -833,6 +928,7 @@ export function ChatApp() {
         project_path: repoResult!.project_path,
         git_provider: repoResult!.git_provider,
         branch: repoResult!.branch || undefined,
+        thread_id: runThreadId,
         task: taskText,
         conversation_history: conversationHistory,
       };
@@ -841,6 +937,7 @@ export function ChatApp() {
 
       for await (const event of streamAgentTask(streamInput)) {
         if (event.type === "progress") {
+          if (activeThreadIdRef.current !== runThreadId) continue;
           setProgressSteps((prev) => {
             const next = [
               ...prev,
@@ -854,7 +951,8 @@ export function ChatApp() {
             return next;
           });
         } else if (event.type === "progress_delta") {
-          if (event.run_id && event.run_id !== activeRunId) rememberActiveRun(event.run_id);
+          if (event.run_id && event.run_id !== activeRunId) rememberActiveRun(event.run_id, runThreadId);
+          if (activeThreadIdRef.current !== runThreadId) continue;
           setProgressSteps((prev) => {
             const completedPrev = prev.map((step, index) =>
               index === prev.length - 1 && step.status === "running"
@@ -884,14 +982,14 @@ export function ChatApp() {
             return next;
           });
         } else if (event.type === "assistant_delta") {
-          setStreamedAnswer((prev) => prev + event.delta);
+          if (activeThreadIdRef.current === runThreadId) setStreamedAnswer((prev) => prev + event.delta);
         } else if (event.type === "reasoning_delta") {
-          setStreamedReasoning((prev) => prev + event.delta);
+          if (activeThreadIdRef.current === runThreadId) setStreamedReasoning((prev) => prev + event.delta);
         } else if (event.type === "done") {
           payload = event.result;
         } else if (event.type === "final_message") {
           payload = event.result;
-          rememberActiveRun(null);
+          rememberActiveRun(null, runThreadId);
         } else if (event.type === "error") {
           throw new Error(event.message);
         }
@@ -943,8 +1041,8 @@ export function ChatApp() {
       }
 
       const nextMessages = [...messagesWithUser, assistantMessage];
-      setMessages(nextMessages);
-      updateActiveThread(nextMessages);
+      if (activeThreadIdRef.current === runThreadId) setMessages(nextMessages);
+      updateThreadMessages(runThreadId, nextMessages, repoResult);
       return nextMessages;
     } catch (error) {
       const msg =
@@ -964,16 +1062,18 @@ export function ChatApp() {
           progressSteps: capturedProgressSteps.length > 0 ? capturedProgressSteps : undefined,
         },
       ];
-      setMessages(messagesWithError);
-      updateActiveThread(messagesWithError);
+      if (activeThreadIdRef.current === runThreadId) setMessages(messagesWithError);
+      updateThreadMessages(runThreadId, messagesWithError, repoResult);
       return messagesWithError;
     } finally {
-      setQuestionPending(false);
+      if (activeThreadIdRef.current === runThreadId) setQuestionPending(false);
       // Keep progressSteps visible briefly before the message takes over
       setTimeout(() => {
-        setProgressSteps([]);
-        setStreamedAnswer("");
-        setStreamedReasoning("");
+        if (activeThreadIdRef.current === runThreadId) {
+          setProgressSteps([]);
+          setStreamedAnswer("");
+          setStreamedReasoning("");
+        }
       }, 100);
     }
   }
@@ -984,29 +1084,91 @@ export function ChatApp() {
     const taskText = question.trim();
     setQuestion("");
 
-    // If already running, queue the message
     if (questionPending) {
-      setQueuedMessages((prev) => {
-        const next = [...prev, taskText];
-        queuedMessagesRef.current = next;
-        return next;
-      });
+      if (inputMode === "steer" && activeRunId) {
+        try {
+          await steerAgentRun(activeRunId, taskText);
+          setProgressSteps((prev) => [
+            ...prev,
+            {
+              phase: "Planning",
+              label: "Received steering instruction",
+              detail: taskText,
+              status: "completed",
+              startedAt: new Date().toISOString(),
+              endedAt: new Date().toISOString(),
+              durationMs: 0,
+            },
+          ]);
+        } catch (error) {
+          const queued: QueuedMessage = {
+            id: `${Date.now()}-queued`,
+            threadId: activeThreadId || "",
+            text: taskText,
+            status: "queued",
+          };
+          setQueuedItems((items) => [...items, queued]);
+        }
+      } else {
+        const queued: QueuedMessage = {
+          id: `${Date.now()}-queued`,
+          threadId: activeThreadId || "",
+          text: taskText,
+          status: "queued",
+        };
+        setQueuedItems((items) => [...items, queued]);
+      }
       return;
     }
 
-    // Run the question, then drain the queue
     void (async () => {
+      const runThreadId = activeThreadId;
       let currentMessages = messages;
       currentMessages = (await runQuestion(taskText, currentMessages)) ?? currentMessages;
 
-      // Drain queue: process each queued message in sequence
-      while (queuedMessagesRef.current.length > 0) {
-        const [next, ...rest] = queuedMessagesRef.current;
-        queuedMessagesRef.current = rest;
-        setQueuedMessages(rest);
-        currentMessages = (await runQuestion(next, currentMessages)) ?? currentMessages;
+      while (runThreadId) {
+        const nextItem = queuedMessagesRef.current.find(
+          (item) => item.threadId === runThreadId && item.status === "queued",
+        );
+        if (!nextItem) break;
+        setQueuedItems((items) =>
+          items.map((item) => item.id === nextItem.id ? { ...item, status: "running" } : item),
+        );
+        currentMessages = (await runQuestion(nextItem.text, currentMessages)) ?? currentMessages;
+        setQueuedItems((items) =>
+          items.map((item) => item.id === nextItem.id ? { ...item, status: "completed" } : item),
+        );
       }
     })();
+  }
+
+  function handleCancelQueuedMessage(id: string) {
+    setQueuedItems((items) =>
+      items.map((item) => item.id === id ? { ...item, status: "cancelled" } : item),
+    );
+  }
+
+  async function handleStopRun() {
+    if (!activeRunId) return;
+    try {
+      await cancelAgentRun(activeRunId);
+    } finally {
+      const runThreadId = activeThreadId;
+      if (runThreadId) rememberActiveRun(null, runThreadId);
+      setQuestionPending(false);
+      setProgressSteps((prev) => [
+        ...prev,
+        {
+          phase: "Finished",
+          label: "Run cancelled",
+          detail: "RepoOperator stopped this run at a safe checkpoint.",
+          status: "completed",
+          startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+          durationMs: 0,
+        },
+      ]);
+    }
   }
 
   function handleNewChat() {
@@ -1069,6 +1231,14 @@ export function ChatApp() {
       setActiveThreadId(thread.id);
       setRepoResult(reopened);
       setMessages(thread.messages);
+      const threadRunId = activeRunByThread[thread.id] || window.localStorage.getItem(activeRunStorageKey(thread.id));
+      setActiveRunId(threadRunId || null);
+      setQuestionPending(Boolean(threadRunId));
+      if (!threadRunId) {
+        setProgressSteps([]);
+        setStreamedAnswer("");
+        setStreamedReasoning("");
+      }
       await refreshLocalBranchesForRepo(reopened);
       setThreads((prev) =>
         prev.map((item) => (item.id === thread.id ? restoredThread : item)),
@@ -1343,6 +1513,7 @@ export function ChatApp() {
           recentProjects={recentProjectHistory}
           threads={threads}
           activeThreadId={activeThreadId}
+          runningThreadIds={Object.keys(activeRunByThread)}
           threadStoreState={threadStoreState}
           onNewChat={handleNewChat}
           onSelectThread={handleSelectThread}
@@ -1410,10 +1581,16 @@ export function ChatApp() {
           value={question}
           onChange={setQuestion}
           onSubmit={handleQuestionSubmit}
+          onCancelQueuedMessage={handleCancelQueuedMessage}
+          onStopRun={handleStopRun}
           disabled={!repoResult}
           pending={questionPending}
+          inputMode={inputMode}
+          onInputModeChange={setInputMode}
           writeMode={writeMode}
-          queuedCount={queuedMessages.length}
+          queuedMessages={queuedMessages
+            .filter((item) => item.threadId === activeThreadId && item.status !== "completed")
+            .map((item) => ({ id: item.id, text: item.text, status: item.status }))}
         />
       }
     />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 export type ProgressStep = {
   id?: string;
@@ -24,25 +24,12 @@ type Props = {
   done: boolean;
 };
 
-const PHASE_ORDER = [
-  "Thinking",
-  "Repository",
-  "Searching",
-  "Reading files",
-  "Planning",
-  "Editing",
-  "Commands",
-  "Applying changes",
-  "Finished",
-];
-
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const sec = ms / 1000;
-  if (sec < 60) return `${sec.toFixed(1)}s`;
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return `${m}m ${s}s`;
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
 }
 
 function statusLabel(status?: string): string {
@@ -55,23 +42,13 @@ function statusLabel(status?: string): string {
 
 export function ProgressTimeline({ steps, done }: Props) {
   const [collapsed, setCollapsed] = useState(false);
-  const [liveSec, setLiveSec] = useState(0);
-  const lastStepCountRef = useRef(0);
-  const lastStepStartRef = useRef(Date.now());
-
-  useEffect(() => {
-    if (steps.length > lastStepCountRef.current) {
-      lastStepStartRef.current = Date.now();
-      lastStepCountRef.current = steps.length;
-      setLiveSec(0);
-    }
-  }, [steps.length]);
+  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     if (done) return;
     const timer = setInterval(() => {
-      setLiveSec((current) => current + 1);
-    }, 500);
+      setNow(Date.now());
+    }, 1000);
     return () => clearInterval(timer);
   }, [done]);
 
@@ -81,22 +58,9 @@ export function ProgressTimeline({ steps, done }: Props) {
     return () => clearTimeout(timeout);
   }, [done]);
 
-  const grouped = useMemo(() => {
-    const buckets = new Map<string, ProgressStep[]>();
-    for (const step of steps) {
-      const phase = step.phase || "Thinking";
-      buckets.set(phase, [...(buckets.get(phase) || []), step]);
-    }
-    return Array.from(buckets.entries()).sort(([a], [b]) => {
-      const ai = PHASE_ORDER.indexOf(a);
-      const bi = PHASE_ORDER.indexOf(b);
-      return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-    });
-  }, [steps]);
-
   if (steps.length === 0) return null;
 
-  const totalMs = steps[steps.length - 1]?.elapsedMs ?? steps[steps.length - 1]?.durationMs ?? undefined;
+  const totalMs = runDurationMs(steps, done, now);
 
   if (done && collapsed) {
     return (
@@ -106,7 +70,7 @@ export function ProgressTimeline({ steps, done }: Props) {
         onClick={() => setCollapsed(false)}
         title="Show agent activity"
       >
-        <span>Worked for {totalMs !== undefined ? formatDuration(totalMs) : "a moment"}</span>
+        <span>Worked for {formatDuration(totalMs)}</span>
         <span className="progress-timeline-expand">Show work log</span>
       </button>
     );
@@ -121,61 +85,64 @@ export function ProgressTimeline({ steps, done }: Props) {
         disabled={!done}
         title={done ? "Collapse work log" : "Agent activity"}
       >
-        <span>{done && totalMs !== undefined ? `Worked for ${formatDuration(totalMs)}` : "Agent Activity"}</span>
+        <span>{done ? `Worked for ${formatDuration(totalMs)}` : `Agent Activity · ${formatDuration(totalMs)}`}</span>
         {done ? <span className="progress-timeline-collapse">hide</span> : null}
       </button>
-      <div className="progress-groups">
-        {grouped.map(([phase, phaseSteps]) => (
-          <div key={phase} className="progress-group">
-            <div className="progress-group-title">{phase}</div>
-            <div className="progress-group-steps">
-              {phaseSteps.map((step, i) => {
-                const isLast = steps[steps.length - 1] === step;
-                const isActive = isLast && !done && step.status !== "completed";
-                const startedMs = step.startedAt ? Date.parse(step.startedAt) : Number.NaN;
-                const endedMs = step.endedAt ? Date.parse(step.endedAt) : Number.NaN;
-                const liveDurationMs =
-                  step.status === "running" && Number.isFinite(startedMs)
-                    ? Date.now() - startedMs
-                    : Number.isFinite(startedMs) && Number.isFinite(endedMs)
-                      ? endedMs - startedMs
-                      : null;
-                const time =
-                  step.durationMs !== undefined && step.durationMs !== null
-                    ? formatDuration(step.durationMs)
-                    : liveDurationMs !== null
-                      ? formatDuration(Math.max(0, liveDurationMs))
-                    : step.elapsedMs !== undefined && step.elapsedMs !== null
-                      ? formatDuration(step.elapsedMs)
-                      : isActive
-                        ? `${liveSec}s`
-                        : null;
-
-                return (
-                  <div
-                    key={step.id || `${phase}-${i}-${step.label || step.message}`}
-                    className={`progress-step progress-step-${step.status || "completed"}${isActive ? " progress-step-active" : ""}`}
-                  >
-                    <span className="progress-step-marker" aria-hidden="true" />
-                    <span className="progress-step-content">
-                      <span className="progress-step-label">{step.label || step.message || "Working"}</span>
-                      {step.detail ? <span className="progress-step-detail">{step.detail}</span> : null}
-                      {step.files?.length ? (
-                        <span className="progress-step-related">{step.files.join(", ")}</span>
-                      ) : null}
-                      {step.command ? (
-                        <span className="progress-step-related"><code>{step.command}</code></span>
-                      ) : null}
-                    </span>
-                    <span className="progress-step-status">{statusLabel(step.status)}</span>
-                    {time ? <span className="progress-step-time">{time}</span> : null}
-                  </div>
-                );
-              })}
+      <div className="progress-steps">
+        {steps.map((step, index) => {
+          const isCurrent = index === steps.length - 1 && !done && step.status === "running";
+          const duration = stepDurationMs(step, now);
+          return (
+            <div
+              key={step.id || `${index}-${step.label || step.message}`}
+              className={`progress-step progress-step-${step.status || "completed"}${isCurrent ? " progress-step-active" : ""}`}
+            >
+              <span className="progress-step-marker" aria-hidden="true" />
+              <span className="progress-step-content">
+                <span className="progress-step-mainline">
+                  <span className="progress-step-label">{step.label || step.message || "Working"}</span>
+                  <span className="progress-step-phase">{step.phase || "Activity"}</span>
+                </span>
+                {step.detail ? <span className="progress-step-detail">{step.detail}</span> : null}
+                {step.files?.length ? (
+                  <span className="progress-step-related">{step.files.join(", ")}</span>
+                ) : null}
+                {step.command ? (
+                  <span className="progress-step-related"><code>{step.command}</code></span>
+                ) : null}
+              </span>
+              <span className="progress-step-status">{statusLabel(step.status)}</span>
+              <span className="progress-step-time">{formatDuration(duration)}</span>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
+}
+
+function stepDurationMs(step: ProgressStep, now: number): number {
+  if (step.durationMs !== undefined && step.durationMs !== null) return Math.max(0, step.durationMs);
+  const startedMs = step.startedAt ? Date.parse(step.startedAt) : Number.NaN;
+  const endedMs = step.endedAt ? Date.parse(step.endedAt) : Number.NaN;
+  if (step.status === "running" && Number.isFinite(startedMs)) return Math.max(0, now - startedMs);
+  if (Number.isFinite(startedMs) && Number.isFinite(endedMs)) return Math.max(0, endedMs - startedMs);
+  if (step.elapsedMs !== undefined && step.elapsedMs !== null) return Math.max(0, step.elapsedMs);
+  return 0;
+}
+
+function runDurationMs(steps: ProgressStep[], done: boolean, now: number): number {
+  const starts = steps
+    .map((step) => (step.startedAt ? Date.parse(step.startedAt) : Number.NaN))
+    .filter(Number.isFinite);
+  if (!starts.length) {
+    return steps[steps.length - 1]?.elapsedMs ?? steps[steps.length - 1]?.durationMs ?? 0;
+  }
+  const firstStarted = Math.min(...starts);
+  if (!done) return Math.max(0, now - firstStarted);
+  const ends = steps
+    .map((step) => (step.endedAt ? Date.parse(step.endedAt) : Number.NaN))
+    .filter(Number.isFinite);
+  if (ends.length) return Math.max(0, Math.max(...ends) - firstStarted);
+  return steps[steps.length - 1]?.elapsedMs ?? steps[steps.length - 1]?.durationMs ?? 0;
 }

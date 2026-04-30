@@ -666,6 +666,10 @@ select {
   align-items: stretch;
 }
 
+.chat-sidebar-collapsed .sidebar-brand-mark {
+  opacity: 0;
+}
+
 .chat-sidebar-header {
   padding: 14px 12px;
   border-bottom: 1px solid var(--border);
@@ -689,6 +693,19 @@ select {
 .sidebar-collapse-toggle:hover {
   color: var(--foreground);
   border-color: var(--accent);
+}
+
+.chat-sidebar-collapsed .sidebar-collapse-toggle {
+  position: fixed;
+  top: 16px;
+  left: 14px;
+  z-index: 140;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--foreground);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
 }
 
 .sidebar-brand-mark {
@@ -780,10 +797,14 @@ select {
 }
 
 .sidebar-thread {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 2px;
   white-space: normal;
+}
+
+.sidebar-thread-running {
+  border: 1px solid rgba(99, 102, 241, 0.28);
 }
 
 .sidebar-thread-title,
@@ -796,13 +817,31 @@ select {
 }
 
 .sidebar-thread-title {
+  grid-column: 1;
   font-weight: 600;
 }
 
 .sidebar-thread-meta {
+  grid-column: 1;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 0.73rem;
+}
+
+.sidebar-thread-spinner {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: repooperator-spin 0.9s linear infinite;
+}
+
+@keyframes repooperator-spin {
+  to { transform: rotate(360deg); }
 }
 
 .sidebar-item-mono {
@@ -1531,24 +1570,7 @@ select {
   max-width: 100%;
 }
 
-.progress-groups {
-  display: grid;
-  gap: 8px;
-}
-
-.progress-group {
-  display: grid;
-  gap: 6px;
-}
-
-.progress-group-title {
-  color: var(--foreground);
-  font-size: 0.72rem;
-  font-weight: 750;
-  letter-spacing: 0;
-}
-
-.progress-group-steps {
+.progress-steps {
   display: grid;
   gap: 6px;
 }
@@ -1604,6 +1626,32 @@ select {
   color: var(--foreground);
   font-weight: 700;
   letter-spacing: 0;
+}
+
+.progress-step-mainline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.progress-step-phase {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface);
+  padding: 1px 6px;
+  font-size: 0.63rem;
+  font-weight: 700;
+}
+
+.progress-step-active .progress-step-phase {
+  border-color: var(--accent, #6366f1);
+  color: var(--accent, #6366f1);
+  background: rgba(99, 102, 241, 0.08);
 }
 
 .progress-step-detail,
@@ -1765,7 +1813,7 @@ select {
   position: fixed;
   top: 0;
   right: 0;
-  width: min(420px, 92vw);
+  width: min(620px, 94vw);
   height: 100vh;
   z-index: 80;
   padding: 18px;
@@ -1775,12 +1823,20 @@ select {
   overflow-y: auto;
 }
 
+.changed-file-drawer-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  overflow: hidden;
+}
+
 .changed-file-drawer-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--border);
 }
 
 .changed-file-drawer-header button,
@@ -1796,6 +1852,7 @@ select {
 .changed-file-drawer-title {
   font-weight: 800;
   color: var(--foreground);
+  font-size: 1rem;
 }
 
 .changed-file-drawer-path,
@@ -1811,18 +1868,57 @@ select {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 10px 0;
+  padding: 12px 14px 0;
 }
 
-.changed-file-drawer pre {
-  max-height: 420px;
-  overflow: auto;
-  padding: 10px;
-  border-radius: var(--radius-sm);
+.changed-file-drawer-summary {
+  color: var(--foreground);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  padding: 10px 14px 0;
+  margin: 0;
+}
+
+.changed-file-drawer-meta {
+  padding: 8px 14px 0;
+  margin: 0;
+}
+
+.changed-file-drawer-tests {
+  padding: 10px 14px 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.changed-file-drawer-tests span {
+  display: block;
+  color: var(--foreground);
+  font-weight: 750;
+  margin-bottom: 4px;
+}
+
+.changed-file-drawer-tests ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.changed-file-diff-wrapper {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+.changed-file-diff-scroll {
+  max-height: calc(100vh - 310px);
+}
+
+.changed-file-readonly-note {
   border: 1px solid var(--border);
-  background: var(--code-bg);
-  color: var(--code-text);
-  white-space: pre-wrap;
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 0.68rem;
 }
 
 .reasoning-panel {
@@ -1996,6 +2092,12 @@ select {
   gap: 12px;
 }
 
+.composer-hint-stack {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
 .composer-hint {
   font-size: 0.83rem;
   color: var(--muted);
@@ -2022,18 +2124,77 @@ select {
   background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
 }
 
-.composer-queue-bar {
+.composer-run-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 4px 2px 8px;
-  font-size: 0.78rem;
-  color: var(--accent, #6366f1);
-  font-weight: 600;
+  gap: 8px;
+  font-size: 0.74rem;
+  color: var(--muted);
 }
 
-.composer-queue-icon {
-  font-size: 0.85em;
+.composer-run-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer-stop-btn {
+  border: 1px solid rgba(192, 57, 43, 0.35);
+  border-radius: 999px;
+  background: rgba(192, 57, 43, 0.08);
+  color: #c0392b;
+  padding: 4px 9px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.composer-queue-list {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.composer-queue-title {
+  color: var(--foreground);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.composer-queue-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.76rem;
+}
+
+.composer-queue-order,
+.composer-queue-status {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  padding: 1px 6px;
+}
+
+.composer-queue-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+
+.composer-queue-item button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--foreground);
+  cursor: pointer;
+  padding: 3px 7px;
 }
 
 /* ── Markdown message body ────────────────────────── */
@@ -3036,12 +3197,30 @@ select {
   font-size: 0.82rem;
 }
 
+.memory-graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  gap: 12px;
+}
+
 .memory-graph {
   width: 100%;
   min-height: 420px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: radial-gradient(circle at center, var(--surface-strong), var(--surface));
+}
+
+.memory-graph-cluster {
+  fill: color-mix(in srgb, var(--surface-strong) 88%, var(--accent));
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.memory-graph-cluster-label {
+  fill: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .memory-graph-edge {
@@ -3072,10 +3251,45 @@ select {
   stroke: #7c5cff;
 }
 
+.memory-graph-node-command {
+  fill: color-mix(in srgb, #0ea5e9 14%, var(--surface));
+  stroke: #0ea5e9;
+}
+
+.memory-graph-node-edit {
+  fill: color-mix(in srgb, #3fa869 14%, var(--surface));
+  stroke: #3fa869;
+}
+
+.memory-graph-node-selected {
+  stroke-width: 4;
+}
+
 .memory-graph-label {
   fill: var(--text);
   font-size: 11px;
   font-family: var(--font-mono);
+}
+
+.memory-graph-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.memory-graph-details strong {
+  color: var(--foreground);
+}
+
+.memory-graph-details code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .command-card {

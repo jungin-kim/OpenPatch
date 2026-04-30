@@ -369,6 +369,10 @@ class AgentRunRequest(BaseModel):
         default=None,
         description="Branch that was active when the repository was opened.",
     )
+    thread_id: str | None = Field(
+        default=None,
+        description="Client thread id used to scope active run state and progress.",
+    )
     conversation_history: list[ConversationMessage] = Field(
         default_factory=list,
         description="Recent conversation turns (user + assistant) for write confirmation context.",
@@ -401,6 +405,14 @@ class AgentRunRequest(BaseModel):
     @field_validator("branch")
     @classmethod
     def validate_branch(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("thread_id")
+    @classmethod
+    def validate_thread_id(cls, value: str | None) -> str | None:
         if value is None:
             return None
         stripped = value.strip()

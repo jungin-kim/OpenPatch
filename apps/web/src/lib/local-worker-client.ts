@@ -481,6 +481,7 @@ export async function* streamAgentTask(input: {
   project_path: string;
   git_provider?: string;
   branch?: string;
+  thread_id?: string;
   task: string;
   conversation_history?: ConversationMessage[];
 }): AsyncGenerator<AgentProgressEvent> {
@@ -533,9 +534,31 @@ export async function getAgentRun(runId: string): Promise<AgentRunRecord> {
   return parseWorkerResponse<AgentRunRecord>(response);
 }
 
+export async function getActiveAgentRuns(threadId?: string): Promise<{ runs: AgentRunRecord[] }> {
+  const suffix = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : "";
+  const response = await fetch(`/api/worker/agent/runs/active${suffix}`, { cache: "no-store" });
+  return parseWorkerResponse<{ runs: AgentRunRecord[] }>(response);
+}
+
 export async function getAgentRunEvents(runId: string, afterSequence = 0): Promise<{ events: AgentActivityEvent[] }> {
   const response = await fetch(`/api/worker/agent/runs/${encodeURIComponent(runId)}/events?after_sequence=${afterSequence}`, { cache: "no-store" });
   return parseWorkerResponse<{ events: AgentActivityEvent[] }>(response);
+}
+
+export async function steerAgentRun(runId: string, content: string): Promise<{ status: string }> {
+  const response = await fetch(`/api/worker/agent/runs/${encodeURIComponent(runId)}/steer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  return parseWorkerResponse<{ status: string }>(response);
+}
+
+export async function cancelAgentRun(runId: string): Promise<{ status: string }> {
+  const response = await fetch(`/api/worker/agent/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+  });
+  return parseWorkerResponse<{ status: string }>(response);
 }
 
 export async function readRepositoryFile(input: {

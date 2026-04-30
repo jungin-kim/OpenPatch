@@ -210,6 +210,8 @@ function MemoryPanel({ memory }: { memory: MemoryDebug | null }) {
     thread: true,
     repository: true,
     proposal: true,
+    edit: true,
+    command: true,
   });
   const graph = memory?.graph;
   const visibleNodes = graph?.nodes.filter((node) => filters[node.type] ?? true) ?? [];
@@ -250,36 +252,99 @@ function MemoryPanel({ memory }: { memory: MemoryDebug | null }) {
 }
 
 function MemoryGraph({ nodes, edges }: { nodes: GraphNode[]; edges: GraphEdge[] }) {
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const width = 920;
   const height = 520;
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const positioned = nodes.map((node, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1);
-    const radius = node.type === "repository" ? 70 : 190;
-    return {
-      ...node,
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius,
-    };
+  const clusterOrder = ["repository", "thread", "run", "file", "symbol", "proposal", "edit", "command", "skill", "memory"];
+  const clusters = clusterOrder
+    .map((type) => ({ type, nodes: nodes.filter((node) => node.type === type) }))
+    .filter((cluster) => cluster.nodes.length);
+  const positioned = clusters.flatMap((cluster, clusterIndex) => {
+    const columns = 3;
+    const clusterWidth = width / columns;
+    const clusterHeight = height / Math.ceil(Math.max(clusters.length, 1) / columns);
+    const clusterX = (clusterIndex % columns) * clusterWidth;
+    const clusterY = Math.floor(clusterIndex / columns) * clusterHeight;
+    const centerX = clusterX + clusterWidth / 2;
+    const centerY = clusterY + clusterHeight / 2 + 10;
+    return cluster.nodes.map((node, nodeIndex) => {
+      const angle = (Math.PI * 2 * nodeIndex) / Math.max(cluster.nodes.length, 1);
+      const radius = Math.min(clusterWidth, clusterHeight) * 0.24;
+      return {
+        ...node,
+        cluster: cluster.type,
+        clusterX,
+        clusterY,
+        clusterWidth,
+        clusterHeight,
+        x: centerX + Math.cos(angle) * radius,
+        y: centerY + Math.sin(angle) * radius,
+      };
+    });
   });
+  const selected = positioned.find((node) => node.id === selectedNodeId);
   const byId = new Map(positioned.map((node) => [node.id, node]));
   return (
-    <svg className="memory-graph" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Memory relationship graph">
-      {edges.map((edge, index) => {
-        const source = byId.get(edge.source);
-        const target = byId.get(edge.target);
-        if (!source || !target) return null;
-        return <line key={`${edge.source}-${edge.target}-${index}`} x1={source.x} y1={source.y} x2={target.x} y2={target.y} className="memory-graph-edge" />;
-      })}
-      {positioned.map((node) => (
-        <g key={node.id}>
-          <circle cx={node.x} cy={node.y} r={node.type === "repository" ? 26 : 20} className={`memory-graph-node memory-graph-node-${node.type}`} />
-          <text x={node.x} y={node.y + 36} textAnchor="middle" className="memory-graph-label">{node.label.slice(0, 28)}</text>
-        </g>
-      ))}
-    </svg>
+    <div className="memory-graph-layout">
+      <svg className="memory-graph" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Memory relationship graph">
+        {clusters.map((cluster, index) => {
+          const columns = 3;
+          const clusterWidth = width / columns;
+          const clusterHeight = height / Math.ceil(Math.max(clusters.length, 1) / columns);
+          const x = (index % columns) * clusterWidth + 10;
+          const y = Math.floor(index / columns) * clusterHeight + 10;
+          return (
+            <g key={cluster.type}>
+              <rect x={x} y={y} width={clusterWidth - 20} height={clusterHeight - 20} rx={16} className="memory-graph-cluster" />
+              <text x={x + 14} y={y + 24} className="memory-graph-cluster-label">
+                {clusterLabel(cluster.type)} ({cluster.nodes.length})
+              </text>
+            </g>
+          );
+        })}
+        {edges.map((edge, index) => {
+          const source = byId.get(edge.source);
+          const target = byId.get(edge.target);
+          if (!source || !target) return null;
+          return <line key={`${edge.source}-${edge.target}-${index}`} x1={source.x} y1={source.y} x2={target.x} y2={target.y} className="memory-graph-edge" />;
+        })}
+        {positioned.map((node) => (
+          <g key={node.id} role="button" tabIndex={0} onClick={() => setSelectedNodeId(node.id)}>
+            <circle cx={node.x} cy={node.y} r={node.type === "repository" ? 24 : 18} className={`memory-graph-node memory-graph-node-${node.type}${node.id === selectedNodeId ? " memory-graph-node-selected" : ""}`} />
+            <text x={node.x} y={node.y + 32} textAnchor="middle" className="memory-graph-label">{node.label.slice(0, 22)}</text>
+          </g>
+        ))}
+      </svg>
+      <aside className="memory-graph-details">
+        {selected ? (
+          <>
+            <strong>{selected.label}</strong>
+            <span>{clusterLabel(selected.type)}</span>
+            <code>{selected.id}</code>
+            <span>Related edges: {edges.filter((edge) => edge.source === selected.id || edge.target === selected.id).length}</span>
+          </>
+        ) : (
+          <span>Select a node to inspect relationships.</span>
+        )}
+      </aside>
+    </div>
   );
+}
+
+function clusterLabel(type: string): string {
+  const labels: Record<string, string> = {
+    repository: "Repositories",
+    thread: "Threads",
+    run: "Runs",
+    file: "Files",
+    symbol: "Symbols",
+    skill: "Skills",
+    proposal: "Proposals",
+    edit: "Edits",
+    command: "Commands",
+    memory: "Memories",
+  };
+  return labels[type] || type;
 }
 
 function SkillsPanel({ skills }: { skills: SkillsDebug | null }) {

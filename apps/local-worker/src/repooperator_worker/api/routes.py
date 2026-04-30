@@ -98,6 +98,8 @@ from repooperator_worker.services.event_service import (
     new_run_id,
     record_agent_run,
     record_event,
+    record_run_steering,
+    request_run_cancellation,
     start_active_run,
 )
 from repooperator_worker.services.memory_service import (
@@ -587,7 +589,7 @@ def agent_run(request: AgentRunRequest) -> AgentRunResponse:
 @router.post("/agent/run/stream")
 def agent_run_stream(request: AgentRunRequest) -> StreamingResponse:
     run_id = new_run_id()
-    start_active_run(run_id=run_id, request=request)
+    start_active_run(run_id=run_id, request=request, thread_id=request.thread_id)
 
     def worker() -> None:
         final_result: dict | None = None
@@ -650,6 +652,28 @@ def agent_run_lookup(run_id: str) -> dict:
 @router.get("/agent/runs/{run_id}/events")
 def agent_run_events(run_id: str, after_sequence: int = 0) -> dict:
     return {"events": list_run_events(run_id, after_sequence=after_sequence)}
+
+
+@router.post("/agent/runs/{run_id}/steer")
+def agent_run_steer(run_id: str, payload: dict) -> dict:
+    run = get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Steering content must not be empty.")
+    event = record_run_steering(run_id, content)
+    return {"status": "accepted", "event": event}
+
+
+@router.post("/agent/runs/{run_id}/cancel")
+def agent_run_cancel(run_id: str) -> dict:
+    run = get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    if run.get("status") not in {"running", "cancelling"}:
+        return {"status": run.get("status"), "run": run}
+    return {"status": "cancelled", "run": request_run_cancellation(run_id)}
 
 
 @router.post("/agent/apply-summary")

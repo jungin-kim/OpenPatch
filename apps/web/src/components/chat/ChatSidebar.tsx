@@ -6,6 +6,7 @@ interface ChatSidebarProps {
   recentProjects: ProviderProjectSummary[];
   threads: ChatThread[];
   activeThreadId: string | null;
+  runningThreadIds?: string[];
   threadStoreState: "loading" | "connected" | "saving" | "unavailable";
   onNewChat: () => void;
   onSelectThread: (threadId: string) => void;
@@ -25,6 +26,7 @@ export function ChatSidebar({
   recentProjects,
   threads,
   activeThreadId,
+  runningThreadIds = [],
   threadStoreState,
   onNewChat,
   onSelectThread,
@@ -40,6 +42,7 @@ export function ChatSidebar({
         : threadStoreState === "connected"
           ? "Thread history synced"
           : "Thread history unavailable";
+  const runningThreads = new Set(runningThreadIds);
 
   return (
     <aside className={`chat-sidebar${collapsed ? " chat-sidebar-collapsed" : ""}`}>
@@ -75,7 +78,7 @@ export function ChatSidebar({
               key={thread.id}
               className={`sidebar-item sidebar-thread${
                 thread.id === activeThreadId ? " sidebar-item-active" : ""
-              }`}
+              }${runningThreads.has(thread.id) ? " sidebar-thread-running" : ""}`}
               type="button"
               title={`${thread.repoResult.git_provider}:${thread.repoResult.project_path}`}
               onClick={() => onSelectThread(thread.id)}
@@ -85,6 +88,7 @@ export function ChatSidebar({
                 {providerLabel(thread.repoResult.git_provider)}
                 {thread.repoResult.branch ? ` @ ${thread.repoResult.branch}` : ""}
               </span>
+              {runningThreads.has(thread.id) ? <span className="sidebar-thread-spinner" aria-label="Run active" /> : null}
             </button>
           ))
         ) : (

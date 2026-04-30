@@ -53,9 +53,10 @@ def start_active_run(
     request: AgentRunRequest,
     thread_id: str | None = None,
 ) -> dict[str, Any]:
+    effective_thread_id = thread_id or request.thread_id
     record = {
         "id": run_id,
-        "thread_id": thread_id,
+        "thread_id": effective_thread_id,
         "repo": request.project_path,
         "branch": request.branch,
         "task_summary": summarize_user_message(request.task),
@@ -77,8 +78,12 @@ def append_run_event(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
     with _RUN_LOCK:
         events = list_run_events(run_id)
         sequence = int(event.get("sequence") or len(events) + 1)
+        meta = get_run(run_id) or {}
         record = {
             "run_id": run_id,
+            "thread_id": event.get("thread_id") or meta.get("thread_id"),
+            "repo": event.get("repo") or meta.get("repo"),
+            "branch": event.get("branch") or meta.get("branch"),
             "sequence": sequence,
             "timestamp": event.get("timestamp") or _now_iso(),
             **event,
@@ -100,6 +105,8 @@ def complete_active_run(
 ) -> dict[str, Any]:
     with _RUN_LOCK:
         meta = get_run(run_id) or {"id": run_id}
+        if meta.get("status") in {"cancelled", "cancelling"} and status == "completed":
+            status = "cancelled"
         meta.update(
             {
                 "status": status,
@@ -113,6 +120,50 @@ def complete_active_run(
         except OSError:
             pass
     return meta
+
+
+def request_run_cancellation(run_id: str) -> dict[str, Any]:
+    append_run_event(
+        run_id,
+        {
+            "type": "progress_delta",
+            "phase": "Finished",
+            "label": "Cancellation requested",
+            "detail": "RepoOperator will stop this run at the next safe checkpoint.",
+            "status": "waiting",
+        },
+    )
+    return complete_active_run(run_id=run_id, status="cancelled", error="Cancelled by user.")
+
+
+def record_run_steering(run_id: str, content: str) -> dict[str, Any]:
+    event = append_run_event(
+        run_id,
+        {
+            "type": "progress_delta",
+            "event_type": "steering_received",
+            "phase": "Planning",
+            "label": "Received steering instruction",
+            "detail": summarize_user_message(content, max_len=220),
+            "status": "completed",
+        },
+    )
+    meta = get_run(run_id) or {"id": run_id}
+    steering = list(meta.get("steering_instructions") or [])
+    steering.append(
+        {
+            "content": summarize_user_message(content, max_len=500),
+            "created_at": _now_iso(),
+            "accepted": True,
+            "reason": "Recorded for the active run. The agent applies steering at safe checkpoints when supported.",
+        }
+    )
+    meta["steering_instructions"] = steering
+    try:
+        _run_meta_file(run_id).write_text(json.dumps(meta, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+    return event
 
 
 def get_run(run_id: str) -> dict[str, Any] | None:

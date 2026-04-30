@@ -125,28 +125,43 @@ function ChangedFilesArchive({ records }: { records?: EditArchiveRecord[] }) {
       </div>
       {selected ? (
         <aside className="changed-file-drawer" aria-label="Changed file details">
-          <div className="changed-file-drawer-header">
-            <div>
-              <div className="changed-file-drawer-title">{compactFileName(selected.file_path)}</div>
-              <div className="changed-file-drawer-path">{selected.file_path}</div>
+          <div className="changed-file-drawer-card">
+            <div className="changed-file-drawer-header">
+              <div>
+                <div className="changed-file-drawer-title">{compactFileName(selected.file_path)}</div>
+                <div className="changed-file-drawer-path">{selected.file_path}</div>
+              </div>
+              <button type="button" onClick={() => setSelected(null)} aria-label="Close changed file details">×</button>
             </div>
-            <button type="button" onClick={() => setSelected(null)} aria-label="Close changed file details">×</button>
+            <div className="changed-file-drawer-stats">
+              <span className={`changed-file-status changed-file-status-${selected.status}`}>{selected.status}</span>
+              <span className="changed-file-add">+{selected.additions}</span>
+              <span className="changed-file-del">-{selected.deletions}</span>
+            </div>
+            {selected.summary ? <p className="changed-file-drawer-summary">{selected.summary}</p> : null}
+            {selected.plan_id ? <p className="changed-file-drawer-meta">Related plan: {selected.plan_id}</p> : null}
+            {selected.tests?.length ? (
+              <div className="changed-file-drawer-tests">
+                <span>Suggested tests</span>
+                <ul>
+                  {selected.tests.map((test) => <li key={test}>{test}</li>)}
+                </ul>
+              </div>
+            ) : null}
+            <div className="changed-file-drawer-actions">
+              <button type="button" onClick={() => void navigator.clipboard?.writeText(selected.file_path)}>Copy path</button>
+              <button type="button" onClick={() => void navigator.clipboard?.writeText(selected.diff || formatChangedFileRecord(selected))}>Copy diff</button>
+            </div>
+            <div className="proposal-diff-wrapper changed-file-diff-wrapper">
+              <div className="proposal-diff-titlebar">
+                <span>Applied diff</span>
+                <span className="changed-file-readonly-note">Read-only</span>
+              </div>
+              <div className="proposal-diff-scroll changed-file-diff-scroll">
+                <UnifiedDiffView diff={selected.diff || formatChangedFileRecord(selected)} />
+              </div>
+            </div>
           </div>
-          <div className="changed-file-drawer-stats">
-            <span className="changed-file-add">+{selected.additions}</span>
-            <span className="changed-file-del">-{selected.deletions}</span>
-            <span className={`changed-file-status changed-file-status-${selected.status}`}>{selected.status}</span>
-          </div>
-          {selected.summary ? <p>{selected.summary}</p> : null}
-          {selected.plan_id ? <p className="changed-file-drawer-meta">Plan: {selected.plan_id}</p> : null}
-          <div className="changed-file-drawer-actions">
-            <button type="button" onClick={() => void navigator.clipboard?.writeText(selected.file_path)}>Copy path</button>
-            <button type="button" onClick={() => void navigator.clipboard?.writeText(selected.diff || formatChangedFileRecord(selected))}>Copy diff</button>
-          </div>
-          <details open>
-            <summary>Diff</summary>
-            <pre>{selected.diff || formatChangedFileRecord(selected)}</pre>
-          </details>
         </aside>
       ) : null}
     </>
@@ -155,6 +170,34 @@ function ChangedFilesArchive({ records }: { records?: EditArchiveRecord[] }) {
 
 function compactFileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+}
+
+function UnifiedDiffView({ diff }: { diff: string }) {
+  const lines = diff.split("\n");
+  if (!diff.trim()) {
+    return <div className="proposal-diff-empty">No diff is available for this change.</div>;
+  }
+  return (
+    <div className="proposal-diff">
+      {lines.map((line, index) => {
+        const kind = diffLineKind(line);
+        return (
+          <div key={`${index}-${line}`} className={`proposal-diff-line proposal-diff-line-${kind}`}>
+            <span className="proposal-diff-gutter" aria-hidden="true">
+              {kind === "add" ? "+" : kind === "del" ? "−" : " "}
+            </span>
+            <span className="proposal-diff-text">{line}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function diffLineKind(line: string): "ctx" | "add" | "del" {
+  if (line.startsWith("+") && !line.startsWith("+++")) return "add";
+  if (line.startsWith("-") && !line.startsWith("---")) return "del";
+  return "ctx";
 }
 
 function formatChangedFileRecord(record: EditArchiveRecord): string {

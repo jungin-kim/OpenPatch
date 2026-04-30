@@ -6,20 +6,28 @@ interface ChatComposerProps {
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onCancelQueuedMessage?: (id: string) => void;
+  onStopRun?: () => void;
   disabled: boolean;
   pending: boolean;
+  inputMode?: "queue" | "steer";
+  onInputModeChange?: (mode: "queue" | "steer") => void;
   writeMode?: "basic" | "auto_review" | "full_access";
-  queuedCount?: number;
+  queuedMessages?: Array<{ id: string; text: string; status: string }>;
 }
 
 export function ChatComposer({
   value,
   onChange,
   onSubmit,
+  onCancelQueuedMessage,
+  onStopRun,
   disabled,
   pending,
+  inputMode = "queue",
+  onInputModeChange,
   writeMode = "basic",
-  queuedCount = 0,
+  queuedMessages = [],
 }: ChatComposerProps) {
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -44,8 +52,8 @@ export function ChatComposer({
   const hint = disabled
     ? "Open a repository to start asking questions."
     : pending
-      ? queuedCount > 0
-        ? `${queuedCount} message${queuedCount === 1 ? "" : "s"} queued — will run after current task finishes.`
+      ? queuedMessages.length > 0
+        ? `${queuedMessages.length} message${queuedMessages.length === 1 ? "" : "s"} queued — will run after current task finishes.`
         : "Agent is running — type to queue a follow-up."
       : writeMode === "auto_review"
         ? "Auto review — elevated commands and risky actions use approval cards."
@@ -55,7 +63,9 @@ export function ChatComposer({
 
   const buttonLabel = pending
     ? value.trim()
-      ? "Queue"
+      ? inputMode === "steer"
+        ? "Steer"
+        : "Queue"
       : writeMode === "auto_review"
         ? "Working…"
         : "Working…"
@@ -63,10 +73,21 @@ export function ChatComposer({
 
   return (
     <div className="chat-composer-area">
-      {queuedCount > 0 && (
-        <div className="composer-queue-bar">
-          <span className="composer-queue-icon">⏳</span>
-          {queuedCount} queued message{queuedCount === 1 ? "" : "s"}
+      {queuedMessages.length > 0 && (
+        <div className="composer-queue-list" aria-label="Queued messages">
+          <div className="composer-queue-title">Queued next</div>
+          {queuedMessages.map((item, index) => (
+            <div className="composer-queue-item" key={item.id}>
+              <span className="composer-queue-order">{index + 1}</span>
+              <span className="composer-queue-text">{item.text}</span>
+              <span className={`composer-queue-status composer-queue-status-${item.status}`}>{item.status}</span>
+              {item.status === "queued" ? (
+                <button type="button" onClick={() => onCancelQueuedMessage?.(item.id)} aria-label="Cancel queued message">
+                  Cancel
+                </button>
+              ) : null}
+            </div>
+          ))}
         </div>
       )}
       <div className="composer-form">
@@ -80,7 +101,32 @@ export function ChatComposer({
           rows={3}
         />
         <div className="composer-actions">
-          <span className="composer-hint">{hint}</span>
+          <div className="composer-hint-stack">
+            <span className="composer-hint">{hint}</span>
+            {pending ? (
+              <div className="composer-run-controls" aria-label="Active run controls">
+                <label>
+                  <input
+                    type="radio"
+                    checked={inputMode === "queue"}
+                    onChange={() => onInputModeChange?.("queue")}
+                  />
+                  Queue for next turn
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    checked={inputMode === "steer"}
+                    onChange={() => onInputModeChange?.("steer")}
+                  />
+                  Steer current run
+                </label>
+                <button type="button" className="composer-stop-btn" onClick={onStopRun}>
+                  Stop
+                </button>
+              </div>
+            ) : null}
+          </div>
           <button
             className={`composer-send-btn${pending && value.trim() ? " composer-send-btn-queue" : ""}`}
             type="button"
