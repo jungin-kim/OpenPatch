@@ -29,9 +29,10 @@ function CommandApprovalCard({
   const approval = metadata.command_approval;
   if (!approval) return null;
   return (
-    <div className={`command-card command-card-${approval.risk}`}>
-      <div className="command-card-heading">Command approval required</div>
-      <p>{approval.reason}</p>
+      <div className={`command-card command-card-${approval.risk}`}>
+        <div className="command-card-heading">Command approval required</div>
+        {metadata.response ? <MarkdownContent content={metadata.response} /> : null}
+        <p>{approval.reason}</p>
       <dl className="command-card-grid">
         <div>
           <dt>Command</dt>
@@ -236,6 +237,24 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
               <span className="tool-meta-value">{metadata.resolved_symbols.join(", ")}</span>
             </div>
           ) : null}
+          {metadata.git_action ? (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Git action</span>
+              <span className="tool-meta-value">{metadata.git_action}</span>
+            </div>
+          ) : null}
+          {metadata.commands_run?.length ? (
+            <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="tool-meta-label">Commands run</span>
+              <span className="tool-meta-value">{metadata.commands_run.join(", ")}</span>
+            </div>
+          ) : null}
+          {metadata.commands_planned?.length ? (
+            <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="tool-meta-label">Commands planned</span>
+              <span className="tool-meta-value">{metadata.commands_planned.join(", ")}</span>
+            </div>
+          ) : null}
           {metadata.thread_context_files?.length ? (
             <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
               <span className="tool-meta-label">Thread context files</span>
@@ -292,6 +311,8 @@ interface ChatMessagesProps {
   repoResult: RepoOpenPayload | null;
   questionPending: boolean;
   progressSteps?: ProgressStep[];
+  streamedAnswer?: string;
+  streamedReasoning?: string;
   gitProvider: string;
   writeMode?: "basic" | "auto_review" | "full_access";
   onProposalStatusChange?: (id: string, status: ProposalStatus, message?: string) => void;
@@ -304,6 +325,8 @@ export function ChatMessages({
   repoResult,
   questionPending,
   progressSteps = [],
+  streamedAnswer = "",
+  streamedReasoning = "",
   gitProvider,
   writeMode = "basic",
   onProposalStatusChange,
@@ -315,7 +338,7 @@ export function ChatMessages({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, questionPending]);
+  }, [messages, questionPending, streamedAnswer, streamedReasoning]);
 
   const activeProvider = repoResult?.git_provider || gitProvider;
   const providerLabel =
@@ -495,6 +518,12 @@ export function ChatMessages({
                 </div>
               ) : msg.role === "assistant" ? (
                 <div className="message-bubble message-bubble-md">
+                  {msg.metadata?.reasoning ? (
+                    <details className="reasoning-panel">
+                      <summary>Reasoning / Thinking</summary>
+                      <pre>{msg.metadata.reasoning}</pre>
+                    </details>
+                  ) : null}
                   <MarkdownContent content={msg.content} />
                 </div>
               ) : msg.role === "system" ? (
@@ -511,7 +540,20 @@ export function ChatMessages({
             <div className="message-group message-group-assistant">
               <span className="message-role-label">RepoOperator</span>
               {progressSteps.length > 0 ? (
-                <ProgressTimeline steps={progressSteps} done={false} />
+                <>
+                  <ProgressTimeline steps={progressSteps} done={false} />
+                  {streamedReasoning ? (
+                    <details className="reasoning-panel">
+                      <summary>Reasoning / Thinking</summary>
+                      <pre>{streamedReasoning}</pre>
+                    </details>
+                  ) : null}
+                  {streamedAnswer ? (
+                    <div className="message-bubble message-bubble-md">
+                      <MarkdownContent content={streamedAnswer} />
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <div className="typing-indicator">
                   <span className="typing-dot" />

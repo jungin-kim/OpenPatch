@@ -2,7 +2,10 @@
 
 export type ProgressStep = {
   node: string;
+  phase?: string;
   message: string;
+  status?: string;
+  elapsedMs?: number;
 };
 
 type Props = {
@@ -36,13 +39,19 @@ export function ProgressTimeline({ steps, done }: Props) {
         const isLast = i === steps.length - 1;
         const isActive = isLast && !done;
         return (
-          <span
+          <div
             key={`${step.node}-${i}`}
             className={`progress-step${isActive ? " progress-step-active" : ""}`}
           >
             <span className="progress-step-icon">{NODE_ICONS[step.node] ?? "▸"}</span>
-            {step.message}
-          </span>
+            <span className="progress-step-content">
+              <span className="progress-step-phase">{step.phase || step.node}</span>
+              <span>{step.message}</span>
+            </span>
+            {step.elapsedMs !== undefined ? (
+              <span className="progress-step-time">{(step.elapsedMs / 1000).toFixed(1)}s</span>
+            ) : null}
+          </div>
         );
       })}
     </div>

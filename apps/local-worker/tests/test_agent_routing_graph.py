@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -47,6 +48,11 @@ class AgentRoutingGraphTests(unittest.TestCase):
         nested.mkdir(parents=True)
         (nested / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
         (self.repo / "README.md").write_text("# Demo\n", encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "RepoOperator Test"], cwd=self.repo, check=True)
+        subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=self.repo, check=True, capture_output=True)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -172,46 +178,90 @@ class AgentRoutingGraphTests(unittest.TestCase):
         self.assertIn("split_video", result.thread_context_symbols)
 
     def test_commit_request_routes_to_git_workflow_not_proposal(self) -> None:
+        (self.repo / "README.md").write_text("# Demo\n\nChanged\n", encoding="utf-8")
         request = self._request("방금 수정한 내용 커밋해줘")
-        with patch("repooperator_worker.services.command_service.preview_command") as preview, patch(
-            "repooperator_worker.services.command_service.run_command_with_policy"
-        ) as run_command:
-            preview.return_value = {
-                "type": "command_approval",
-                "approval_id": "cmd_test",
-                "command": ["git", "status", "--short"],
-                "display_command": "git status --short",
-                "cwd": str(self.repo),
-                "risk": "low",
-                "read_only": True,
-                "needs_network": False,
-                "touches_outside_repo": False,
-                "needs_approval": False,
-                "blocked": False,
-                "reason": "Check git status.",
-            }
-            run_command.return_value = {
-                **preview.return_value,
-                "status": "ok",
-                "exit_code": 0,
-                "stdout": " M README.md\n",
-                "stderr": "",
-            }
+        result = self._run_with_classifier(
+            {
+                "intent": "git_workflow_request",
+                "confidence": 0.95,
+                "target_files": [],
+                "target_symbols": [],
+                "requested_action": "commit",
+                "git_action": "git_commit_plan",
+                "needs_tool": "git",
+                "needs_clarification": False,
+                "clarification_question": None,
+            },
+            request,
+        )
+        self.assertEqual(result.intent_classification, "git_workflow_request")
+        self.assertEqual(result.response_type, "command_approval")
+        self.assertEqual(result.git_action, "git_commit_plan")
+        self.assertIn("git status --short", result.commands_run)
+        self.assertIn("git add --all", result.commands_planned)
+        self.assertIn("next_command_approval", result.command_approval)
+        self.assertEqual(result.command_approval["next_command_approval"]["command"][:3], ["git", "commit", "-m"])
+        self.assertIsNone(result.proposal_relative_path)
+
+    def test_recent_commit_uses_git_log_not_status(self) -> None:
+        result = self._run_with_classifier(
+            {
+                "intent": "git_workflow_request",
+                "confidence": 0.95,
+                "target_files": [],
+                "target_symbols": [],
+                "requested_action": "recent_commit",
+                "git_action": "git_recent_commit",
+                "needs_tool": "git",
+                "needs_clarification": False,
+                "clarification_question": None,
+            },
+            self._request("가장 최근 커밋정보 알려줘"),
+        )
+        self.assertEqual(result.response_type, "assistant_answer")
+        self.assertEqual(result.git_action, "git_recent_commit")
+        self.assertIn("git log -1", result.commands_run[0])
+        self.assertIn("Initial commit", result.response)
+
+    def test_review_recommendation_does_not_generate_proposal(self) -> None:
+        request = self._request("split_video 함수 보고 고칠거 알려줘")
+        with patch("repooperator_worker.services.agent_graph.run_agent_graph") as run_read_only:
+            run_read_only.return_value = AgentRunResponse(
+                project_path=str(self.repo),
+                git_provider="local",
+                active_repository_source="local",
+                active_repository_path=str(self.repo),
+                active_branch="main",
+                task=request.task,
+                model="test-model",
+                branch="main",
+                repo_root_name=Path(self.repo).name,
+                context_summary="split_video is present.",
+                top_level_entries=[],
+                readme_included=False,
+                diff_included=False,
+                is_git_repository=True,
+                files_read=["trim_videos.py"],
+                response="Suggestions only: validate input and return output paths.",
+                response_type="assistant_answer",
+                thread_context_files=["trim_videos.py"],
+                thread_context_symbols=["split_video"],
+            )
             result = self._run_with_classifier(
                 {
-                    "intent": "git_workflow_request",
-                    "confidence": 0.95,
-                    "target_files": [],
-                    "target_symbols": [],
-                    "requested_action": "commit",
-                    "needs_tool": "git",
+                    "intent": "review_recommendation",
+                    "confidence": 0.94,
+                    "target_files": ["trim_videos.py"],
+                    "target_symbols": ["split_video"],
+                    "requested_action": "review_symbol",
+                    "needs_tool": None,
                     "needs_clarification": False,
                     "clarification_question": None,
                 },
                 request,
             )
-        self.assertEqual(result.intent_classification, "git_workflow_request")
-        self.assertEqual(result.response_type, "command_result")
+        self.assertEqual(result.intent_classification, "review_recommendation")
+        self.assertEqual(result.response_type, "assistant_answer")
         self.assertIsNone(result.proposal_relative_path)
 
     def test_mr_request_routes_to_gitlab_tool_flow(self) -> None:

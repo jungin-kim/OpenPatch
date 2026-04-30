@@ -45,6 +45,7 @@ from repooperator_worker.schemas import (
 from repooperator_worker.services.edit_service import propose_file_edit
 from repooperator_worker.services.agent_service import run_agent_task
 from repooperator_worker.services.agent_orchestration_graph import stream_agent_orchestration_graph
+from repooperator_worker.services.apply_summary_service import generate_apply_summary
 from repooperator_worker.services.command_runner import run_command
 from repooperator_worker.services.command_service import (
     list_command_approvals,
@@ -545,6 +546,11 @@ def agent_run_stream(request: AgentRunRequest) -> StreamingResponse:
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post("/agent/apply-summary")
+def agent_apply_summary(payload: dict) -> dict:
+    return generate_apply_summary(payload)
 
 
 @router.post("/agent/propose-file", response_model=AgentProposeFileResponse)

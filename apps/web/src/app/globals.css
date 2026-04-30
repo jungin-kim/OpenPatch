@@ -1500,24 +1500,24 @@ select {
 /* ── Progress timeline ─────────────────────────────── */
 
 .progress-timeline {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  display: grid;
+  gap: 6px;
   padding: 6px 0 8px;
   max-width: 100%;
 }
 
 .progress-step {
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 99px;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
   font-size: 0.76rem;
   background: var(--surface-raised, rgba(0,0,0,0.04));
   color: var(--muted);
   border: 1px solid var(--border);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .progress-step-active {
@@ -1535,6 +1535,45 @@ select {
 .progress-step-icon {
   font-size: 0.8em;
   line-height: 1;
+}
+
+.progress-step-content {
+  display: grid;
+  gap: 2px;
+}
+
+.progress-step-phase {
+  color: var(--foreground);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.progress-step-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.reasoning-panel {
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.reasoning-panel summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.reasoning-panel pre {
+  margin: 0;
+  padding: 0 10px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ── Tool card (collapsible metadata) ─────────────── */

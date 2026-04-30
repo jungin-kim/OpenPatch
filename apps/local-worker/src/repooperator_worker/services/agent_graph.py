@@ -28,6 +28,10 @@ from repooperator_worker.services.model_client import (
     ModelGenerationRequest,
     OpenAICompatibleModelClient,
 )
+from repooperator_worker.services.response_quality_service import (
+    clean_user_visible_response,
+    language_guidance_for_task,
+)
 from repooperator_worker.services.retrieval_service import classify_query
 from repooperator_worker.services.thread_context_service import (
     ThreadContext,
@@ -51,7 +55,11 @@ or lines when useful.
 which additional files should be inspected.
 - Do not speculate about code that is not shown in the context.
 - Mention which files you drew from when it adds clarity (e.g. "In main.py, …").
-- Keep answers focused and practical."""
+- Keep answers focused and practical.
+- Follow the user's language. If the user asks in Korean, answer in natural Korean.
+- Keep code identifiers, file paths, and commands in their original spelling.
+- Do not mix Chinese, Japanese, or garbled multilingual tokens.
+- Do not misidentify a Python file as JavaScript."""
 
 
 # ── State ────────────────────────────────────────────────────────────────────
@@ -82,6 +90,7 @@ class AgentGraphState(TypedDict, total=False):
 
     # Populated by answer_read_only
     response_text: str
+    reasoning: str | None
 
     # Populated by format_response (final output)
     result: AgentRunResponse | None
@@ -206,6 +215,7 @@ def _answer_read_only(state: AgentGraphState) -> dict[str, Any]:
     )
     user_prompt = (
         f"{repository_trace}\n\nTask:\n{request.task}\n\n"
+        f"Language and quality guidance:\n{language_guidance_for_task(request.task)}\n\n"
         f"Recent thread context:\n"
         f"- files: {', '.join(thread_context.recent_files) or 'none'}\n"
         f"- symbols: {', '.join(thread_context.symbol_names) or 'none'}\n"
@@ -215,16 +225,18 @@ def _answer_read_only(state: AgentGraphState) -> dict[str, Any]:
 
     try:
         client = OpenAICompatibleModelClient()
-        response_text = client.generate_text(
+        raw_response = client.generate_text(
             ModelGenerationRequest(
                 system_prompt=_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
             )
         )
+        response_text, reasoning = clean_user_visible_response(raw_response, user_task=request.task)
     except RuntimeError as exc:
         logger.warning("model unavailable; using grounded local fallback: %s", exc)
         response_text = _fallback_read_only_answer(request.task, context)
-    return {"response_text": response_text}
+        reasoning = None
+    return {"response_text": response_text, "reasoning": reasoning}
 
 
 def _format_response(state: AgentGraphState) -> dict[str, Any]:
@@ -233,6 +245,7 @@ def _format_response(state: AgentGraphState) -> dict[str, Any]:
     active_repository: ActiveRepository | None = state.get("active_repository")
     context: QueryAwareContext = state["context"]
     response_text: str = state["response_text"]
+    reasoning: str | None = state.get("reasoning")
     thread_context: ThreadContext = state.get("thread_context") or build_thread_context(request)
 
     trace_source = request.git_provider or (
@@ -260,6 +273,7 @@ def _format_response(state: AgentGraphState) -> dict[str, Any]:
         is_git_repository=context.is_git_repository,
         files_read=context.files_read,
         response=response_text,
+        reasoning=reasoning,
         thread_context_files=thread_context.recent_files,
         thread_context_symbols=thread_context.symbol_names,
         context_source=state.get("context_source") or "retrieval",

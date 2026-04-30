@@ -179,6 +179,10 @@ export type AgentRunPayload = {
   classifier?: string | null;
   classifier_confidence?: number | null;
   validation_status?: string | null;
+  git_action?: string | null;
+  commands_planned?: string[];
+  commands_run?: string[];
+  reasoning?: string | null;
 };
 
 export type CommandApprovalPayload = {
@@ -196,6 +200,7 @@ export type CommandApprovalPayload = {
   reason: string;
   pattern?: string;
   options?: string[];
+  next_command_approval?: CommandApprovalPayload;
 };
 
 export type CommandResultPayload = CommandApprovalPayload & {
@@ -387,7 +392,12 @@ export async function runAgentTask(input: {
 
 export type AgentProgressEvent =
   | { type: "progress"; node: string; message: string }
+  | { type: "progress_delta"; node?: string; phase?: string; message: string; status?: "running" | "completed" | "failed" | string; elapsed_ms?: number }
+  | { type: "assistant_delta"; delta: string }
+  | { type: "reasoning_delta"; delta: string; source?: string }
+  | { type: "command_delta"; delta?: string; message?: string }
   | { type: "done"; result: AgentRunPayload }
+  | { type: "final_message"; result: AgentRunPayload }
   | { type: "error"; message: string };
 
 export async function* streamAgentTask(input: {
@@ -519,6 +529,22 @@ export async function writeRepositoryFile(input: {
     body: JSON.stringify(input),
   });
   return parseWorkerResponse<FileWritePayload>(response);
+}
+
+export async function generateApplySummary(input: {
+  project_path: string;
+  branch?: string | null;
+  relative_path: string;
+  user_request?: string;
+  proposal_summary?: string;
+  diff_summary?: string;
+}): Promise<{ response: string; response_type: string; relative_path: string; reasoning?: string | null }> {
+  const response = await fetch("/api/worker/agent/apply-summary", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return parseWorkerResponse<{ response: string; response_type: string; relative_path: string; reasoning?: string | null }>(response);
 }
 
 export async function listThreads(): Promise<ThreadListPayload> {

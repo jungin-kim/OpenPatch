@@ -10,6 +10,7 @@ import {
   getRecentProjects,
   getRepositoryOpenPlan,
   getWorkerHealth,
+  generateApplySummary,
   listLocalBranches,
   listThreads,
   LocalWorkerClientError,
@@ -104,6 +105,8 @@ export function ChatApp() {
   const [branchActionError, setBranchActionError] = useState<string | null>(null);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
+  const [streamedAnswer, setStreamedAnswer] = useState("");
+  const [streamedReasoning, setStreamedReasoning] = useState("");
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
 
   // ── Health check ─────────────────────────────────────────────────────────
@@ -523,7 +526,26 @@ export function ChatApp() {
           command_result: result,
         },
       };
-      setMessages((current) => [...current.filter((m) => m.id !== pendingMessage.id), assistantMessage]);
+      const nextApproval = metadata.command_approval.next_command_approval;
+      const followupApproval: ChatMessage | null = nextApproval
+        ? {
+            id: `${Date.now()}-command-next-approval`,
+            role: "assistant",
+            content: "The first Git step completed. Review the next command before continuing.",
+            timestamp: new Date(),
+            metadata: {
+              ...metadata,
+              response: "The first Git step completed. Review the next command before continuing.",
+              response_type: "command_approval",
+              command_approval: nextApproval,
+            },
+          }
+        : null;
+      setMessages((current) => [
+        ...current.filter((m) => m.id !== pendingMessage.id),
+        assistantMessage,
+        ...(followupApproval ? [followupApproval] : []),
+      ]);
     } catch (error) {
       const assistantMessage: ChatMessage = {
         id: `${Date.now()}-command-error`,
@@ -624,6 +646,8 @@ export function ChatApp() {
     setQuestion("");
     setQuestionPending(true);
     setProgressSteps([]);
+    setStreamedAnswer("");
+    setStreamedReasoning("");
 
     // Build conversation history from the last 10 messages (user + assistant only)
     // so the backend can resolve write confirmations against prior suggestions.
@@ -649,8 +673,25 @@ export function ChatApp() {
 
       for await (const event of streamAgentTask(streamInput)) {
         if (event.type === "progress") {
-          setProgressSteps((prev) => [...prev, { node: event.node, message: event.message }]);
+          setProgressSteps((prev) => [...prev, { node: event.node, message: event.message, phase: "context", status: "running" }]);
+        } else if (event.type === "progress_delta") {
+          setProgressSteps((prev) => [
+            ...prev,
+            {
+              node: event.node ?? event.phase ?? "progress",
+              phase: event.phase,
+              message: event.message,
+              status: event.status,
+              elapsedMs: event.elapsed_ms,
+            },
+          ]);
+        } else if (event.type === "assistant_delta") {
+          setStreamedAnswer((prev) => prev + event.delta);
+        } else if (event.type === "reasoning_delta") {
+          setStreamedReasoning((prev) => prev + event.delta);
         } else if (event.type === "done") {
+          payload = event.result;
+        } else if (event.type === "final_message") {
           payload = event.result;
         } else if (event.type === "error") {
           throw new Error(event.message);
@@ -720,6 +761,8 @@ export function ChatApp() {
     } finally {
       setQuestionPending(false);
       setProgressSteps([]);
+      setStreamedAnswer("");
+      setStreamedReasoning("");
     }
   }
 
@@ -929,20 +972,90 @@ export function ChatApp() {
   }
 
   function handleProposalStatusChange(id: string, status: ProposalStatus, _message?: string) {
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg.proposal?.id === id
-          ? { ...msg, proposal: { ...msg.proposal, status } }
-          : msg,
-      ),
-    );
-    // Persist the updated proposal status in the thread.
-    if (activeThreadId) {
-      setMessages((current) => {
-        updateActiveThread(current);
-        return current;
+    let appliedProposal: ChangeProposal | null = null;
+    let proposalMetadata: AgentRunPayload | undefined;
+    const nextMessages = messages.map((msg) => {
+      if (msg.proposal?.id === id) {
+        appliedProposal = msg.proposal;
+        proposalMetadata = msg.metadata;
+        return { ...msg, proposal: { ...msg.proposal, status } };
+      }
+      return msg;
+    });
+    setMessages(nextMessages);
+    updateActiveThread(nextMessages);
+
+    if (status === "applied" && appliedProposal && repoResult) {
+      void appendApplySummary(appliedProposal, proposalMetadata, nextMessages);
+    }
+  }
+
+  async function appendApplySummary(
+    proposal: ChangeProposal,
+    metadata: AgentRunPayload | undefined,
+    currentMessages: ChatMessage[],
+  ) {
+    const lastUserRequest =
+      [...currentMessages].reverse().find((msg) => msg.role === "user")?.content || "";
+    try {
+      const summary = await generateApplySummary({
+        project_path: proposal.projectPath,
+        branch: proposal.branch,
+        relative_path: proposal.relativePath,
+        user_request: lastUserRequest,
+        proposal_summary: metadata?.proposal_context_summary || metadata?.response || "",
+        diff_summary: buildDiffSummary(proposal.originalContent, proposal.proposedContent),
+      });
+      const summaryMessage: ChatMessage = {
+        id: `${Date.now()}-apply-summary`,
+        role: "assistant",
+        content: summary.response,
+        timestamp: new Date(),
+        metadata: {
+          ...(metadata ?? {}),
+          response_type: "assistant_answer",
+          response: summary.response,
+          reasoning: summary.reasoning ?? null,
+          files_read: [proposal.relativePath],
+        } as AgentRunPayload,
+      };
+      setMessages((latest) => {
+        const merged = [...latest, summaryMessage];
+        updateActiveThread(merged);
+        return merged;
+      });
+    } catch {
+      const fallback: ChatMessage = {
+        id: `${Date.now()}-apply-summary-fallback`,
+        role: "assistant",
+        content: `Applied the approved changes to ${proposal.relativePath}. RepoOperator has not committed or pushed anything.`,
+        timestamp: new Date(),
+      };
+      setMessages((latest) => {
+        const merged = [...latest, fallback];
+        updateActiveThread(merged);
+        return merged;
       });
     }
+  }
+
+  function buildDiffSummary(original: string, proposed: string): string {
+    const oldLines = original.split("\n");
+    const newLines = proposed.split("\n");
+    let added = 0;
+    let removed = 0;
+    const max = Math.max(oldLines.length, newLines.length);
+    for (let i = 0; i < max; i++) {
+      if (oldLines[i] !== newLines[i]) {
+        if (newLines[i] !== undefined) added += 1;
+        if (oldLines[i] !== undefined) removed += 1;
+      }
+    }
+    return `${proposalLineLabel(added, "line")} added or changed, ${proposalLineLabel(removed, "line")} removed or changed.`;
+  }
+
+  function proposalLineLabel(count: number, noun: string): string {
+    return `${count} ${noun}${count === 1 ? "" : "s"}`;
   }
 
   function handleRecentProjectSelect(project: ProviderProjectSummary) {
@@ -1016,6 +1129,8 @@ export function ChatApp() {
           repoResult={repoResult}
           questionPending={questionPending}
           progressSteps={progressSteps}
+          streamedAnswer={streamedAnswer}
+          streamedReasoning={streamedReasoning}
           gitProvider={gitProvider}
           writeMode={writeMode}
           onProposalStatusChange={handleProposalStatusChange}

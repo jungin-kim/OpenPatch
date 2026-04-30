@@ -206,6 +206,10 @@ class AgentRunResponse(BaseModel):
     proposal_error_details: str | None = None
     command_approval: dict | None = None
     command_result: dict | None = None
+    git_action: str | None = None
+    commands_planned: list[str] = []
+    commands_run: list[str] = []
+    reasoning: str | None = None
     run_id: str | None = None
     skills_used: list[str] = []
     thread_context_files: list[str] = []

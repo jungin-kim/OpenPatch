@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shlex
+import subprocess
+import time
+import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
@@ -28,6 +33,11 @@ from repooperator_worker.services.model_client import (
     ModelGenerationRequest,
     OpenAICompatibleModelClient,
 )
+from repooperator_worker.services.response_quality_service import (
+    clean_user_visible_response,
+    language_guidance_for_task,
+    user_prefers_korean,
+)
 from repooperator_worker.services.retrieval_service import SKIP_DIRS
 from repooperator_worker.services.skills_service import enabled_skill_context
 from repooperator_worker.services.thread_context_service import (
@@ -41,6 +51,7 @@ Intent = Literal[
     "read_only_question",
     "repo_analysis",
     "recommend_change_targets",
+    "review_recommendation",
     "write_request",
     "write_confirmation",
     "file_clarification_answer",
@@ -73,6 +84,7 @@ SUPPORTED_INTENTS: set[str] = {
     "read_only_question",
     "repo_analysis",
     "recommend_change_targets",
+    "review_recommendation",
     "write_request",
     "write_confirmation",
     "file_clarification_answer",
@@ -88,11 +100,12 @@ repository agent to do. Return JSON only; do not include markdown or prose.
 
 Schema:
 {
-  "intent": "read_only_question|repo_analysis|recommend_change_targets|write_request|write_confirmation|file_clarification_answer|local_command_request|git_workflow_request|gitlab_mr_request|ambiguous",
+  "intent": "read_only_question|repo_analysis|recommend_change_targets|review_recommendation|write_request|write_confirmation|file_clarification_answer|local_command_request|git_workflow_request|gitlab_mr_request|ambiguous",
   "confidence": 0.0,
   "target_files": [],
   "target_symbols": [],
   "requested_action": "short action summary",
+  "git_action": "git_status|git_recent_commit|git_commit_plan|git_push_plan|git_mr_create_plan|null",
   "needs_tool": null,
   "needs_clarification": false,
   "clarification_question": null
@@ -102,6 +115,7 @@ Intent guidance:
 - read_only_question: answer or explain code without changing files or running local commands.
 - repo_analysis: inspect the repository structure and explain architecture or health.
 - recommend_change_targets: recommend concrete files to inspect or improve; do not require a file first.
+- review_recommendation: review a file, symbol, or recent context and list concrete improvement suggestions without preparing a diff.
 - write_request: user asks for a code/file change or a change proposal.
 - write_confirmation: user confirms a previous suggestion/proposal should be applied or prepared.
 - file_clarification_answer: user chooses from previously offered candidate files.
@@ -112,6 +126,12 @@ Intent guidance:
 
 Use recent thread context, pending candidates, and pending proposals. Korean and
 English requests are both expected. Do not expose hidden reasoning.
+
+Important distinctions:
+- "what should I fix", "suggest improvements", "고칠거 알려줘", "개선할 점 알려줘", and "리팩토링 포인트 알려줘" are review_recommendation.
+- "refactor it", "modify it", "apply that", "수정해줘", "리팩토링해줘", and "적용해줘" are write_request or write_confirmation.
+- "latest commit", "recent commit", "가장 최근 커밋정보", and "최근 커밋" are git_workflow_request with git_action "git_recent_commit".
+- "commit my changes", "방금 수정한 내용 커밋해줘", and "커밋해줘" are git_workflow_request with git_action "git_commit_plan".
 """
 
 
@@ -134,6 +154,9 @@ class OrchestrationState(TypedDict, total=False):
     target_symbols: list[str]
     requested_action: str | None
     needs_tool: str | None
+    git_action: str | None
+    commands_planned: list[str]
+    commands_run: list[str]
     needs_clarification: bool
     clarification_question: str | None
     classifier: str
@@ -216,6 +239,9 @@ def _classifier_debug(state: OrchestrationState) -> dict[str, Any]:
         "resolved_files": resolved_files,
         "resolved_symbols": state.get("target_symbols") or [],
         "validation_status": state.get("validation_status") or "pending",
+        "git_action": state.get("git_action"),
+        "commands_planned": state.get("commands_planned") or [],
+        "commands_run": state.get("commands_run") or [],
     }
 
 
@@ -333,6 +359,7 @@ def _classify_intent(state: OrchestrationState) -> dict[str, Any]:
         "target_symbols": target_symbols,
         "requested_action": classification.get("requested_action"),
         "needs_tool": classification.get("needs_tool"),
+        "git_action": _normalize_git_action(classification.get("git_action") or classification.get("requested_action")),
         "needs_clarification": bool(classification.get("needs_clarification")),
         "clarification_question": classification.get("clarification_question"),
         "classifier": str(classification.get("classifier") or "llm"),
@@ -521,7 +548,8 @@ def _recommend_change_targets(state: OrchestrationState) -> dict[str, Any]:
                 system_prompt=(
                     "You are RepoOperator. Recommend concrete repository files to inspect or modify. "
                     "Do not ask the user to provide a file path. Use the provided repository context. "
-                    "Return concise bullets with file paths and reasons. Do not claim to edit files."
+                    "Return concise bullets with file paths and reasons. Do not claim to edit files. "
+                    + language_guidance_for_task(request.task)
                 ),
                 user_prompt="\n\n".join(
                     part
@@ -537,7 +565,7 @@ def _recommend_change_targets(state: OrchestrationState) -> dict[str, Any]:
             )
         )
         if model_response.strip():
-            response = model_response.strip()
+            response, _reasoning = clean_user_visible_response(model_response, user_task=request.task)
     except (ValueError, RuntimeError) as exc:
         logger.info("recommend_change_targets using deterministic fallback: %r", exc)
 
@@ -670,6 +698,16 @@ def _answer_read_only(state: OrchestrationState) -> dict[str, Any]:
 
     request = state["request"]
     skills_context = state.get("skills_context") or ""
+    if state.get("intent") == "review_recommendation":
+        request = request.model_copy(
+            update={
+                "task": (
+                    f"{request.task}\n\n"
+                    "Treat this as a review/recommendation request only. "
+                    "List concrete improvements and risks. Do not prepare a diff or imply that files were changed."
+                )
+            }
+        )
     if skills_context:
         request = request.model_copy(
             update={"task": f"{request.task}\n\nRelevant enabled skills:\n{skills_context}"}
@@ -760,14 +798,11 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
             check=False,
         )
         if auth_check.returncode != 0:
+            host = _detect_git_remote_host(request) or "gitlab.com"
+            login_command = "glab auth login" if host == "gitlab.com" else f"glab auth login --hostname {host}"
             result_response = _base_response(
                 request,
-                response=(
-                    "`glab` is installed but not authenticated with GitLab.\n\n"
-                    "Run:\n```\nglab auth login\n```\n"
-                    "or set `GITLAB_TOKEN` / `GLAB_TOKEN` environment variable and restart the worker.\n\n"
-                    f"Auth status output:\n```\n{(auth_check.stderr or auth_check.stdout or '').strip()[:800]}\n```"
-                ),
+                response=_format_glab_auth_failure(host, login_command),
                 response_type="assistant_answer",
                 intent_classification=state.get("intent"),
                 graph_path="local_tool_request_auth_required",
@@ -790,7 +825,7 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
             response = "GitLab merge requests for the active repository:\n\n```text\n" + output + "\n```"
             status = "assistant_answer"
         else:
-            err = (result.get("stderr") or result.get("stdout") or "No output").strip()
+            err = _redact_text((result.get("stderr") or result.get("stdout") or "No output").strip())
             response = (
                 "I could not list merge requests with `glab mr list`.\n\n"
                 f"```text\n{err[:1000]}\n```\n\n"
@@ -832,6 +867,365 @@ def _get_repo_cwd(request: AgentRunRequest) -> str | None:
         return str(resolve_project_path(request.project_path))
     except Exception:
         return None
+
+
+def _detect_git_remote_host(request: AgentRunRequest) -> str | None:
+    repo_cwd = _get_repo_cwd(request)
+    if not repo_cwd:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo_cwd,
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    url = (result.stdout or "").strip()
+    if not url:
+        return None
+    if url.startswith("git@") and ":" in url:
+        return url.split("@", 1)[1].split(":", 1)[0]
+    parsed = urlparse(url)
+    return parsed.hostname
+
+
+def _format_glab_auth_failure(host: str, login_command: str) -> str:
+    return (
+        f"`glab` is installed, but GitLab authentication failed for `{host}`.\n\n"
+        "Run this command in a terminal, then retry:\n\n"
+        f"```bash\n{login_command}\n```\n\n"
+        "If you use a token, configure a valid GitLab token without printing the token value. "
+        "RepoOperator hides raw authentication diagnostics by default to avoid exposing secrets."
+    )
+
+
+def _plan_git_workflow(state: OrchestrationState) -> dict[str, Any]:
+    request = state["request"]
+    action = _normalize_git_action(state.get("git_action") or state.get("requested_action"))
+    repo_path = resolve_project_path(request.project_path)
+    thread_context = state.get("thread_context") or ThreadContext(request.project_path, request.branch)
+
+    if action == "git_recent_commit":
+        log = _run_git(repo_path, ["log", "-1", "--pretty=fuller", "--stat", "--decorate"])
+        response = _format_recent_commit_response(request, log)
+        return {
+            "result": _base_response(
+                request,
+                response=response,
+                response_type="assistant_answer",
+                intent_classification=state.get("intent"),
+                graph_path="git_recent_commit",
+                thread_context_files=thread_context.recent_files,
+                thread_context_symbols=thread_context.symbol_names,
+                context_source=state.get("context_source"),
+                **_classifier_debug({**state, "git_action": action, "commands_run": ["git log -1 --pretty=fuller --stat --decorate"]}),
+            ),
+            "graph_path": "git_recent_commit",
+        }
+
+    if action == "git_status":
+        status = _run_git(repo_path, ["status", "--short"])
+        stat = _run_git(repo_path, ["diff", "--stat"])
+        response = _format_git_status_response(request, status, stat)
+        commands = ["git status --short", "git diff --stat"]
+        return {
+            "result": _base_response(
+                request,
+                response=response,
+                response_type="assistant_answer",
+                intent_classification=state.get("intent"),
+                graph_path="git_status",
+                thread_context_files=thread_context.recent_files,
+                thread_context_symbols=thread_context.symbol_names,
+                context_source=state.get("context_source"),
+                **_classifier_debug({**state, "git_action": action, "commands_run": commands}),
+            ),
+            "graph_path": "git_status",
+        }
+
+    if action == "git_commit_plan":
+        status = _run_git(repo_path, ["status", "--short"])
+        stat = _run_git(repo_path, ["diff", "--stat"])
+        diff = _run_git(repo_path, ["diff"])
+        changed_files = _changed_files_from_status(status.stdout)
+        commands_run = ["git status --short", "git diff --stat", "git diff"]
+        if status.returncode != 0:
+            response = f"I could not inspect the working tree:\n\n```text\n{_redact_text(status.stderr or status.stdout)}\n```"
+            return {
+                "result": _base_response(
+                    request,
+                    response=response,
+                    response_type="assistant_answer",
+                    intent_classification=state.get("intent"),
+                    graph_path="git_commit_plan_error",
+                    context_source=state.get("context_source"),
+                    **_classifier_debug({**state, "git_action": action, "commands_run": commands_run}),
+                )
+            }
+        if not changed_files:
+            response = "There is nothing to commit. The working tree has no modified, staged, or untracked files."
+            return {
+                "result": _base_response(
+                    request,
+                    response=response,
+                    response_type="assistant_answer",
+                    intent_classification=state.get("intent"),
+                    graph_path="git_commit_plan_clean",
+                    context_source=state.get("context_source"),
+                    **_classifier_debug({**state, "git_action": action, "commands_run": commands_run}),
+                )
+            }
+        message = _propose_commit_message(request, changed_files, stat.stdout, diff.stdout)
+        commit_command = ["git", "commit", "-m", message]
+        planned = ["git add --all", shlex.join(commit_command)]
+        preview = _command_preview_for_repo(["git", "add", "--all"], repo_path, reason=(
+            "Stage the current repository changes before creating the proposed commit. "
+            f"Planned commit message: {message!r}. RepoOperator will not push."
+        ))
+        preview["next_command_approval"] = _command_preview_for_repo(
+            commit_command,
+            repo_path,
+            reason=f"Create the local commit with message: {message!r}. RepoOperator will not push.",
+        )
+        response = _format_commit_plan_response(request, changed_files, stat.stdout, message, planned)
+        return {
+            "result": _base_response(
+                request,
+                response=response,
+                response_type="command_approval",
+                command_approval=preview,
+                intent_classification=state.get("intent"),
+                graph_path="git_commit_plan",
+                thread_context_files=thread_context.recent_files,
+                thread_context_symbols=thread_context.symbol_names,
+                context_source=state.get("context_source"),
+                **_classifier_debug({**state, "git_action": action, "commands_planned": planned, "commands_run": commands_run}),
+            ),
+            "graph_path": "git_commit_plan",
+        }
+
+    if action == "git_push_plan":
+        branch = _run_git(repo_path, ["branch", "--show-current"])
+        remotes = _run_git(repo_path, ["remote", "-v"])
+        status = _run_git(repo_path, ["status", "--short"])
+        upstream = _run_git(repo_path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        branch_name = (branch.stdout or request.branch or "").strip()
+        push_command = ["git", "push"] if upstream.returncode == 0 else ["git", "push", "--set-upstream", "origin", branch_name or "HEAD"]
+        planned = [shlex.join(push_command)]
+        commands_run = [
+            "git branch --show-current",
+            "git remote -v",
+            "git status --short",
+            "git rev-parse --abbrev-ref --symbolic-full-name @{u}",
+        ]
+        preview = _command_preview_for_repo(push_command, repo_path, reason="Push the current branch to the configured remote. This requires approval.")
+        response = _format_push_plan_response(branch_name, remotes.stdout, status.stdout, upstream.stdout, planned[0])
+        return {
+            "result": _base_response(
+                request,
+                response=response,
+                response_type="command_approval",
+                command_approval=preview,
+                intent_classification=state.get("intent"),
+                graph_path="git_push_plan",
+                context_source=state.get("context_source"),
+                **_classifier_debug({**state, "git_action": action, "commands_planned": planned, "commands_run": commands_run}),
+            ),
+            "graph_path": "git_push_plan",
+        }
+
+    if action == "git_mr_create_plan":
+        preview = _command_preview_for_repo(["glab", "mr", "create"], repo_path, reason="Create a GitLab merge request after you review the title, body, source branch, and target branch.")
+        return {
+            "result": _base_response(
+                request,
+                response=(
+                    "RepoOperator can create a merge request after approval. "
+                    "Before creating it, review the source branch, target branch, title, and body. "
+                    "Use the approval card only when those details are correct."
+                ),
+                response_type="command_approval",
+                command_approval=preview,
+                intent_classification=state.get("intent"),
+                graph_path="git_mr_create_plan",
+                context_source=state.get("context_source"),
+                **_classifier_debug({**state, "git_action": action, "commands_planned": ["glab mr create"]}),
+            ),
+            "graph_path": "git_mr_create_plan",
+        }
+
+    return _plan_git_workflow({**state, "git_action": "git_status"})
+
+
+def _run_git(repo_path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo_path,
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    try:
+        from repooperator_worker.services.event_service import record_event
+
+        record_event(
+            event_type="git_workflow_step",
+            repo=str(repo_path),
+            status="ok" if result.returncode == 0 else "error",
+            summary=shlex.join(["git", *args]),
+            command=["git", *args],
+            tool="git",
+            error=_redact_text(result.stderr[:500]) if result.returncode else None,
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("could not record git workflow event", exc_info=True)
+    return result
+
+
+def _normalize_git_action(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if any(token in text for token in ("recent_commit", "latest_commit", "last_commit", "log", "commit info", "커밋정보", "최근 커밋", "가장 최근")):
+        return "git_recent_commit"
+    if "mr_create" in text or ("merge request" in text and "create" in text) or "mr create" in text:
+        return "git_mr_create_plan"
+    if "push" in text or "푸시" in text:
+        return "git_push_plan"
+    if "commit" in text or "커밋" in text:
+        return "git_commit_plan"
+    if any(token in text for token in ("diff", "status", "branch", "changes", "변경사항", "브랜치", "상태")):
+        return "git_status"
+    return "git_status"
+
+
+def _changed_files_from_status(status_output: str) -> list[str]:
+    files: list[str] = []
+    for line in status_output.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip() if len(line) > 3 else line.strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        if path:
+            files.append(path)
+    return files
+
+
+def _propose_commit_message(request: AgentRunRequest, changed_files: list[str], diff_stat: str, diff: str) -> str:
+    fallback = "Update " + (Path(changed_files[0]).name if changed_files else "repository files")
+    try:
+        response = OpenAICompatibleModelClient().generate_text(
+            ModelGenerationRequest(
+                system_prompt=(
+                    "Write one concise git commit subject. Return only the subject line, "
+                    "without quotes, markdown, or a trailing period."
+                ),
+                user_prompt="\n\n".join(
+                    [
+                        f"User request: {request.task}",
+                        "Changed files:\n" + "\n".join(f"- {path}" for path in changed_files[:20]),
+                        "Diff stat:\n" + (diff_stat[:2000] or "none"),
+                        "Diff excerpt:\n" + (diff[:4000] or "none"),
+                    ]
+                ),
+            )
+        )
+        cleaned = response.strip().splitlines()[0].strip("`\"' ")
+        return cleaned[:120] or fallback
+    except Exception:  # noqa: BLE001
+        return fallback
+
+
+def _command_preview_for_repo(argv: list[str], repo_path: Path, *, reason: str) -> dict[str, Any]:
+    pattern = " ".join(argv[:3] if argv and argv[0] in {"git", "glab"} else argv[:2])
+    approval_id = "cmd_" + uuid.uuid5(uuid.NAMESPACE_URL, f"{repo_path}:{pattern}").hex[:12]
+    read_only = tuple(part.lower() for part in argv[:2]) in {
+        ("git", "status"),
+        ("git", "diff"),
+        ("git", "log"),
+        ("git", "branch"),
+    }
+    display = shlex.join(argv)
+    return {
+        "type": "command_approval",
+        "approval_id": approval_id,
+        "command": argv,
+        "display_command": display,
+        "cwd": str(repo_path),
+        "risk": "low" if read_only else "medium",
+        "read_only": read_only,
+        "needs_network": argv[:2] in [["git", "push"], ["glab", "mr"]],
+        "touches_outside_repo": False,
+        "needs_approval": not read_only,
+        "blocked": False,
+        "reason": reason,
+        "pattern": pattern,
+        "options": ["yes", "yes_session", "no_explain"],
+    }
+
+
+def _format_git_status_response(request: AgentRunRequest, status: subprocess.CompletedProcess[str], stat: subprocess.CompletedProcess[str]) -> str:
+    if user_prefers_korean(request.task):
+        if not status.stdout.strip():
+            return "현재 작업 트리에 변경사항이 없습니다."
+        return "현재 변경사항은 다음과 같습니다.\n\n```text\n" + _redact_text(status.stdout.strip()) + "\n```\n\nDiff 요약:\n```text\n" + (_redact_text(stat.stdout.strip()) or "No diff stat.") + "\n```"
+    if not status.stdout.strip():
+        return "The working tree has no modified, staged, or untracked files."
+    return "Current working tree changes:\n\n```text\n" + _redact_text(status.stdout.strip()) + "\n```\n\nDiff summary:\n```text\n" + (_redact_text(stat.stdout.strip()) or "No diff stat.") + "\n```"
+
+
+def _format_recent_commit_response(request: AgentRunRequest, log: subprocess.CompletedProcess[str]) -> str:
+    if log.returncode != 0:
+        return "I could not read the latest commit:\n\n```text\n" + _redact_text(log.stderr or log.stdout) + "\n```"
+    if user_prefers_korean(request.task):
+        return "가장 최근 커밋 정보입니다.\n\n```text\n" + _redact_text(log.stdout.strip()) + "\n```"
+    return "Latest commit information:\n\n```text\n" + _redact_text(log.stdout.strip()) + "\n```"
+
+
+def _format_commit_plan_response(request: AgentRunRequest, changed_files: list[str], diff_stat: str, message: str, planned: list[str]) -> str:
+    files = "\n".join(f"- `{path}`" for path in changed_files[:20])
+    if user_prefers_korean(request.task):
+        return (
+            "커밋할 변경사항을 확인했습니다.\n\n"
+            f"변경 파일:\n{files}\n\n"
+            f"Diff 요약:\n```text\n{_redact_text(diff_stat.strip()) or 'No diff stat.'}\n```\n\n"
+            f"제안 커밋 메시지: `{message}`\n\n"
+            "아래 승인 카드로 먼저 변경사항을 stage합니다. 그 다음 커밋 명령을 승인하면 됩니다.\n"
+            "계획된 명령:\n" + "\n".join(f"- `{cmd}`" for cmd in planned)
+        )
+    return (
+        "I found changes that can be committed.\n\n"
+        f"Changed files:\n{files}\n\n"
+        f"Diff summary:\n```text\n{_redact_text(diff_stat.strip()) or 'No diff stat.'}\n```\n\n"
+        f"Proposed commit message: `{message}`\n\n"
+        "Approve the card below to stage the changes first. Then approve the commit command.\n"
+        "Planned commands:\n" + "\n".join(f"- `{cmd}`" for cmd in planned)
+    )
+
+
+def _format_push_plan_response(branch: str, remotes: str, status: str, upstream: str, command: str) -> str:
+    return (
+        "Push plan for the active repository:\n\n"
+        f"- Branch: `{branch or 'unknown'}`\n"
+        f"- Upstream: `{upstream.strip() or 'not configured'}`\n"
+        f"- Working tree status: `{status.strip() or 'clean'}`\n"
+        f"- Command: `{command}`\n\n"
+        "Remote configuration:\n```text\n" + _redact_text(remotes.strip()) + "\n```"
+    )
+
+
+def _redact_text(text: str) -> str:
+    redacted = text or ""
+    redacted = re.sub(r"(?i)(token|api[_-]?key|secret|password)=\S+", r"\1=[redacted]", redacted)
+    redacted = re.sub(r"(?i)(glpat-|ghp_|sk-)[A-Za-z0-9_\-]+", "[redacted-token]", redacted)
+    home = str(Path.home())
+    if home:
+        redacted = redacted.replace(home, "~")
+    return redacted
 
 
 def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
@@ -956,8 +1350,12 @@ def _after_classify(state: OrchestrationState) -> str:
         return "answer_read_only"
     if intent == "gitlab_mr_request":
         return "run_local_tool_request"
-    if intent in {"local_command_request", "git_workflow_request"}:
+    if intent == "git_workflow_request":
+        return "plan_git_workflow"
+    if intent == "local_command_request":
         return "run_local_command_request"
+    if intent == "review_recommendation":
+        return "answer_read_only"
     if intent in {"repo_analysis", "recommend_change_targets"}:
         return "recommend_change_targets"
     if state.get("settings").write_mode not in {
@@ -1002,6 +1400,7 @@ def _build_graph():
     graph.add_node("answer_read_only", _answer_read_only)
     graph.add_node("run_local_tool_request", _run_local_tool_request)
     graph.add_node("run_local_command_request", _run_local_command_request)
+    graph.add_node("plan_git_workflow", _plan_git_workflow)
     graph.set_entry_point("load_context")
     graph.add_edge("load_context", "validate_active_repository")
     graph.add_edge("validate_active_repository", "classify_intent")
@@ -1019,6 +1418,7 @@ def _build_graph():
     graph.add_edge("answer_read_only", END)
     graph.add_edge("run_local_tool_request", END)
     graph.add_edge("run_local_command_request", END)
+    graph.add_edge("plan_git_workflow", END)
     return graph
 
 
@@ -1068,6 +1468,9 @@ def _node_progress_message(node_name: str, node_state: dict[str, Any]) -> str | 
         return "Running GitLab tool"
     if node_name == "run_local_command_request":
         return "Running command"
+    if node_name == "plan_git_workflow":
+        action = node_state.get("git_action")
+        return f"Planning Git workflow: {str(action).replace('_', ' ')}" if action else "Planning Git workflow"
     if node_name == "permission_required":
         return "Checking permissions"
     if node_name == "proposal_error":
@@ -1079,6 +1482,7 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
     """Generator that yields JSON-encoded SSE event payloads for LangGraph progress."""
     initial_state: dict[str, Any] = {"request": request}
     accumulated_result: AgentRunResponse | None = None
+    started = time.perf_counter()
 
     try:
         for update in _COMPILED_GRAPH.stream(initial_state, stream_mode="updates"):
@@ -1092,7 +1496,16 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
 
             message = _node_progress_message(node_name, node_state)
             if message:
-                yield json.dumps({"type": "progress", "node": node_name, "message": message})
+                phase = _progress_phase_for_node(node_name)
+                payload = {
+                    "type": "progress_delta",
+                    "node": node_name,
+                    "phase": phase,
+                    "message": message,
+                    "status": "completed" if node_state.get("result") is not None else "running",
+                    "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                }
+                yield json.dumps(payload)
 
     except Exception as exc:
         logger.exception("Streaming graph error: %s", exc)
@@ -1100,9 +1513,40 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
         return
 
     if accumulated_result is not None:
-        yield json.dumps({"type": "done", "result": accumulated_result.model_dump()})
+        if accumulated_result.reasoning:
+            yield json.dumps(
+                {
+                    "type": "reasoning_delta",
+                    "delta": accumulated_result.reasoning,
+                    "source": "model_provided",
+                }
+            )
+        for chunk in _chunk_stream_text(accumulated_result.response):
+            yield json.dumps({"type": "assistant_delta", "delta": chunk})
+        yield json.dumps({"type": "final_message", "result": accumulated_result.model_dump()})
     else:
         yield json.dumps({"type": "error", "message": "Agent did not produce a result."})
+
+
+def _progress_phase_for_node(node_name: str) -> str:
+    if node_name in {"load_context", "validate_active_repository", "classify_intent", "resolve_context_reference"}:
+        return "context"
+    if node_name in {"resolve_target_files", "ask_clarification"}:
+        return "file_read"
+    if node_name in {"generate_change_plan", "recommend_change_targets"}:
+        return "planning"
+    if node_name in {"run_local_tool_request", "run_local_command_request", "plan_git_workflow"}:
+        return "commands"
+    if node_name in {"generate_patch", "validate_patch", "return_proposal", "proposal_error"}:
+        return "diff_generation"
+    return "final_answer"
+
+
+def _chunk_stream_text(text: str, *, chunk_size: int = 96):
+    for start in range(0, len(text or ""), chunk_size):
+        chunk = text[start : start + chunk_size]
+        if chunk:
+            yield chunk
 
 
 def _command_for_classification(state: OrchestrationState) -> tuple[list[str], str]:
