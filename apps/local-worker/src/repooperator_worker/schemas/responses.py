@@ -197,6 +197,9 @@ class AgentRunResponse(BaseModel):
     proposal_error_details: str | None = None
     run_id: str | None = None
     skills_used: list[str] = []
+    thread_context_files: list[str] = []
+    thread_context_symbols: list[str] = []
+    context_source: str | None = None
 
 
 class LocalBranchSummary(BaseModel):

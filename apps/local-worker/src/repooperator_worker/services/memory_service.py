@@ -60,6 +60,13 @@ def add_memory(
     }
     with _memory_file().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    from repooperator_worker.services.event_service import record_event
+
+    record_event(
+        event_type="memory_write",
+        repo=repo,
+        summary=f"Stored {memory_type} memory",
+    )
     return record
 
 
@@ -112,15 +119,84 @@ def list_memory_items(limit: int = 100) -> dict[str, Any]:
             except json.JSONDecodeError:
                 continue
     items = items[-limit:]
-    nodes = [
-        {
-            "id": item["id"],
-            "label": item.get("type", "memory"),
-            "repo": item.get("repo"),
-        }
-        for item in items
-    ]
+    graph = _build_memory_graph(items)
     return {
         "items": list(reversed(items)),
-        "graph": {"nodes": nodes, "edges": []},
+        "graph": graph,
     }
+
+
+def _build_memory_graph(items: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    from repooperator_worker.services.event_service import list_recent_runs
+    from repooperator_worker.services.skills_service import discover_skills
+    from repooperator_worker.services.thread_service import list_threads
+
+    nodes: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+
+    def add_node(node_id: str, label: str, node_type: str) -> None:
+        nodes.setdefault(node_id, {"id": node_id, "label": label, "type": node_type})
+
+    def add_edge(source: str, target: str, label: str) -> None:
+        if source in nodes and target in nodes:
+            edges.append({"source": source, "target": target, "label": label})
+
+    for item in items:
+        mem_id = f"memory:{item['id']}"
+        add_node(mem_id, item.get("type", "memory"), "memory")
+        repo = item.get("repo")
+        if repo:
+            repo_id = f"repo:{repo}"
+            add_node(repo_id, Path(repo).name or repo, "repository")
+            add_edge(mem_id, repo_id, "belongs to")
+
+    try:
+        threads = list_threads().threads
+    except Exception:
+        threads = []
+    for thread in threads[:50]:
+        thread_id = f"thread:{thread.id}"
+        add_node(thread_id, thread.title, "thread")
+        repo_id = f"repo:{thread.repo.local_repo_path or thread.repo.project_path}"
+        add_node(repo_id, Path(thread.repo.local_repo_path or thread.repo.project_path).name, "repository")
+        add_edge(thread_id, repo_id, "uses repo")
+        for message in thread.messages[-20:]:
+            metadata = message.metadata or {}
+            for file_path in metadata.get("files_read") or metadata.get("thread_context_files") or []:
+                file_id = f"file:{repo_id}:{file_path}"
+                add_node(file_id, str(file_path), "file")
+                add_edge(thread_id, file_id, "read")
+            for symbol in metadata.get("thread_context_symbols") or []:
+                symbol_id = f"symbol:{repo_id}:{symbol}"
+                add_node(symbol_id, str(symbol), "symbol")
+                add_edge(thread_id, symbol_id, "mentions")
+
+    for run in list_recent_runs(80):
+        run_id = f"run:{run.get('id')}"
+        add_node(run_id, str(run.get("id")), "run")
+        repo = run.get("repo")
+        if repo:
+            repo_id = f"repo:{repo}"
+            add_node(repo_id, Path(str(repo)).name or str(repo), "repository")
+            add_edge(run_id, repo_id, "ran in")
+        for file_path in (run.get("files_read") or []) + (run.get("thread_context_files") or []):
+            file_id = f"file:{repo}:{file_path}"
+            add_node(file_id, str(file_path), "file")
+            add_edge(run_id, file_id, "used")
+        for symbol in run.get("thread_context_symbols") or []:
+            symbol_id = f"symbol:{repo}:{symbol}"
+            add_node(symbol_id, str(symbol), "symbol")
+            add_edge(run_id, symbol_id, "saw")
+        if run.get("proposal_id"):
+            proposal_id = f"proposal:{run.get('proposal_id')}"
+            add_node(proposal_id, str(run.get("proposal_id")), "proposal")
+            add_edge(run_id, proposal_id, "created")
+
+    for skill in discover_skills().get("skills", []):
+        skill_id = f"skill:{skill.get('source_path')}:{skill.get('name')}"
+        add_node(skill_id, str(skill.get("name")), "skill")
+        for run in list(nodes.values()):
+            if run.get("type") == "run":
+                add_edge(skill_id, run["id"], "available to")
+
+    return {"nodes": list(nodes.values()), "edges": edges}

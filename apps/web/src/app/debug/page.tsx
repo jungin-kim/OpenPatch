@@ -12,9 +12,12 @@ type RuntimeDebug = {
   recent_runs?: Array<Record<string, unknown>>;
 };
 
+type GraphNode = { id: string; label: string; type: string };
+type GraphEdge = { source: string; target: string; label: string };
+
 type MemoryDebug = {
   items: Array<{ id: string; type: string; content: string; source: string; repo?: string | null; created_at: string; tags?: string[] }>;
-  graph: { nodes: unknown[]; edges: unknown[] };
+  graph: { nodes: GraphNode[]; edges: GraphEdge[] };
 };
 
 type SkillsDebug = {
@@ -34,7 +37,12 @@ type IntegrationsDebug = {
   }>;
 };
 
-const tabs = ["Dashboard", "Agents", "Memory", "Skills", "Integrations", "Events / Runs", "Settings"] as const;
+type ToolsDebug = {
+  tools: Array<{ name: string; installed: boolean; path?: string | null; version?: string | null; auth_status?: string | null }>;
+  permissions: Record<string, string>;
+};
+
+const tabs = ["Dashboard", "Agents", "Memory", "Skills", "Integrations", "Tools", "Events / Runs", "Settings"] as const;
 type DebugTab = typeof tabs[number];
 
 async function loadJson<T>(url: string): Promise<T> {
@@ -49,21 +57,24 @@ export default function DebugPage() {
   const [memory, setMemory] = useState<MemoryDebug | null>(null);
   const [skills, setSkills] = useState<SkillsDebug | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationsDebug | null>(null);
+  const [tools, setTools] = useState<ToolsDebug | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
       try {
         setError(null);
-        const [runtimePayload, memoryPayload, skillsPayload, integrationsPayload] = await Promise.all([
+        const [runtimePayload, memoryPayload, skillsPayload, integrationsPayload, toolsPayload] = await Promise.all([
           loadJson<RuntimeDebug>("/api/worker/debug/runtime"),
           loadJson<MemoryDebug>("/api/worker/debug/memory"),
           loadJson<SkillsDebug>("/api/worker/debug/skills"),
           loadJson<IntegrationsDebug>("/api/worker/debug/integrations"),
+          loadJson<ToolsDebug>("/api/worker/tools"),
         ]);
         setRuntime(runtimePayload);
         setMemory(memoryPayload);
         setSkills(skillsPayload);
         setIntegrations(integrationsPayload);
+        setTools(toolsPayload);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to load debug data.");
       }
@@ -105,6 +116,7 @@ export default function DebugPage() {
         {activeTab === "Memory" && <MemoryPanel memory={memory} />}
         {activeTab === "Skills" && <SkillsPanel skills={skills} />}
         {activeTab === "Integrations" && <IntegrationsPanel integrations={integrations} />}
+        {activeTab === "Tools" && <ToolsPanel tools={tools} />}
         {activeTab === "Events / Runs" && <RunsPanel runtime={runtime} />}
         {activeTab === "Settings" && <SettingsPanel runtime={runtime} />}
       </main>
@@ -146,8 +158,28 @@ function Agents({ runtime }: { runtime: RuntimeDebug | null }) {
 }
 
 function MemoryPanel({ memory }: { memory: MemoryDebug | null }) {
+  const [view, setView] = useState<"table" | "graph">("table");
+  const [filters, setFilters] = useState<Record<string, boolean>>({
+    memory: true,
+    file: true,
+    symbol: true,
+    run: true,
+    skill: true,
+    thread: true,
+    repository: true,
+    proposal: true,
+  });
+  const graph = memory?.graph;
+  const visibleNodes = graph?.nodes.filter((node) => filters[node.type] ?? true) ?? [];
+  const visibleIds = new Set(visibleNodes.map((node) => node.id));
+  const visibleEdges = graph?.edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)) ?? [];
   return (
     <>
+      <div className="debug-toggle-row">
+        <button className={`debug-secondary-button${view === "table" ? " debug-button-active" : ""}`} type="button" onClick={() => setView("table")}>Table</button>
+        <button className={`debug-secondary-button${view === "graph" ? " debug-button-active" : ""}`} type="button" onClick={() => setView("graph")}>Graph</button>
+      </div>
+      {view === "table" ? (
       <Card title="Memory Table">
         <table className="debug-table">
           <thead><tr><th>id</th><th>type</th><th>content</th><th>source</th><th>repo</th><th>tags</th><th>created_at</th></tr></thead>
@@ -158,10 +190,53 @@ function MemoryPanel({ memory }: { memory: MemoryDebug | null }) {
           </tbody>
         </table>
       </Card>
+      ) : (
       <Card title="Memory Graph">
-        <div className="debug-placeholder">Graph view placeholder: {memory?.graph.nodes.length ?? 0} nodes, {memory?.graph.edges.length ?? 0} edges.</div>
+        <div className="debug-filter-row">
+          {Object.keys(filters).map((key) => (
+            <label key={key}>
+              <input type="checkbox" checked={filters[key]} onChange={(event) => setFilters((current) => ({ ...current, [key]: event.target.checked }))} />
+              {key}
+            </label>
+          ))}
+        </div>
+        {visibleNodes.length ? <MemoryGraph nodes={visibleNodes} edges={visibleEdges} /> : <div className="debug-placeholder">No graph data yet.</div>}
       </Card>
+      )}
     </>
+  );
+}
+
+function MemoryGraph({ nodes, edges }: { nodes: GraphNode[]; edges: GraphEdge[] }) {
+  const width = 920;
+  const height = 520;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const positioned = nodes.map((node, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1);
+    const radius = node.type === "repository" ? 70 : 190;
+    return {
+      ...node,
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius,
+    };
+  });
+  const byId = new Map(positioned.map((node) => [node.id, node]));
+  return (
+    <svg className="memory-graph" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Memory relationship graph">
+      {edges.map((edge, index) => {
+        const source = byId.get(edge.source);
+        const target = byId.get(edge.target);
+        if (!source || !target) return null;
+        return <line key={`${edge.source}-${edge.target}-${index}`} x1={source.x} y1={source.y} x2={target.x} y2={target.y} className="memory-graph-edge" />;
+      })}
+      {positioned.map((node) => (
+        <g key={node.id}>
+          <circle cx={node.x} cy={node.y} r={node.type === "repository" ? 26 : 20} className={`memory-graph-node memory-graph-node-${node.type}`} />
+          <text x={node.x} y={node.y + 36} textAnchor="middle" className="memory-graph-label">{node.label.slice(0, 28)}</text>
+        </g>
+      ))}
+    </svg>
   );
 }
 
@@ -197,6 +272,28 @@ function IntegrationsPanel({ integrations }: { integrations: IntegrationsDebug |
         </div>
       ))}
     </Card>
+  );
+}
+
+function ToolsPanel({ tools }: { tools: ToolsDebug | null }) {
+  return (
+    <>
+      <Card title="Local Tools">
+        {tools?.tools.map((tool) => (
+          <div className="debug-list-item" key={tool.name}>
+            <strong>{tool.name}</strong>
+            <span>{tool.installed ? "installed" : "missing"} · {tool.version ?? "no version detected"}</span>
+            <span>Auth status: {tool.auth_status ?? "unknown"}</span>
+            {tool.path && <code>{tool.path}</code>}
+          </div>
+        ))}
+      </Card>
+      <Card title="Tool Permission Layers">
+        {tools?.permissions ? Object.entries(tools.permissions).map(([key, value]) => (
+          <Row key={key} label={key.replaceAll("_", " ")} value={value} />
+        )) : <div className="debug-placeholder">Tool permissions are not loaded yet.</div>}
+      </Card>
+    </>
   );
 }
 

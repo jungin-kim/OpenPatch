@@ -316,7 +316,7 @@ class WorkerContractTests(unittest.TestCase):
             self.assertEqual(updated["gitProvider"]["token"], "secret-token")
             self.assertEqual(updated["permissions"]["writeMode"], "write-with-approval")
 
-    def test_permission_mode_rejects_full_access_until_supported(self) -> None:
+    def test_permission_mode_accepts_scoped_full_access(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:
             config_dir = Path(temp_home) / ".repooperator"
             config_dir.mkdir(parents=True, exist_ok=True)
@@ -332,11 +332,11 @@ class WorkerContractTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                with self.assertRaises(ValueError):
-                    update_permission_mode("auto-apply")
+                updated = update_permission_mode("auto-apply")
                 payload = get_permission_mode()
 
-            self.assertEqual(payload.write_mode, "read-only")
+            self.assertEqual(updated.write_mode, "auto-apply")
+            self.assertEqual(payload.write_mode, "auto-apply")
 
     def test_runtime_config_prefers_environment_override_for_gitlab(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:

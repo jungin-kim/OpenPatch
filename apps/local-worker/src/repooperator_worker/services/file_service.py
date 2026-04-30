@@ -1,4 +1,4 @@
-from repooperator_worker.config import WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
+from repooperator_worker.config import WRITE_MODE_AUTO_APPLY, WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
 from repooperator_worker.schemas import (
     FileReadRequest,
     FileReadResponse,
@@ -10,6 +10,7 @@ from repooperator_worker.services.common import (
     ensure_safe_write_path,
     resolve_project_path,
 )
+from repooperator_worker.services.event_service import record_event
 
 
 def read_text_file(request: FileReadRequest) -> FileReadResponse:
@@ -25,18 +26,25 @@ def read_text_file(request: FileReadRequest) -> FileReadResponse:
     truncated_bytes = raw_bytes[: request.max_bytes]
     content = truncated_bytes.decode(request.encoding, errors="replace")
 
-    return FileReadResponse(
+    response = FileReadResponse(
         project_path=request.project_path,
         relative_path=request.relative_path,
         content=content,
         truncated=len(raw_bytes) > request.max_bytes,
         bytes_read=len(truncated_bytes),
     )
+    record_event(
+        event_type="file_read",
+        repo=request.project_path,
+        summary=f"Read {request.relative_path}",
+        files=[request.relative_path],
+    )
+    return response
 
 
 def write_text_file(request: FileWriteRequest) -> FileWriteResponse:
     settings = get_settings()
-    if settings.write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
+    if settings.write_mode not in {WRITE_MODE_WRITE_WITH_APPROVAL, WRITE_MODE_AUTO_APPLY}:
         raise ValueError(
             "Write operations are disabled. "
             "Switch the web UI permission mode to Auto review to apply changes."
@@ -52,9 +60,16 @@ def write_text_file(request: FileWriteRequest) -> FileWriteResponse:
     encoded_content = request.content.encode(request.encoding)
     target_path.write_text(request.content, encoding=request.encoding)
 
-    return FileWriteResponse(
+    response = FileWriteResponse(
         project_path=request.project_path,
         relative_path=request.relative_path,
         bytes_written=len(encoded_content),
         message=f"Wrote {request.relative_path}",
     )
+    record_event(
+        event_type="apply",
+        repo=request.project_path,
+        summary=f"Applied write to {request.relative_path}",
+        files=[request.relative_path],
+    )
+    return response

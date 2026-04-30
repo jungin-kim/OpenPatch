@@ -94,8 +94,7 @@ const permissionModes: Array<{
   {
     mode: "auto-apply",
     label: "Full access",
-    description: "Coming soon.",
-    disabled: true,
+    description: "Scoped repo edits and approved local tools.",
   },
 ];
 

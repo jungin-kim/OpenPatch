@@ -155,6 +155,9 @@ export type AgentRunPayload = {
   proposal_error_details?: string | null;
   run_id?: string | null;
   skills_used?: string[];
+  thread_context_files?: string[];
+  thread_context_symbols?: string[];
+  context_source?: string | null;
 };
 
 export type ThreadMessagePayload = {

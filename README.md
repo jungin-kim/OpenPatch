@@ -422,7 +422,7 @@ RepoOperator has a built-in permission model to prevent accidental file modifica
 |---|---|
 | `read-only` (default) | No file changes are permitted. Proposals and writes are blocked at the backend. |
 | `write-with-approval` | Change proposals are allowed. Files are only modified after you click **Apply** in the UI. |
-| `auto-apply` | Reserved for future Full access workflows. Not enabled in the current UI. |
+| `auto-apply` | Advanced scoped Full access. RepoOperator can apply edits and run approved local tools only inside the active repository, with previews for risky actions. |
 
 Auto-apply, auto-commit, and auto-push are never enabled by default.
 
@@ -432,9 +432,11 @@ Open the web app and use the permission selector in the top bar:
 
 - **Basic permissions** maps to `read-only`.
 - **Auto review** maps to `write-with-approval`.
-- **Full access** is shown as coming soon until safe auto-apply behavior is complete.
+- **Full access** maps to `auto-apply` after a confirmation prompt. It is scoped to the active repository and approved local tools; it is not unrestricted computer control.
 
 RepoOperator persists the selected mode in `~/.repooperator/config.json` while preserving the rest of your configuration. Advanced users can still override the mode for debugging with `REPOOPERATOR_WRITE_MODE`, but normal usage should go through the web UI.
+
+Local tool access is capability-based and visible in the Debug page. RepoOperator currently detects `git` and `glab`, allows approved read-only diagnostics, and requires explicit confirmation for mutating repository operations.
 
 ### Write workflow (write-with-approval mode)
 

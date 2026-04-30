@@ -112,6 +112,24 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
               <span className="tool-meta-value">{metadata.selected_target_file}</span>
             </div>
           )}
+          {metadata.context_source && (
+            <div className="tool-meta-item">
+              <span className="tool-meta-label">Context source</span>
+              <span className="tool-meta-value">{metadata.context_source}</span>
+            </div>
+          )}
+          {metadata.thread_context_files?.length ? (
+            <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="tool-meta-label">Thread context files</span>
+              <span className="tool-meta-value">{metadata.thread_context_files.join(", ")}</span>
+            </div>
+          ) : null}
+          {metadata.thread_context_symbols?.length ? (
+            <div className="tool-meta-item" style={{ gridColumn: "1 / -1" }}>
+              <span className="tool-meta-label">Thread context symbols</span>
+              <span className="tool-meta-value">{metadata.thread_context_symbols.join(", ")}</span>
+            </div>
+          ) : null}
           {metadata.branch && (
             <div className="tool-meta-item">
               <span className="tool-meta-label">Branch</span>

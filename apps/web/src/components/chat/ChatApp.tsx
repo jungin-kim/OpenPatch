@@ -448,9 +448,10 @@ export function ChatApp() {
 
   async function handlePermissionModeChange(mode: PermissionMode) {
     if (mode === "auto-apply") {
-      setPermissionError("Full access is coming soon and is not enabled.");
-      setPermissionMessage(null);
-      return;
+      const confirmed = window.confirm(
+        "Full access can modify files and run approved local tools in this repository. Continue?",
+      );
+      if (!confirmed) return;
     }
     const previousMode = writeMode;
     setPermissionPending(true);
@@ -462,7 +463,9 @@ export function ChatApp() {
       setPermissionMessage(
         payload.write_mode === "write-with-approval"
           ? "Auto review enabled. File changes still require Apply."
-          : "Basic permissions enabled. File writes are blocked.",
+          : payload.write_mode === "auto-apply"
+            ? "Full access enabled for scoped repository edits and approved local tools."
+            : "Basic permissions enabled. File writes are blocked.",
       );
       window.setTimeout(() => setPermissionMessage(null), 3200);
     } catch (error) {

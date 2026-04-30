@@ -2645,6 +2645,69 @@ select {
   color: var(--muted);
 }
 
+.debug-button-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.debug-toggle-row,
+.debug-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.debug-filter-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.memory-graph {
+  width: 100%;
+  min-height: 420px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: radial-gradient(circle at center, var(--surface-strong), var(--surface));
+}
+
+.memory-graph-edge {
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+  opacity: 0.75;
+}
+
+.memory-graph-node {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.memory-graph-node-file,
+.memory-graph-node-symbol {
+  fill: var(--surface);
+}
+
+.memory-graph-node-run,
+.memory-graph-node-proposal {
+  fill: color-mix(in srgb, var(--warning) 18%, var(--surface));
+  stroke: var(--warning);
+}
+
+.memory-graph-node-skill {
+  fill: color-mix(in srgb, #7c5cff 16%, var(--surface));
+  stroke: #7c5cff;
+}
+
+.memory-graph-label {
+  fill: var(--text);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
 /* ── Responsive ───────────────────────────────────── */
 
 @media (max-width: 960px) {

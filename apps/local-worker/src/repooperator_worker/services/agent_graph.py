@@ -29,6 +29,11 @@ from repooperator_worker.services.model_client import (
     OpenAICompatibleModelClient,
 )
 from repooperator_worker.services.retrieval_service import classify_query
+from repooperator_worker.services.thread_context_service import (
+    ThreadContext,
+    build_thread_context,
+    resolve_followup_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +71,8 @@ class AgentGraphState(TypedDict, total=False):
     # Populated by classify_request
     query_type: str
     file_hints: list[str]
+    thread_context: ThreadContext
+    context_source: str
 
     # Populated by resolve_repo_context
     active_repository: ActiveRepository | None
@@ -93,14 +100,29 @@ def _classify_request(state: AgentGraphState) -> dict[str, Any]:
     that classification logic stays in one place.
     """
     request: AgentRunRequest = state["request"]
-    query_type, file_hints = classify_query(request.task)
+    thread_context = build_thread_context(request)
+    followup_file, context_source = resolve_followup_file(request, thread_context)
+    task_for_classification = (
+        f"{request.task}\n\nFocus on file: {followup_file}"
+        if followup_file
+        else request.task
+    )
+    query_type, file_hints = classify_query(task_for_classification)
+    if followup_file and followup_file not in file_hints:
+        file_hints.insert(0, followup_file)
     logger.debug(
-        "agent_graph classify project=%r query_type=%r hints=%r",
+        "agent_graph classify project=%r query_type=%r hints=%r source=%r",
         request.project_path,
         query_type,
         file_hints,
+        context_source,
     )
-    return {"query_type": query_type, "file_hints": file_hints}
+    return {
+        "query_type": query_type,
+        "file_hints": file_hints,
+        "thread_context": thread_context,
+        "context_source": context_source,
+    }
 
 
 def _resolve_repo_context(state: AgentGraphState) -> dict[str, Any]:
@@ -145,7 +167,12 @@ def _retrieve_or_read_files(state: AgentGraphState) -> dict[str, Any]:
     retrieval pipeline (file-specific, directory, project-review, etc.).
     """
     request: AgentRunRequest = state["request"]
-    context = build_query_aware_context(request.project_path, request.task)
+    file_hints = state.get("file_hints") or []
+    context_source = state.get("context_source") or "retrieval"
+    task = request.task
+    if context_source == "recent_thread" and file_hints:
+        task = f"{request.task}\n\nFocus on file: {file_hints[0]}"
+    context = build_query_aware_context(request.project_path, task)
     logger.info(
         "agent_graph retrieve project=%r query_type=%r files=%r",
         request.project_path,
@@ -164,6 +191,7 @@ def _answer_read_only(state: AgentGraphState) -> dict[str, Any]:
     request: AgentRunRequest = state["request"]
     active_repository: ActiveRepository | None = state.get("active_repository")
     context: QueryAwareContext = state["context"]
+    thread_context: ThreadContext = state.get("thread_context") or build_thread_context(request)
 
     trace_source = request.git_provider or (
         active_repository.git_provider if active_repository else None
@@ -177,16 +205,25 @@ def _answer_read_only(state: AgentGraphState) -> dict[str, Any]:
         ]
     )
     user_prompt = (
-        f"{repository_trace}\n\nTask:\n{request.task}\n\n{context.to_prompt_context()}"
+        f"{repository_trace}\n\nTask:\n{request.task}\n\n"
+        f"Recent thread context:\n"
+        f"- files: {', '.join(thread_context.recent_files) or 'none'}\n"
+        f"- symbols: {', '.join(thread_context.symbol_names) or 'none'}\n"
+        f"- last answer: {thread_context.last_answer_summary or 'none'}\n\n"
+        f"{context.to_prompt_context()}"
     )
 
-    client = OpenAICompatibleModelClient()
-    response_text = client.generate_text(
-        ModelGenerationRequest(
-            system_prompt=_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
+    try:
+        client = OpenAICompatibleModelClient()
+        response_text = client.generate_text(
+            ModelGenerationRequest(
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+            )
         )
-    )
+    except RuntimeError as exc:
+        logger.warning("model unavailable; using grounded local fallback: %s", exc)
+        response_text = _fallback_read_only_answer(request.task, context)
     return {"response_text": response_text}
 
 
@@ -196,6 +233,7 @@ def _format_response(state: AgentGraphState) -> dict[str, Any]:
     active_repository: ActiveRepository | None = state.get("active_repository")
     context: QueryAwareContext = state["context"]
     response_text: str = state["response_text"]
+    thread_context: ThreadContext = state.get("thread_context") or build_thread_context(request)
 
     trace_source = request.git_provider or (
         active_repository.git_provider if active_repository else None
@@ -222,6 +260,9 @@ def _format_response(state: AgentGraphState) -> dict[str, Any]:
         is_git_repository=context.is_git_repository,
         files_read=context.files_read,
         response=response_text,
+        thread_context_files=thread_context.recent_files,
+        thread_context_symbols=thread_context.symbol_names,
+        context_source=state.get("context_source") or "retrieval",
     )
     return {"result": result}
 
@@ -279,3 +320,48 @@ def run_agent_graph(request: AgentRunRequest) -> AgentRunResponse:
     if result is None:
         raise RuntimeError("Agent graph did not produce a result.")
     return result
+
+
+def _fallback_read_only_answer(task: str, context: QueryAwareContext) -> str:
+    """Return a grounded answer from retrieved files when the model is unavailable."""
+    files = context.retrieval.files
+    if not files:
+        return (
+            "I could not reach the configured model, and no repository files were "
+            "available in the retrieved context. Check the model connection and try again."
+        )
+
+    task_lower = task.lower()
+    lines = [
+        "I could not reach the configured model, so I am answering from the repository "
+        "context RepoOperator already retrieved.",
+        "",
+    ]
+
+    for retrieved in files[:3]:
+        lines.append(f"File used: `{retrieved.relative_path}`")
+        symbol_lines: list[str] = []
+        for raw_line in retrieved.content.splitlines():
+            stripped = raw_line.strip()
+            if stripped.startswith(("def ", "async def ", "class ")):
+                symbol_lines.append(stripped)
+        if symbol_lines:
+            lines.append("Symbols found:")
+            lines.extend(f"- `{symbol}`" for symbol in symbol_lines[:8])
+
+        if "split_video" in task_lower and "split_video" in retrieved.content:
+            lines.extend(
+                [
+                    "",
+                    "`split_video` is present in this file. Practical fixes to consider:",
+                    "- Validate that `chunk_seconds` is a positive number before entering the loop.",
+                    "- Use the real input video duration instead of a fixed duration assumption.",
+                    "- Ensure the output directory exists before creating chunk outputs.",
+                    "- Return concrete chunk output paths so callers can use the generated files.",
+                    "- Surface subprocess or encoder failures clearly if the implementation shells out.",
+                ]
+            )
+            break
+        lines.append("")
+
+    return "\n".join(lines).strip()

@@ -10,7 +10,7 @@ from repooperator_worker.config import (
 )
 from repooperator_worker.schemas import PermissionModeResponse
 
-SUPPORTED_WRITE_MODES = {WRITE_MODE_READ_ONLY, WRITE_MODE_WRITE_WITH_APPROVAL}
+SUPPORTED_WRITE_MODES = {WRITE_MODE_READ_ONLY, WRITE_MODE_WRITE_WITH_APPROVAL, WRITE_MODE_AUTO_APPLY}
 
 
 def get_permission_mode() -> PermissionModeResponse:
@@ -18,7 +18,7 @@ def get_permission_mode() -> PermissionModeResponse:
     return PermissionModeResponse(
         write_mode=settings.write_mode,
         available_modes=AVAILABLE_WRITE_MODES,
-        unsupported_modes=[WRITE_MODE_AUTO_APPLY],
+        unsupported_modes=[],
     )
 
 
@@ -26,11 +26,6 @@ def update_permission_mode(write_mode: str) -> PermissionModeResponse:
     mode = write_mode.strip().lower()
     if mode not in AVAILABLE_WRITE_MODES:
         raise ValueError("Unsupported permission mode.")
-    if mode not in SUPPORTED_WRITE_MODES:
-        raise ValueError(
-            "Full access is not available yet. Use Basic permissions or Auto review."
-        )
-
     settings = get_settings()
     config = _read_config(settings.repooperator_config_path)
     permissions = config.get("permissions")
@@ -43,7 +38,7 @@ def update_permission_mode(write_mode: str) -> PermissionModeResponse:
     return PermissionModeResponse(
         write_mode=mode,
         available_modes=AVAILABLE_WRITE_MODES,
-        unsupported_modes=[WRITE_MODE_AUTO_APPLY],
+        unsupported_modes=[],
     )
 
 

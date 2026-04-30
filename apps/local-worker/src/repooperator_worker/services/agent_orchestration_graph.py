@@ -10,7 +10,11 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from repooperator_worker.config import WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
+from repooperator_worker.config import (
+    WRITE_MODE_AUTO_APPLY,
+    WRITE_MODE_WRITE_WITH_APPROVAL,
+    get_settings,
+)
 from repooperator_worker.schemas import (
     AgentProposeFileRequest,
     AgentRunRequest,
@@ -25,6 +29,11 @@ from repooperator_worker.services.model_client import (
 )
 from repooperator_worker.services.retrieval_service import SKIP_DIRS
 from repooperator_worker.services.skills_service import enabled_skill_context
+from repooperator_worker.services.thread_context_service import (
+    ThreadContext,
+    build_thread_context,
+    resolve_followup_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +44,7 @@ Intent = Literal[
     "write_request",
     "write_confirmation",
     "file_clarification_answer",
+    "local_tool_request",
     "ambiguous",
 ]
 
@@ -160,6 +170,8 @@ class OrchestrationState(TypedDict, total=False):
     error: str | None
     skills_context: str
     skills_used: list[str]
+    thread_context: ThreadContext
+    context_source: str
 
 
 def _base_response(
@@ -221,6 +233,10 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
             pending["suggestion"] = message.content
 
     skills_context, skills_used = enabled_skill_context()
+    thread_context = build_thread_context(request)
+    followup_file, context_source = resolve_followup_file(request, thread_context)
+    if followup_file:
+        pending["selected_file"] = followup_file
 
     return {
         "settings": get_settings(),
@@ -228,6 +244,8 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
         "instruction": request.task,
         "skills_context": skills_context,
         "skills_used": skills_used,
+        "thread_context": thread_context,
+        "context_source": context_source,
         "graph_path": "load_context",
     }
 
@@ -255,6 +273,9 @@ def _classify_intent(state: OrchestrationState) -> dict[str, Any]:
     elif _is_repo_analysis(task):
         intent = "repo_analysis"
         confidence = 0.86
+    elif _is_local_tool_request(task):
+        intent = "local_tool_request"
+        confidence = 0.9
     elif file_hints and _has_write_language(task):
         intent = "write_request"
         confidence = 0.94
@@ -313,6 +334,13 @@ def _resolve_target_files(state: OrchestrationState) -> dict[str, Any]:
                 "instruction": _find_previous_write_instruction(request) or request.task,
             }
 
+    if intent == "write_request" and pending.get("selected_file"):
+        return {
+            "selected_file": pending["selected_file"],
+            "instruction": request.task,
+            "graph_path": f"{state.get('graph_path', '')}->resolve_target_files",
+        }
+
     hints = state.get("file_hints", [])
     if not hints:
         hints = _extract_file_hints(_find_previous_write_instruction(request) or "")
@@ -335,6 +363,9 @@ def _permission_required(state: OrchestrationState) -> dict[str, Any]:
         response_type="permission_required",
         intent_classification=state.get("intent"),
         graph_path="permission_required",
+        thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
+        thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
+        context_source=state.get("context_source"),
     )
     return {"result": result, "graph_path": "permission_required"}
 
@@ -358,6 +389,9 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
         intent_classification=state.get("intent"),
         graph_path="clarification",
         skills_used=state.get("skills_used", []),
+        thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
+        thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
+        context_source=state.get("context_source"),
     )
     return {"result": result, "graph_path": "clarification"}
 
@@ -414,6 +448,9 @@ def _recommend_change_targets(state: OrchestrationState) -> dict[str, Any]:
         intent_classification=state.get("intent"),
         graph_path="recommend_change_targets",
         skills_used=state.get("skills_used", []),
+        thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
+        thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
+        context_source=state.get("context_source"),
     ).model_copy(
         update={
             "context_summary": context.summary,
@@ -495,6 +532,9 @@ def _return_proposal(state: OrchestrationState) -> dict[str, Any]:
         intent_classification=state.get("intent"),
         graph_path="proposal",
         skills_used=state.get("skills_used", []),
+        thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
+        thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
+        context_source=state.get("context_source"),
     ).model_copy(update={"model": proposal.model})
     return {"result": result, "graph_path": "proposal"}
 
@@ -511,6 +551,9 @@ def _proposal_error(state: OrchestrationState) -> dict[str, Any]:
         graph_path="proposal_error",
         proposal_error_details=error,
         skills_used=state.get("skills_used", []),
+        thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
+        thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
+        context_source=state.get("context_source"),
     )
     return {"result": result, "graph_path": "proposal_error"}
 
@@ -536,13 +579,55 @@ def _answer_read_only(state: OrchestrationState) -> dict[str, Any]:
     return {"result": result, "graph_path": "read_only"}
 
 
+def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
+    request = state["request"]
+    try:
+        from repooperator_worker.services.tool_service import run_tool
+
+        result = run_tool(["glab", "mr", "list"])
+        if result.get("returncode") == 0:
+            output = result.get("stdout", "").strip() or "No merge requests were returned."
+            response = "GitLab merge requests from the active repository:\n\n```text\n" + output + "\n```"
+            status = "assistant_answer"
+        else:
+            response = (
+                "I could not read GitLab merge requests with `glab mr list`.\n\n"
+                f"```text\n{result.get('stderr') or result.get('stdout') or 'No output'}\n```"
+            )
+            status = "proposal_error"
+    except (ValueError, RuntimeError) as exc:
+        response = (
+            "RepoOperator can read merge requests through the local GitLab CLI (`glab`), "
+            f"but it is not ready for this repository yet: {exc}"
+        )
+        status = "assistant_answer"
+
+    result_response = _base_response(
+        request,
+        response=response,
+        response_type=status,
+        intent_classification=state.get("intent"),
+        graph_path="local_tool_request",
+        skills_used=state.get("skills_used", []),
+        thread_context_files=state.get("thread_context", ThreadContext(request.project_path, request.branch)).recent_files,
+        thread_context_symbols=state.get("thread_context", ThreadContext(request.project_path, request.branch)).symbol_names,
+        context_source=state.get("context_source"),
+    )
+    return {"result": result_response, "graph_path": "local_tool_request"}
+
+
 def _after_classify(state: OrchestrationState) -> str:
     intent = state.get("intent")
     if intent == "read_only_question":
         return "answer_read_only"
+    if intent == "local_tool_request":
+        return "run_local_tool_request"
     if intent in {"repo_analysis", "recommend_change_targets"}:
         return "recommend_change_targets"
-    if state.get("settings").write_mode != WRITE_MODE_WRITE_WITH_APPROVAL:
+    if state.get("settings").write_mode not in {
+        WRITE_MODE_WRITE_WITH_APPROVAL,
+        WRITE_MODE_AUTO_APPLY,
+    }:
         return "permission_required"
     return "resolve_target_files"
 
@@ -573,6 +658,7 @@ def _build_graph():
     graph.add_node("permission_required", _permission_required)
     graph.add_node("proposal_error", _proposal_error)
     graph.add_node("answer_read_only", _answer_read_only)
+    graph.add_node("run_local_tool_request", _run_local_tool_request)
     graph.set_entry_point("load_context")
     graph.add_edge("load_context", "classify_intent")
     graph.add_conditional_edges("classify_intent", _after_classify)
@@ -586,6 +672,7 @@ def _build_graph():
     graph.add_edge("permission_required", END)
     graph.add_edge("proposal_error", END)
     graph.add_edge("answer_read_only", END)
+    graph.add_edge("run_local_tool_request", END)
     return graph
 
 
@@ -614,6 +701,17 @@ def _is_recommend_change_targets(text: str) -> bool:
 def _is_repo_analysis(text: str) -> bool:
     lowered = text.lower()
     return any(keyword in lowered for keyword in REPO_ANALYSIS_KEYWORDS)
+
+
+def _is_local_tool_request(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        "mr 목록" in lowered
+        or "merge request" in lowered
+        or "merge requests" in lowered
+        or "pull request" in lowered
+        or re.search(r"\bmr\b", lowered) is not None
+    ) and any(token in lowered for token in {"show", "list", "보여", "목록", "현재", "read"})
 
 
 def _is_confirmation(text: str) -> bool:

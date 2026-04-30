@@ -57,7 +57,39 @@ def record_agent_run(
         "status": status,
         "latency_ms": latency_ms,
         "files_read": response.files_read if response else [],
+        "thread_context_files": response.thread_context_files if response else [],
+        "thread_context_symbols": response.thread_context_symbols if response else [],
         "proposal_id": response.proposal_relative_path if response else None,
+        "error": error,
+    }
+    with _runs_file().open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return record
+
+
+def record_event(
+    *,
+    event_type: str,
+    repo: str | None = None,
+    branch: str | None = None,
+    status: str = "ok",
+    summary: str = "",
+    files: list[str] | None = None,
+    tool: str | None = None,
+    command: list[str] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    record = {
+        "id": new_run_id(),
+        "timestamp": _now_iso(),
+        "type": event_type,
+        "repo": repo,
+        "branch": branch,
+        "status": status,
+        "summary": summarize_user_message(summary),
+        "files_read": files or [],
+        "tool": tool,
+        "command": command,
         "error": error,
     }
     with _runs_file().open("a", encoding="utf-8") as handle:

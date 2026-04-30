@@ -66,6 +66,7 @@ from repooperator_worker.services.git_service import (
 )
 from repooperator_worker.services.repo_service import open_repository, plan_repository_open
 from repooperator_worker.services.thread_service import list_threads, upsert_thread
+from repooperator_worker.services.tool_service import get_tools_status, preview_tool_run, run_tool
 from repooperator_worker.services.debug_service import (
     get_debug_runtime_status,
     integration_status,
@@ -76,7 +77,7 @@ from repooperator_worker.services.composio_service import (
     list_composio_connected_accounts,
     list_composio_toolkits,
 )
-from repooperator_worker.services.event_service import new_run_id, record_agent_run
+from repooperator_worker.services.event_service import new_run_id, record_agent_run, record_event
 from repooperator_worker.services.memory_service import (
     list_memory_items,
     maybe_record_from_agent_run,
@@ -173,6 +174,40 @@ def composio_accounts() -> dict:
 @router.post("/integrations/composio/connect")
 def composio_connect() -> dict:
     return composio_connection_instructions()
+
+
+@router.get("/tools")
+def tools_status() -> dict:
+    return get_tools_status()
+
+
+@router.post("/tools/run-preview")
+def tools_run_preview(request: dict) -> dict:
+    argv = request.get("argv")
+    if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+        raise HTTPException(status_code=400, detail="argv must be a list of strings.")
+    preview = preview_tool_run(argv)
+    record_event(
+        event_type="tool_preview",
+        repo=preview.get("cwd"),
+        summary=f"Previewed local tool command: {' '.join(argv)}",
+        tool=argv[0] if argv else None,
+        command=argv,
+    )
+    return preview
+
+
+@router.post("/tools/run")
+def tools_run(request: dict) -> dict:
+    argv = request.get("argv")
+    if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+        raise HTTPException(status_code=400, detail="argv must be a list of strings.")
+    try:
+        return run_tool(argv, confirmed=bool(request.get("confirmed")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/provider/projects", response_model=ProviderProjectsResponse)
@@ -352,6 +387,22 @@ def agent_run(request: AgentRunRequest) -> AgentRunResponse:
     response: AgentRunResponse | None = None
     try:
         response = run_agent_task(request).model_copy(update={"run_id": run_id})
+        for file_path in response.files_read:
+            record_event(
+                event_type="file_read",
+                repo=request.project_path,
+                branch=request.branch,
+                summary=f"Agent read {file_path}",
+                files=[file_path],
+            )
+        if response.response_type == "change_proposal":
+            record_event(
+                event_type="proposal",
+                repo=request.project_path,
+                branch=request.branch,
+                summary=response.response,
+                files=[response.proposal_relative_path] if response.proposal_relative_path else [],
+            )
         maybe_record_from_agent_run(request, response)
         return response
     except ValueError as exc:
