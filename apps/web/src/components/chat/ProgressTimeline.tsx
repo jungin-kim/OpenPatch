@@ -70,7 +70,7 @@ export function ProgressTimeline({ steps, done }: Props) {
   useEffect(() => {
     if (done) return;
     const timer = setInterval(() => {
-      setLiveSec(Math.floor((Date.now() - lastStepStartRef.current) / 1000));
+      setLiveSec((current) => current + 1);
     }, 500);
     return () => clearInterval(timer);
   }, [done]);
@@ -132,9 +132,19 @@ export function ProgressTimeline({ steps, done }: Props) {
               {phaseSteps.map((step, i) => {
                 const isLast = steps[steps.length - 1] === step;
                 const isActive = isLast && !done && step.status !== "completed";
+                const startedMs = step.startedAt ? Date.parse(step.startedAt) : Number.NaN;
+                const endedMs = step.endedAt ? Date.parse(step.endedAt) : Number.NaN;
+                const liveDurationMs =
+                  step.status === "running" && Number.isFinite(startedMs)
+                    ? Date.now() - startedMs
+                    : Number.isFinite(startedMs) && Number.isFinite(endedMs)
+                      ? endedMs - startedMs
+                      : null;
                 const time =
                   step.durationMs !== undefined && step.durationMs !== null
                     ? formatDuration(step.durationMs)
+                    : liveDurationMs !== null
+                      ? formatDuration(Math.max(0, liveDurationMs))
                     : step.elapsedMs !== undefined && step.elapsedMs !== null
                       ? formatDuration(step.elapsedMs)
                       : isActive

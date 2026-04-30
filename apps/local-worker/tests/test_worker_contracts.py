@@ -36,6 +36,14 @@ from repooperator_worker.services.repo_open_requests import (
     mark_repository_open_request_current,
 )
 from repooperator_worker.services.thread_service import list_threads, upsert_thread
+from repooperator_worker.services.event_service import (
+    append_run_event,
+    complete_active_run,
+    get_active_runs,
+    get_run,
+    list_run_events,
+    start_active_run,
+)
 
 
 class WorkerContractTests(unittest.TestCase):
@@ -367,6 +375,23 @@ class WorkerContractTests(unittest.TestCase):
         self.assertIn("gitlab", providers)
         self.assertTrue(all("token" not in source for source in settings.configured_repository_sources))
         self.assertTrue(all("tokenConfigured" in source for source in settings.configured_repository_sources))
+
+    def test_active_run_events_are_ordered_and_complete(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            request = AgentRunRequest(project_path="examples/demo-repo", task="Summarize repository health")
+            with patch.dict(os.environ, {"HOME": temp_home, "REPOOPERATOR_CONFIG_PATH": ""}, clear=False):
+                start_active_run(run_id="run_test_events", request=request, thread_id="thread-1")
+                append_run_event("run_test_events", {"type": "progress_delta", "label": "Created plan"})
+                append_run_event("run_test_events", {"type": "progress_delta", "label": "Read file"})
+                events = list_run_events("run_test_events")
+                active = get_active_runs(thread_id="thread-1")
+                complete_active_run(run_id="run_test_events", status="completed", final_result={"response": "Done"})
+                completed = get_run("run_test_events")
+
+        self.assertEqual([event["sequence"] for event in events], [1, 2])
+        self.assertEqual(active[0]["id"], "run_test_events")
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["final_result"]["response"], "Done")
 
     def test_runtime_model_settings_are_loaded_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:

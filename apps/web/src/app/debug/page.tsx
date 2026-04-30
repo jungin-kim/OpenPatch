@@ -22,6 +22,7 @@ type RuntimeDebug = {
     effective_sources?: Array<{ provider?: string | null; baseUrl?: string | null; tokenConfigured?: boolean; owner?: string }>;
   };
   agent?: { orchestration_mode?: string };
+  active_runs?: Array<Record<string, unknown>>;
   recent_runs?: Array<Record<string, unknown>>;
 };
 
@@ -143,6 +144,7 @@ function Dashboard({ runtime }: { runtime: RuntimeDebug | null }) {
       <Card title="Worker">
         <Row label="Status" value={runtime?.worker?.status ?? "-"} />
         <Row label="Service" value={runtime?.worker?.service ?? "-"} />
+        <Row label="Active runs" value={String(runtime?.active_runs?.length ?? 0)} />
       </Card>
       <Card title="Model">
         <Row label="Provider" value={runtime?.model?.provider ?? "-"} />

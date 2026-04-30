@@ -1,7 +1,7 @@
 from repooperator_worker.config import get_settings
 from repooperator_worker.services.active_repository import get_active_repository
 from repooperator_worker.services.composio_service import get_composio_status
-from repooperator_worker.services.event_service import list_recent_runs
+from repooperator_worker.services.event_service import get_active_runs, list_recent_runs
 from repooperator_worker.services.memory_service import list_memory_items
 from repooperator_worker.services.permissions_service import permission_profile
 from repooperator_worker.services.skills_service import discover_skills
@@ -41,6 +41,7 @@ def get_debug_runtime_status() -> dict:
             "orchestration_mode": "LangGraph",
         },
         "recent_runs": list_recent_runs(),
+        "active_runs": get_active_runs(),
     }
 
 

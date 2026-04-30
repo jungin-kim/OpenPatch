@@ -33,6 +33,7 @@ from repooperator_worker.services.common import resolve_project_path
 from repooperator_worker.services.context_service import build_query_aware_context
 from repooperator_worker.services.edit_service import propose_file_edit
 from repooperator_worker.services.file_service import write_text_file
+from repooperator_worker.services.event_service import append_run_event
 from repooperator_worker.services.model_client import (
     ModelGenerationRequest,
     OpenAICompatibleModelClient,
@@ -202,6 +203,7 @@ class OrchestrationState(TypedDict, total=False):
     activity_events: list[dict[str, Any]]
     loop_iteration: int
     stop_reason: str | None
+    run_id: str
 
 
 def _base_response(
@@ -276,11 +278,21 @@ def _edit_archive_record(
     tests: list[str] | None = None,
 ) -> dict[str, Any]:
     additions, deletions = _line_delta_counts(original, proposed)
+    diff = "\n".join(
+        unified_diff(
+            (original or "").splitlines(),
+            (proposed or "").splitlines(),
+            fromfile=file_path,
+            tofile=file_path,
+            lineterm="",
+        )
+    )
     return {
         "file_path": file_path,
         "status": status,
         "additions": additions,
         "deletions": deletions,
+        "diff": diff,
         "summary": summary or "Prepared a reviewed file change.",
         "timestamp": _utc_now(),
         "proposal_id": proposal_id or f"proposal-{uuid.uuid4().hex[:10]}",
@@ -428,6 +440,7 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
         "loop_iteration": 0,
         "stop_reason": None,
         "activity_events": [],
+        "run_id": state.get("run_id") or f"run-{uuid.uuid4().hex[:12]}",
     }
 
 
@@ -1694,6 +1707,8 @@ def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
     started = time.perf_counter()
     plan_events: list[dict] = []
     step_results: list[dict[str, Any]] = []
+    run_id = str(state.get("run_id") or f"run-{uuid.uuid4().hex[:12]}")
+    plan_id = f"plan-{uuid.uuid4().hex[:10]}"
 
     steps = _parse_task_steps_with_llm(state)
     if not steps:
@@ -1703,23 +1718,62 @@ def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
             "graph_path": f"{state.get('graph_path', '')}->decompose_fallback",
         }
 
+    plan_created = _activity_event(
+        run_id=run_id,
+        phase="Planning",
+        label=f"Created a {len(steps)}-step plan",
+        detail=", ".join(str(step.get("description") or f"Step {i + 1}") for i, step in enumerate(steps[:6])),
+        status="completed",
+        elapsed_ms=0,
+    )
+    plan_created.update({"event_type": "plan_created", "plan_id": plan_id})
+    append_run_event(run_id, plan_created)
+    plan_events.append(plan_created)
+
     for i, step in enumerate(steps):
+        step_id = f"{plan_id}-step-{i + 1}"
         elapsed_start = int((time.perf_counter() - started) * 1000)
-        plan_events.append(_activity_event(
-            run_id=f"run-{uuid.uuid4().hex[:10]}",
+        started_event = _activity_event(
+            run_id=run_id,
             phase="Planning",
-            label=f"Plan step {i + 1} of {len(steps)}",
+            label=f"Started step {i + 1} of {len(steps)}",
             detail=str(step.get("description") or "Processing repository step"),
             status="running",
             elapsed_ms=elapsed_start,
             files=[str(step.get("file"))] if step.get("file") else [],
-        ))
+        )
+        started_event.update({"event_type": "plan_step_started", "plan_id": plan_id, "step_id": step_id})
+        append_run_event(run_id, started_event)
+        plan_events.append(started_event)
 
-        result = _execute_plan_step(state, step, step_results)
+        result = _execute_plan_step({**state, "run_id": run_id, "plan_id": plan_id, "step_id": step_id}, step, step_results)
         step_results.append(result)
 
         elapsed_end = int((time.perf_counter() - started) * 1000)
-        plan_events[-1] = {**plan_events[-1], "status": "completed", "elapsed_ms": elapsed_end, "ended_at": _utc_now()}
+        completed_event = {
+            **started_event,
+            "id": f"activity-{uuid.uuid4().hex[:10]}",
+            "event_type": "plan_step_completed" if not result.get("error") else "plan_step_failed",
+            "status": "completed" if not result.get("error") else "failed",
+            "elapsed_ms": elapsed_end,
+            "duration_ms": max(0, elapsed_end - elapsed_start),
+            "ended_at": _utc_now(),
+            "detail": result.get("response") or started_event.get("detail"),
+        }
+        append_run_event(run_id, completed_event)
+        plan_events.append(completed_event)
+
+    completed = _activity_event(
+        run_id=run_id,
+        phase="Finished",
+        label=f"Completed {len(steps)} planned steps",
+        detail="Prepared the final summary from executed work.",
+        status="completed",
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+    )
+    completed.update({"event_type": "plan_completed", "plan_id": plan_id})
+    append_run_event(run_id, completed)
+    plan_events.append(completed)
 
     combined_text = _format_plan_summary(steps, step_results, request)
 
@@ -1868,9 +1922,23 @@ def _execute_plan_step(
     file: str | None = step.get("file")
     instruction = step.get("instruction") or request.task
     started = time.perf_counter()
+    run_id = str(state.get("run_id") or f"run-{uuid.uuid4().hex[:12]}")
+    plan_id = str(state.get("plan_id") or "")
+    step_id = str(state.get("step_id") or "")
 
     if intent == "write" and file:
         try:
+            edit_started = _activity_event(
+                run_id=run_id,
+                phase="Editing",
+                label=f"Editing {Path(file).name}",
+                detail="Drafting and validating a repository-scoped file edit.",
+                status="running",
+                elapsed_ms=0,
+                files=[file],
+            )
+            edit_started.update({"event_type": "file_edit_started", "plan_id": plan_id, "step_id": step_id})
+            append_run_event(run_id, edit_started)
             proposal = propose_file_edit(
                 AgentProposeFileRequest(
                     project_path=request.project_path,
@@ -1878,6 +1946,17 @@ def _execute_plan_step(
                     instruction=instruction,
                 )
             )
+            validation_event = _activity_event(
+                run_id=run_id,
+                phase="Editing",
+                label=f"Validated {Path(file).name}",
+                detail="Target path and generated replacement passed deterministic validation.",
+                status="completed",
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                files=[file],
+            )
+            validation_event.update({"event_type": "validation_completed", "plan_id": plan_id, "step_id": step_id})
+            append_run_event(run_id, validation_event)
             write_text_file(
                 FileWriteRequest(
                     project_path=request.project_path,
@@ -1892,7 +1971,25 @@ def _execute_plan_step(
                 proposed=proposal.proposed_content,
                 summary=proposal.context_summary,
                 proposal_id=f"proposal-{uuid.uuid4().hex[:10]}",
+                plan_id=plan_id,
             )
+            edit_completed = _activity_event(
+                run_id=run_id,
+                phase="Editing",
+                label=f"Modified {Path(file).name}",
+                detail=f"+{edit_record['additions']} -{edit_record['deletions']}",
+                status="completed",
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                files=[file],
+                proposal_id=edit_record.get("proposal_id"),
+            )
+            edit_completed.update({
+                "event_type": "file_edit_completed",
+                "changed_file": edit_record,
+                "plan_id": plan_id,
+                "step_id": step_id,
+            })
+            append_run_event(run_id, edit_completed)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             return {
                 "step_index": step.get("step_index", 0),
@@ -1917,6 +2014,18 @@ def _execute_plan_step(
             }
 
     # Read-only step — use file context + LLM
+    if file:
+        read_started = _activity_event(
+            run_id=run_id,
+            phase="Reading files",
+            label=f"Reading {Path(file).name}",
+            detail="Inspecting file before deciding the next step.",
+            status="running",
+            elapsed_ms=0,
+            files=[file],
+        )
+        read_started.update({"event_type": "file_read_started", "plan_id": plan_id, "step_id": step_id})
+        append_run_event(run_id, read_started)
     skills_context = state.get("skills_context") or ""
     prior_context_parts = [
         f"Prior analysis of {r['file']}:\n{str(r.get('response', ''))[:400]}"
@@ -1951,6 +2060,18 @@ def _execute_plan_step(
         answer = f"Could not analyze `{file or 'context'}`: {exc}"
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
+    if file:
+        read_completed = _activity_event(
+            run_id=run_id,
+            phase="Reading files",
+            label=f"Read {Path(file).name}",
+            detail="File context was included in the step observation.",
+            status="completed",
+            elapsed_ms=elapsed_ms,
+            files=[file],
+        )
+        read_completed.update({"event_type": "file_read_completed", "plan_id": plan_id, "step_id": step_id})
+        append_run_event(run_id, read_completed)
     return {
         "step_index": step.get("step_index", 0),
         "file": file,
@@ -2277,13 +2398,13 @@ def _activity_for_node(
     )
 
 
-def stream_agent_orchestration_graph(request: AgentRunRequest):
+def stream_agent_orchestration_graph(request: AgentRunRequest, *, run_id: str | None = None):
     """Generator that yields JSON-encoded SSE event payloads for LangGraph progress."""
-    initial_state: dict[str, Any] = {"request": request}
+    run_id = run_id or f"run-{uuid.uuid4().hex[:12]}"
+    initial_state: dict[str, Any] = {"request": request, "run_id": run_id}
     accumulated_result: AgentRunResponse | None = None
     started = time.perf_counter()
     last_activity_elapsed_ms = 0
-    run_id = f"run-{uuid.uuid4().hex[:12]}"
     activity_events: list[dict[str, Any]] = []
 
     try:
@@ -2295,12 +2416,6 @@ def stream_agent_orchestration_graph(request: AgentRunRequest):
 
             if "result" in node_state and node_state["result"] is not None:
                 accumulated_result = node_state["result"]
-
-            # Emit per-step events from multi-step execution before the node summary
-            for step_event in node_state.get("plan_step_events", []):
-                step_event = {**step_event, "run_id": run_id}
-                activity_events.append(step_event)
-                yield json.dumps(step_event)
 
             payload = _activity_for_node(
                 node_name,

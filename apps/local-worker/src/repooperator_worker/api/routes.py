@@ -1,4 +1,6 @@
 import time
+import json
+from threading import Thread
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -87,7 +89,17 @@ from repooperator_worker.services.composio_service import (
     list_composio_connected_accounts,
     list_composio_toolkits,
 )
-from repooperator_worker.services.event_service import new_run_id, record_agent_run, record_event
+from repooperator_worker.services.event_service import (
+    append_run_event,
+    complete_active_run,
+    get_active_runs,
+    get_run,
+    list_run_events,
+    new_run_id,
+    record_agent_run,
+    record_event,
+    start_active_run,
+)
 from repooperator_worker.services.memory_service import (
     list_memory_items,
     maybe_record_from_agent_run,
@@ -574,9 +586,41 @@ def agent_run(request: AgentRunRequest) -> AgentRunResponse:
 
 @router.post("/agent/run/stream")
 def agent_run_stream(request: AgentRunRequest) -> StreamingResponse:
+    run_id = new_run_id()
+    start_active_run(run_id=run_id, request=request)
+
+    def worker() -> None:
+        final_result: dict | None = None
+        try:
+            for event_data in stream_agent_orchestration_graph(request, run_id=run_id):
+                try:
+                    event = json.loads(event_data)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "final_message":
+                    final_result = event.get("result")
+                    if isinstance(final_result, dict):
+                        final_result = {**final_result, "activity_events": list_run_events(run_id)}
+                        event = {**event, "result": final_result}
+                append_run_event(run_id, event)
+            complete_active_run(run_id=run_id, status="completed", final_result=final_result)
+        except Exception as exc:
+            append_run_event(run_id, {"type": "error", "message": str(exc), "status": "failed"})
+            complete_active_run(run_id=run_id, status="failed", error=str(exc))
+
+    Thread(target=worker, daemon=True).start()
+
     def generate():
-        for event_data in stream_agent_orchestration_graph(request):
-            yield f"data: {event_data}\n\n"
+        last_sequence = 0
+        while True:
+            events = list_run_events(run_id, after_sequence=last_sequence)
+            for event in events:
+                last_sequence = int(event.get("sequence") or last_sequence)
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            run = get_run(run_id)
+            if run and run.get("status") != "running" and not events:
+                break
+            time.sleep(0.25)
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(
@@ -588,6 +632,24 @@ def agent_run_stream(request: AgentRunRequest) -> StreamingResponse:
             "Connection": "keep-alive",
         },
     )
+
+
+@router.get("/agent/runs/active")
+def agent_runs_active(thread_id: str | None = None) -> dict:
+    return {"runs": get_active_runs(thread_id=thread_id)}
+
+
+@router.get("/agent/runs/{run_id}")
+def agent_run_lookup(run_id: str) -> dict:
+    run = get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return run
+
+
+@router.get("/agent/runs/{run_id}/events")
+def agent_run_events(run_id: str, after_sequence: int = 0) -> dict:
+    return {"events": list_run_events(run_id, after_sequence=after_sequence)}
 
 
 @router.post("/agent/apply-summary")

@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
@@ -20,12 +21,145 @@ def _runs_file() -> Path:
     return _runs_dir() / "runs.jsonl"
 
 
+_RUN_LOCK = RLock()
+
+
+def _run_dir(run_id: str) -> Path:
+    safe = "".join(ch for ch in run_id if ch.isalnum() or ch in {"_", "-"})
+    path = _runs_dir() / safe
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _run_meta_file(run_id: str) -> Path:
+    return _run_dir(run_id) / "meta.json"
+
+
+def _run_events_file(run_id: str) -> Path:
+    return _run_dir(run_id) / "events.jsonl"
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def new_run_id() -> str:
     return f"run_{uuid.uuid4().hex[:12]}"
+
+
+def start_active_run(
+    *,
+    run_id: str,
+    request: AgentRunRequest,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
+    record = {
+        "id": run_id,
+        "thread_id": thread_id,
+        "repo": request.project_path,
+        "branch": request.branch,
+        "task_summary": summarize_user_message(request.task),
+        "status": "running",
+        "started_at": _now_iso(),
+        "completed_at": None,
+        "final_result": None,
+        "error": None,
+    }
+    with _RUN_LOCK:
+        try:
+            _run_meta_file(run_id).write_text(json.dumps(record, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        except OSError:
+            pass
+    return record
+
+
+def append_run_event(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    with _RUN_LOCK:
+        events = list_run_events(run_id)
+        sequence = int(event.get("sequence") or len(events) + 1)
+        record = {
+            "run_id": run_id,
+            "sequence": sequence,
+            "timestamp": event.get("timestamp") or _now_iso(),
+            **event,
+        }
+        try:
+            with _run_events_file(run_id).open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        except OSError:
+            pass
+    return record
+
+
+def complete_active_run(
+    *,
+    run_id: str,
+    status: str,
+    final_result: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    with _RUN_LOCK:
+        meta = get_run(run_id) or {"id": run_id}
+        meta.update(
+            {
+                "status": status,
+                "completed_at": _now_iso(),
+                "final_result": final_result,
+                "error": error,
+            }
+        )
+        try:
+            _run_meta_file(run_id).write_text(json.dumps(meta, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        except OSError:
+            pass
+    return meta
+
+
+def get_run(run_id: str) -> dict[str, Any] | None:
+    path = _run_meta_file(run_id)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def list_run_events(run_id: str, *, after_sequence: int = 0) -> list[dict[str, Any]]:
+    path = _run_events_file(run_id)
+    if not path.exists():
+        return []
+    events: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if int(event.get("sequence") or 0) > after_sequence:
+            events.append(event)
+    return events
+
+
+def get_active_runs(thread_id: str | None = None) -> list[dict[str, Any]]:
+    active: list[dict[str, Any]] = []
+    for meta_path in _runs_dir().glob("*/meta.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if meta.get("status") != "running":
+            continue
+        if thread_id and meta.get("thread_id") != thread_id:
+            continue
+        active.append(meta)
+    return sorted(active, key=lambda item: str(item.get("started_at") or ""), reverse=True)
 
 
 def summarize_user_message(message: str, *, max_len: int = 180) -> str:

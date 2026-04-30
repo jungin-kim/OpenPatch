@@ -9,6 +9,8 @@ import {
   getProviderProjects,
   getRecentProjects,
   getRepositoryOpenPlan,
+  getAgentRun,
+  getAgentRunEvents,
   getWorkerHealth,
   generateApplySummary,
   listLocalBranches,
@@ -108,26 +110,46 @@ export function ChatApp() {
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [streamedReasoning, setStreamedReasoning] = useState("");
   const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<string[]>([]);
 
-  function normalizeActivityEvents(events?: AgentRunPayload["activity_events"]): ProgressStep[] {
-    return (events || []).map((event) => ({
-      id: event.id,
-      runId: event.run_id,
-      phase: event.phase,
-      label: event.label ?? event.message,
-      detail: event.detail,
-      message: event.message,
-      status: event.status,
-      startedAt: event.started_at,
-      endedAt: event.ended_at,
-      durationMs: event.duration_ms,
-      elapsedMs: event.elapsed_ms,
-      files: event.files,
-      command: event.command,
-      proposalId: event.proposal_id,
-    }));
+  function normalizeActivityEvents(
+    events?: AgentRunPayload["activity_events"],
+    options: { finalizeRunning?: boolean } = {},
+  ): ProgressStep[] {
+    return (events || [])
+      .filter((event) => event.type === "progress_delta" && (event.label || event.message))
+      .map((event) => {
+        const status =
+          options.finalizeRunning && event.status === "running" ? "completed" : event.status;
+        return {
+          id: event.id,
+          runId: event.run_id,
+          phase: event.phase,
+          label: event.label ?? event.message,
+          detail: event.detail,
+          message: event.message,
+          status,
+          startedAt: event.started_at,
+          endedAt: event.ended_at,
+          durationMs: event.duration_ms,
+          elapsedMs: event.elapsed_ms,
+          files: event.files,
+          command: event.command,
+          proposalId: event.proposal_id,
+        };
+      });
+  }
+
+  function rememberActiveRun(runId: string | null) {
+    setActiveRunId(runId);
+    if (runId) {
+      window.localStorage.setItem("repooperator-active-run-id", runId);
+    } else {
+      window.localStorage.removeItem("repooperator-active-run-id");
+    }
   }
 
   // ── Health check ─────────────────────────────────────────────────────────
@@ -181,6 +203,122 @@ export function ChatApp() {
     setTheme(nextTheme);
     document.documentElement.dataset.theme = nextTheme;
   }, []);
+
+  useEffect(() => {
+    setSidebarCollapsed(window.localStorage.getItem("repooperator-sidebar-collapsed") === "true");
+  }, []);
+
+  useEffect(() => {
+    const savedRunId = window.localStorage.getItem("repooperator-active-run-id");
+    if (!savedRunId) return;
+    const runId = savedRunId;
+    let cancelled = false;
+    async function rehydrateRun() {
+      try {
+        const [run, eventPayload] = await Promise.all([
+          getAgentRun(runId),
+          getAgentRunEvents(runId),
+        ]);
+        if (cancelled) return;
+        if (run.status === "running") {
+          setProgressSteps(normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"]));
+          setQuestionPending(true);
+          setActiveRunId(runId);
+          return;
+        }
+        setProgressSteps(
+          normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"], {
+            finalizeRunning: true,
+          }),
+        );
+        rememberActiveRun(null);
+        setQuestionPending(false);
+        if (run.final_result) {
+          const assistantMessage: ChatMessage = {
+            id: `${Date.now()}-rehydrated-run`,
+            role: "assistant",
+            content: run.final_result.response,
+            timestamp: new Date(),
+            metadata: run.final_result,
+            progressSteps: normalizeActivityEvents(run.final_result.activity_events, {
+              finalizeRunning: true,
+            }),
+          };
+          setMessages((current) => {
+            if (current.some((message) => message.metadata?.run_id === run.final_result?.run_id)) return current;
+            const next = [...current, assistantMessage];
+            updateActiveThread(next);
+            return next;
+          });
+        }
+      } catch {
+        rememberActiveRun(null);
+      }
+    }
+    void rehydrateRun();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function handleSidebarCollapsedChange() {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      window.localStorage.setItem("repooperator-sidebar-collapsed", String(next));
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    if (!activeRunId || !questionPending) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const [run, eventPayload] = await Promise.all([
+            getAgentRun(activeRunId),
+            getAgentRunEvents(activeRunId),
+          ]);
+          if (cancelled) return;
+          if (run.status !== "running") {
+            setProgressSteps(
+              normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"], {
+                finalizeRunning: true,
+              }),
+            );
+            rememberActiveRun(null);
+            setQuestionPending(false);
+            if (run.final_result) {
+              const assistantMessage: ChatMessage = {
+                id: `${Date.now()}-poll-run`,
+                role: "assistant",
+                content: run.final_result.response,
+                timestamp: new Date(),
+                metadata: run.final_result,
+                progressSteps: normalizeActivityEvents(run.final_result.activity_events, {
+                  finalizeRunning: true,
+                }),
+              };
+              setMessages((current) => {
+                if (current.some((message) => message.metadata?.run_id === run.final_result?.run_id)) return current;
+                const next = [...current, assistantMessage];
+                updateActiveThread(next);
+                return next;
+              });
+            }
+          } else {
+            setProgressSteps(normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"]));
+          }
+        } catch {
+          // Keep the current visible state; SSE may still be active.
+        }
+      })();
+    }, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeRunId, questionPending]);
 
   useEffect(() => {
     if (connectionState !== "connected") return;
@@ -716,6 +854,7 @@ export function ChatApp() {
             return next;
           });
         } else if (event.type === "progress_delta") {
+          if (event.run_id && event.run_id !== activeRunId) rememberActiveRun(event.run_id);
           setProgressSteps((prev) => {
             const completedPrev = prev.map((step, index) =>
               index === prev.length - 1 && step.status === "running"
@@ -752,6 +891,7 @@ export function ChatApp() {
           payload = event.result;
         } else if (event.type === "final_message") {
           payload = event.result;
+          rememberActiveRun(null);
         } else if (event.type === "error") {
           throw new Error(event.message);
         }
@@ -760,7 +900,9 @@ export function ChatApp() {
       if (!payload) throw new Error("No result received from agent.");
 
       let assistantMessage: ChatMessage;
-      const finalProgressSteps = normalizeActivityEvents(payload.activity_events);
+      const finalProgressSteps = normalizeActivityEvents(payload.activity_events, {
+        finalizeRunning: true,
+      });
       capturedProgressSteps = finalProgressSteps.length > 0 ? finalProgressSteps : capturedProgressSteps;
 
       if (
@@ -1195,6 +1337,7 @@ export function ChatApp() {
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <ChatLayout
+      sidebarCollapsed={sidebarCollapsed}
       sidebar={
         <ChatSidebar
           recentProjects={recentProjectHistory}
@@ -1204,6 +1347,8 @@ export function ChatApp() {
           onNewChat={handleNewChat}
           onSelectThread={handleSelectThread}
           onSelectRecentProject={handleRecentProjectSelect}
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={handleSidebarCollapsedChange}
         />
       }
       header={

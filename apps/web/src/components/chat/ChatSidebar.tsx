@@ -10,6 +10,8 @@ interface ChatSidebarProps {
   onNewChat: () => void;
   onSelectThread: (threadId: string) => void;
   onSelectRecentProject: (project: ProviderProjectSummary) => void;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }
 
 function providerLabel(provider: string): string {
@@ -27,6 +29,8 @@ export function ChatSidebar({
   onNewChat,
   onSelectThread,
   onSelectRecentProject,
+  collapsed = false,
+  onToggleCollapsed,
 }: ChatSidebarProps) {
   const threadStoreLabel =
     threadStoreState === "loading"
@@ -38,13 +42,22 @@ export function ChatSidebar({
           : "Thread history unavailable";
 
   return (
-    <aside className="chat-sidebar">
+    <aside className={`chat-sidebar${collapsed ? " chat-sidebar-collapsed" : ""}`}>
       <div className="chat-sidebar-header">
         <div className="sidebar-brand-mark" aria-hidden="true" />
-        <span className="sidebar-brand-name">RepoOperator</span>
+        {!collapsed && <span className="sidebar-brand-name">RepoOperator</span>}
+        <button
+          className="sidebar-collapse-toggle"
+          type="button"
+          onClick={onToggleCollapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        >
+          {collapsed ? "›" : "‹"}
+        </button>
       </div>
 
-      <div className="sidebar-body">
+      {!collapsed && <div className="sidebar-body">
         <button className="sidebar-new-chat" type="button" onClick={onNewChat}>
           + New chat
         </button>
@@ -120,7 +133,7 @@ export function ChatSidebar({
             ← Home
           </Link>
         </div>
-      </div>
+      </div>}
     </aside>
   );
 }

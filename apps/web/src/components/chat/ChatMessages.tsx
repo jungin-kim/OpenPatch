@@ -96,29 +96,74 @@ function CommandResultCard({ result }: { result: CommandResultPayload }) {
 }
 
 function ChangedFilesArchive({ records }: { records?: EditArchiveRecord[] }) {
+  const [selected, setSelected] = useState<EditArchiveRecord | null>(null);
   if (!records?.length) return null;
   return (
-    <div className="changed-files-archive">
-      <div className="changed-files-title">Changed files</div>
-      <div className="changed-files-list">
-        {records.map((record) => (
-          <div key={`${record.proposal_id || record.file_path}-${record.status}`} className="changed-file-row">
-            <div>
-              <div className="changed-file-path">{record.file_path}</div>
-              {record.summary ? <div className="changed-file-summary">{record.summary}</div> : null}
-            </div>
-            <div className="changed-file-stats">
-              <span className="changed-file-add">+{record.additions}</span>
-              <span className="changed-file-del">-{record.deletions}</span>
-              <span className={`changed-file-status changed-file-status-${record.status}`}>
-                {record.status}
-              </span>
-            </div>
-          </div>
-        ))}
+    <>
+      <div className="changed-files-archive">
+        <div className="changed-files-title">Changed files</div>
+        <div className="changed-files-list">
+          {records.map((record) => (
+            <button
+              key={`${record.proposal_id || record.file_path}-${record.status}`}
+              className="changed-file-row"
+              type="button"
+              title={record.file_path}
+              onClick={() => setSelected(record)}
+            >
+              <div className="changed-file-path">{compactFileName(record.file_path)}</div>
+              <div className="changed-file-stats">
+                <span className="changed-file-add">+{record.additions}</span>
+                <span className="changed-file-del">-{record.deletions}</span>
+                <span className={`changed-file-status changed-file-status-${record.status}`}>
+                  {record.status}
+                </span>
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
-    </div>
+      {selected ? (
+        <aside className="changed-file-drawer" aria-label="Changed file details">
+          <div className="changed-file-drawer-header">
+            <div>
+              <div className="changed-file-drawer-title">{compactFileName(selected.file_path)}</div>
+              <div className="changed-file-drawer-path">{selected.file_path}</div>
+            </div>
+            <button type="button" onClick={() => setSelected(null)} aria-label="Close changed file details">×</button>
+          </div>
+          <div className="changed-file-drawer-stats">
+            <span className="changed-file-add">+{selected.additions}</span>
+            <span className="changed-file-del">-{selected.deletions}</span>
+            <span className={`changed-file-status changed-file-status-${selected.status}`}>{selected.status}</span>
+          </div>
+          {selected.summary ? <p>{selected.summary}</p> : null}
+          {selected.plan_id ? <p className="changed-file-drawer-meta">Plan: {selected.plan_id}</p> : null}
+          <div className="changed-file-drawer-actions">
+            <button type="button" onClick={() => void navigator.clipboard?.writeText(selected.file_path)}>Copy path</button>
+            <button type="button" onClick={() => void navigator.clipboard?.writeText(selected.diff || formatChangedFileRecord(selected))}>Copy diff</button>
+          </div>
+          <details open>
+            <summary>Diff</summary>
+            <pre>{selected.diff || formatChangedFileRecord(selected)}</pre>
+          </details>
+        </aside>
+      ) : null}
+    </>
   );
+}
+
+function compactFileName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+}
+
+function formatChangedFileRecord(record: EditArchiveRecord): string {
+  return [
+    `${record.file_path} +${record.additions} -${record.deletions} ${record.status}`,
+    record.summary || "",
+    record.apply_result || "",
+    record.diff || "",
+  ].filter(Boolean).join("\n");
 }
 
 function ToolCard({ metadata }: { metadata: AgentRunPayload }) {

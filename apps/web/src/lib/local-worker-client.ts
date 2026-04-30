@@ -240,12 +240,26 @@ export type EditArchiveRecord = {
   status: "proposed" | "applied" | "rejected" | "failed" | string;
   additions: number;
   deletions: number;
+  diff?: string | null;
   summary?: string | null;
   timestamp?: string | null;
   proposal_id?: string | null;
   plan_id?: string | null;
   apply_result?: string | null;
   tests?: string[];
+};
+
+export type AgentRunRecord = {
+  id: string;
+  thread_id?: string | null;
+  repo?: string | null;
+  branch?: string | null;
+  task_summary?: string;
+  status: "running" | "completed" | "failed" | string;
+  started_at?: string;
+  completed_at?: string | null;
+  final_result?: AgentRunPayload | null;
+  error?: string | null;
 };
 
 export type CommandApprovalPayload = {
@@ -512,6 +526,16 @@ export async function* streamAgentTask(input: {
   } finally {
     reader.releaseLock();
   }
+}
+
+export async function getAgentRun(runId: string): Promise<AgentRunRecord> {
+  const response = await fetch(`/api/worker/agent/runs/${encodeURIComponent(runId)}`, { cache: "no-store" });
+  return parseWorkerResponse<AgentRunRecord>(response);
+}
+
+export async function getAgentRunEvents(runId: string, afterSequence = 0): Promise<{ events: AgentActivityEvent[] }> {
+  const response = await fetch(`/api/worker/agent/runs/${encodeURIComponent(runId)}/events?after_sequence=${afterSequence}`, { cache: "no-store" });
+  return parseWorkerResponse<{ events: AgentActivityEvent[] }>(response);
 }
 
 export async function readRepositoryFile(input: {
