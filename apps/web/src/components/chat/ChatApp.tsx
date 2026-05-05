@@ -71,6 +71,7 @@ type QueuedMessage = {
   threadId: string;
   text: string;
   status: "queued" | "running" | "completed" | "cancelled" | "failed";
+  error?: string | null;
 };
 
 export function ChatApp() {
@@ -123,7 +124,6 @@ export function ChatApp() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeRunByThread, setActiveRunByThread] = useState<Record<string, string>>({});
-  const [inputMode, setInputMode] = useState<"queue" | "steer">("queue");
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<QueuedMessage[]>([]);
   const activeThreadIdRef = useRef<string | null>(null);
@@ -136,28 +136,67 @@ export function ChatApp() {
     events?: AgentRunPayload["activity_events"],
     options: { finalizeRunning?: boolean } = {},
   ): ProgressStep[] {
-    return (events || [])
-      .filter((event) => event.type === "progress_delta" && (event.label || event.message))
-      .map((event) => {
-        const status =
-          options.finalizeRunning && event.status === "running" ? "completed" : event.status;
-        return {
-          id: event.id,
-          runId: event.run_id,
-          phase: event.phase,
-          label: event.label ?? event.message,
-          detail: event.detail,
-          message: event.message,
-          status,
-          startedAt: event.started_at,
-          endedAt: event.ended_at,
-          durationMs: event.duration_ms,
-          elapsedMs: event.elapsed_ms,
-          files: event.files,
-          command: event.command,
-          proposalId: event.proposal_id,
-        };
-      });
+    const seen = new Set<string>();
+    const steps: ProgressStep[] = [];
+    for (const event of events || []) {
+      if (event.type !== "progress_delta" || !(event.label || event.message)) continue;
+      const step = progressStepFromEvent(event, options);
+      const key = progressStepIdentity(step, steps.length);
+      if (seen.has(key)) {
+        steps[steps.findIndex((item, index) => progressStepIdentity(item, index) === key)] = step;
+        continue;
+      }
+      seen.add(key);
+      steps.push(step);
+    }
+    return steps;
+  }
+
+  function progressStepFromEvent(
+    event: NonNullable<AgentRunPayload["activity_events"]>[number],
+    options: { finalizeRunning?: boolean } = {},
+  ): ProgressStep {
+    const status =
+      options.finalizeRunning && event.status === "running" ? "completed" : event.status;
+    return {
+      id: event.id,
+      runId: event.run_id,
+      sequence: event.sequence,
+      eventType: event.event_type,
+      phase: event.phase,
+      label: event.label ?? event.message,
+      detail: event.detail,
+      message: event.message,
+      status,
+      startedAt: event.started_at,
+      endedAt: event.ended_at,
+      durationMs: event.duration_ms,
+      elapsedMs: event.elapsed_ms,
+      files: event.files,
+      command: event.command,
+      proposalId: event.proposal_id,
+    };
+  }
+
+  function progressStepIdentity(step: ProgressStep, fallbackIndex: number): string {
+    if (step.runId && step.sequence !== undefined && step.sequence !== null) return `${step.runId}:${step.sequence}`;
+    if (step.runId && step.id) return `${step.runId}:${step.id}`;
+    if (step.id) return step.id;
+    return `${step.runId || "local"}:${step.startedAt || fallbackIndex}:${step.phase || ""}:${step.label || step.message || ""}`;
+  }
+
+  function mergeProgressStep(current: ProgressStep[], incoming: ProgressStep): ProgressStep[] {
+    const incomingKey = progressStepIdentity(incoming, current.length);
+    const existingIndex = current.findIndex((step, index) => progressStepIdentity(step, index) === incomingKey);
+    if (existingIndex >= 0) {
+      return current.map((step, index) => (index === existingIndex ? incoming : step));
+    }
+    const completedPrev = current.map((step, index) =>
+      index === current.length - 1 && step.status === "running"
+        ? { ...step, status: "completed" }
+        : step,
+    );
+    return [...completedPrev, incoming];
   }
 
   function activeRunStorageKey(threadId: string) {
@@ -250,7 +289,7 @@ export function ChatApp() {
     try {
       const savedQueue = JSON.parse(window.localStorage.getItem("repooperator-queued-messages") || "[]") as QueuedMessage[];
       const validQueue = Array.isArray(savedQueue)
-        ? savedQueue.filter((item) => item && item.id && item.threadId && item.text)
+        ? savedQueue.filter((item) => item && item.id && item.threadId && item.text && item.status === "queued")
         : [];
       queuedMessagesRef.current = validQueue;
       setQueuedMessages(validQueue);
@@ -954,30 +993,7 @@ export function ChatApp() {
           if (event.run_id && event.run_id !== activeRunId) rememberActiveRun(event.run_id, runThreadId);
           if (activeThreadIdRef.current !== runThreadId) continue;
           setProgressSteps((prev) => {
-            const completedPrev = prev.map((step, index) =>
-              index === prev.length - 1 && step.status === "running"
-                ? { ...step, status: "completed" }
-                : step,
-            );
-            const next = [
-              ...completedPrev,
-              {
-                id: event.id,
-                runId: event.run_id,
-                phase: event.phase,
-                label: event.label ?? event.message,
-                detail: event.detail,
-                message: event.message,
-                status: event.status,
-                startedAt: event.started_at,
-                endedAt: event.ended_at,
-                durationMs: event.duration_ms,
-                elapsedMs: event.elapsed_ms,
-                files: event.files,
-                command: event.command,
-                proposalId: event.proposal_id,
-              },
-            ];
+            const next = mergeProgressStep(prev, progressStepFromEvent(event));
             capturedProgressSteps = next;
             return next;
           });
@@ -1085,39 +1101,13 @@ export function ChatApp() {
     setQuestion("");
 
     if (questionPending) {
-      if (inputMode === "steer" && activeRunId) {
-        try {
-          await steerAgentRun(activeRunId, taskText);
-          setProgressSteps((prev) => [
-            ...prev,
-            {
-              phase: "Planning",
-              label: "Received steering instruction",
-              detail: taskText,
-              status: "completed",
-              startedAt: new Date().toISOString(),
-              endedAt: new Date().toISOString(),
-              durationMs: 0,
-            },
-          ]);
-        } catch (error) {
-          const queued: QueuedMessage = {
-            id: `${Date.now()}-queued`,
-            threadId: activeThreadId || "",
-            text: taskText,
-            status: "queued",
-          };
-          setQueuedItems((items) => [...items, queued]);
-        }
-      } else {
-        const queued: QueuedMessage = {
-          id: `${Date.now()}-queued`,
-          threadId: activeThreadId || "",
-          text: taskText,
-          status: "queued",
-        };
-        setQueuedItems((items) => [...items, queued]);
-      }
+      const queued: QueuedMessage = {
+        id: `${Date.now()}-queued`,
+        threadId: activeThreadId || "",
+        text: taskText,
+        status: "queued",
+      };
+      setQueuedItems((items) => [...items, queued]);
       return;
     }
 
@@ -1131,21 +1121,46 @@ export function ChatApp() {
           (item) => item.threadId === runThreadId && item.status === "queued",
         );
         if (!nextItem) break;
-        setQueuedItems((items) =>
-          items.map((item) => item.id === nextItem.id ? { ...item, status: "running" } : item),
-        );
+        setQueuedItems((items) => items.filter((item) => item.id !== nextItem.id));
         currentMessages = (await runQuestion(nextItem.text, currentMessages)) ?? currentMessages;
-        setQueuedItems((items) =>
-          items.map((item) => item.id === nextItem.id ? { ...item, status: "completed" } : item),
-        );
       }
     })();
   }
 
   function handleCancelQueuedMessage(id: string) {
-    setQueuedItems((items) =>
-      items.map((item) => item.id === id ? { ...item, status: "cancelled" } : item),
-    );
+    setQueuedItems((items) => items.filter((item) => item.id !== id));
+  }
+
+  async function handleSteerQueuedMessage(id: string) {
+    const item = queuedMessagesRef.current.find((queued) => queued.id === id);
+    if (!item || !activeRunId) return;
+    try {
+      await steerAgentRun(activeRunId, item.text);
+      setQueuedItems((items) => items.filter((queued) => queued.id !== id));
+      setProgressSteps((prev) =>
+        mergeProgressStep(prev, {
+          id: `${activeRunId}-steering-${id}`,
+          runId: activeRunId,
+          phase: "Planning",
+          label: "Received steering instruction",
+          detail: item.text,
+          status: "completed",
+          startedAt: new Date().toISOString(),
+          endedAt: new Date().toISOString(),
+          durationMs: 0,
+        }),
+      );
+    } catch (error) {
+      const message =
+        error instanceof LocalWorkerClientError || error instanceof Error
+          ? error.message
+          : "Unable to steer the active run.";
+      setQueuedItems((items) =>
+        items.map((queued) =>
+          queued.id === id ? { ...queued, status: "queued", error: message } : queued,
+        ),
+      );
+    }
   }
 
   async function handleStopRun() {
@@ -1582,15 +1597,14 @@ export function ChatApp() {
           onChange={setQuestion}
           onSubmit={handleQuestionSubmit}
           onCancelQueuedMessage={handleCancelQueuedMessage}
+          onSteerQueuedMessage={handleSteerQueuedMessage}
           onStopRun={handleStopRun}
           disabled={!repoResult}
           pending={questionPending}
-          inputMode={inputMode}
-          onInputModeChange={setInputMode}
           writeMode={writeMode}
           queuedMessages={queuedMessages
-            .filter((item) => item.threadId === activeThreadId && item.status !== "completed")
-            .map((item) => ({ id: item.id, text: item.text, status: item.status }))}
+            .filter((item) => item.threadId === activeThreadId && item.status === "queued")
+            .map((item) => ({ id: item.id, text: item.text, status: item.status, error: item.error }))}
         />
       }
     />

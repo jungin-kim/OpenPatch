@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 export type ProgressStep = {
   id?: string;
   runId?: string;
+  sequence?: number | null;
+  eventType?: string | null;
   phase?: string;
   label?: string;
   detail?: string;
@@ -94,7 +96,7 @@ export function ProgressTimeline({ steps, done }: Props) {
           const duration = stepDurationMs(step, now);
           return (
             <div
-              key={step.id || `${index}-${step.label || step.message}`}
+              key={progressStepKey(step, index)}
               className={`progress-step progress-step-${step.status || "completed"}${isCurrent ? " progress-step-active" : ""}`}
             >
               <span className="progress-step-marker" aria-hidden="true" />
@@ -119,6 +121,15 @@ export function ProgressTimeline({ steps, done }: Props) {
       </div>
     </section>
   );
+}
+
+function progressStepKey(step: ProgressStep, index: number): string {
+  if (step.runId && step.sequence !== undefined && step.sequence !== null) {
+    return `${step.runId}:${step.sequence}:${step.eventType || "activity"}:${index}`;
+  }
+  if (step.id && step.runId) return `${step.runId}:${step.id}:${index}`;
+  if (step.id) return `${step.id}:${index}`;
+  return `${step.runId || "local"}:${step.startedAt || "no-start"}:${step.phase || "activity"}:${step.label || step.message || "step"}:${index}`;
 }
 
 function stepDurationMs(step: ProgressStep, now: number): number {

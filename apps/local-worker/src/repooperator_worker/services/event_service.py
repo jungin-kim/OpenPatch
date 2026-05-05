@@ -88,6 +88,8 @@ def append_run_event(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
             "timestamp": event.get("timestamp") or _now_iso(),
             **event,
         }
+        if record.get("type") == "progress_delta" and not record.get("id"):
+            record["id"] = f"{run_id}-event-{sequence}"
         try:
             with _run_events_file(run_id).open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")

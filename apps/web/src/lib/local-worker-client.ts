@@ -221,6 +221,8 @@ export type AgentActivityEvent = {
   type?: "progress_delta" | string;
   id?: string;
   run_id?: string;
+  sequence?: number | null;
+  event_type?: string | null;
   phase?: string;
   label?: string;
   detail?: string;

@@ -7,13 +7,12 @@ interface ChatComposerProps {
   onChange: (value: string) => void;
   onSubmit: () => void;
   onCancelQueuedMessage?: (id: string) => void;
+  onSteerQueuedMessage?: (id: string) => void;
   onStopRun?: () => void;
   disabled: boolean;
   pending: boolean;
-  inputMode?: "queue" | "steer";
-  onInputModeChange?: (mode: "queue" | "steer") => void;
   writeMode?: "basic" | "auto_review" | "full_access";
-  queuedMessages?: Array<{ id: string; text: string; status: string }>;
+  queuedMessages?: Array<{ id: string; text: string; status: string; error?: string | null }>;
 }
 
 export function ChatComposer({
@@ -21,11 +20,10 @@ export function ChatComposer({
   onChange,
   onSubmit,
   onCancelQueuedMessage,
+  onSteerQueuedMessage,
   onStopRun,
   disabled,
   pending,
-  inputMode = "queue",
-  onInputModeChange,
   writeMode = "basic",
   queuedMessages = [],
 }: ChatComposerProps) {
@@ -63,9 +61,7 @@ export function ChatComposer({
 
   const buttonLabel = pending
     ? value.trim()
-      ? inputMode === "steer"
-        ? "Steer"
-        : "Queue"
+      ? "Queue"
       : writeMode === "auto_review"
         ? "Working…"
         : "Working…"
@@ -81,11 +77,15 @@ export function ChatComposer({
               <span className="composer-queue-order">{index + 1}</span>
               <span className="composer-queue-text">{item.text}</span>
               <span className={`composer-queue-status composer-queue-status-${item.status}`}>{item.status}</span>
+              <button type="button" onClick={() => onSteerQueuedMessage?.(item.id)} aria-label="Steer current run with queued message">
+                Steer
+              </button>
               {item.status === "queued" ? (
                 <button type="button" onClick={() => onCancelQueuedMessage?.(item.id)} aria-label="Cancel queued message">
                   Cancel
                 </button>
               ) : null}
+              {item.error ? <span className="composer-queue-error">{item.error}</span> : null}
             </div>
           ))}
         </div>
@@ -105,22 +105,6 @@ export function ChatComposer({
             <span className="composer-hint">{hint}</span>
             {pending ? (
               <div className="composer-run-controls" aria-label="Active run controls">
-                <label>
-                  <input
-                    type="radio"
-                    checked={inputMode === "queue"}
-                    onChange={() => onInputModeChange?.("queue")}
-                  />
-                  Queue for next turn
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    checked={inputMode === "steer"}
-                    onChange={() => onInputModeChange?.("steer")}
-                  />
-                  Steer current run
-                </label>
                 <button type="button" className="composer-stop-btn" onClick={onStopRun}>
                   Stop
                 </button>

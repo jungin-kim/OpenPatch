@@ -2133,12 +2133,6 @@ select {
   color: var(--muted);
 }
 
-.composer-run-controls label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
 .composer-stop-btn {
   border: 1px solid rgba(192, 57, 43, 0.35);
   border-radius: 999px;
@@ -2167,7 +2161,7 @@ select {
 
 .composer-queue-item {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 8px;
   font-size: 0.76rem;
@@ -2195,6 +2189,12 @@ select {
   color: var(--foreground);
   cursor: pointer;
   padding: 3px 7px;
+}
+
+.composer-queue-error {
+  grid-column: 2 / -1;
+  color: #c0392b;
+  font-size: 0.72rem;
 }
 
 /* ── Markdown message body ────────────────────────── */
