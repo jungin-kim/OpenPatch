@@ -190,8 +190,10 @@ class FileWriteRequest(BaseModel):
 
 class CommandRunRequest(BaseModel):
     project_path: str
-    command: str = Field(..., description="Shell command executed with `sh -lc`.")
+    command: str = Field(..., description="Command parsed into argv and executed through RepoOperator command policy.")
     timeout_seconds: int | None = Field(default=None, ge=1, le=600)
+    approval_id: str | None = None
+    remember_for_session: bool = False
 
     @field_validator("project_path")
     @classmethod
@@ -239,6 +241,8 @@ class GitBranchCreateRequest(BaseModel):
     branch: str
     from_ref: str = "HEAD"
     checkout: bool = True
+    approval_id: str | None = None
+    remember_for_session: bool = False
 
     @field_validator("project_path", "branch", "from_ref")
     @classmethod
@@ -254,6 +258,9 @@ class GitCommitRequest(BaseModel):
     project_path: str
     message: str
     stage_all: bool = True
+    approval_id: str | None = None
+    stage_approval_id: str | None = None
+    remember_for_session: bool = False
 
     @field_validator("project_path")
     @classmethod
@@ -274,6 +281,8 @@ class GitPushRequest(BaseModel):
     remote: str = "origin"
     set_upstream: bool = True
     git_provider: str | None = None
+    approval_id: str | None = None
+    remember_for_session: bool = False
 
     @field_validator("project_path", "branch", "remote")
     @classmethod
@@ -304,6 +313,8 @@ class GitMergeRequestCreateRequest(BaseModel):
     target_branch: str
     title: str
     description: str | None = None
+    approval_id: str | None = None
+    remember_for_session: bool = False
 
     @field_validator("project_path")
     @classmethod
@@ -458,6 +469,8 @@ class PermissionModeRequest(BaseModel):
 class GitCheckoutRequest(BaseModel):
     project_path: str
     branch: str
+    approval_id: str | None = None
+    remember_for_session: bool = False
 
     @field_validator("project_path", "branch")
     @classmethod

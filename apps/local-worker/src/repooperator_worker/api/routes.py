@@ -1,7 +1,3 @@
-import time
-import json
-from threading import Thread
-
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -45,10 +41,18 @@ from repooperator_worker.schemas import (
     ThreadUpsertRequest,
 )
 from repooperator_worker.services.edit_service import propose_file_edit
-from repooperator_worker.services.agent_service import run_agent_task
-from repooperator_worker.services.agent_orchestration_graph import stream_agent_orchestration_graph
+from repooperator_worker.services.agent_run_coordinator import (
+    cancel_queued_message,
+    cancel_run,
+    enqueue_message,
+    get_active_run,
+    list_events,
+    list_queue,
+    start_run,
+    steer_run,
+    stream_run,
+)
 from repooperator_worker.services.apply_summary_service import generate_apply_summary
-from repooperator_worker.services.command_runner import run_command
 from repooperator_worker.services.command_service import (
     list_command_approvals,
     preview_command,
@@ -90,21 +94,11 @@ from repooperator_worker.services.composio_service import (
     list_composio_toolkits,
 )
 from repooperator_worker.services.event_service import (
-    append_run_event,
-    complete_active_run,
-    get_active_runs,
     get_run,
-    list_run_events,
-    new_run_id,
-    record_agent_run,
     record_event,
-    record_run_steering,
-    request_run_cancellation,
-    start_active_run,
 )
 from repooperator_worker.services.memory_service import (
     list_memory_items,
-    maybe_record_from_agent_run,
     record_applied_file_write,
 )
 from repooperator_worker.services.skills_service import discover_skills
@@ -255,7 +249,11 @@ def tools_run(request: dict) -> dict:
     if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
         raise HTTPException(status_code=400, detail="argv must be a list of strings.")
     try:
-        return run_tool(argv, confirmed=bool(request.get("confirmed")))
+        return run_tool(
+            argv,
+            confirmed=bool(request.get("confirmed") or request.get("remember_for_session")),
+            approval_id=request.get("approval_id"),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -266,7 +264,7 @@ def tools_run(request: dict) -> dict:
 def commands_preview(request: dict) -> dict:
     argv = request.get("argv") or request.get("command")
     try:
-        return preview_command(argv, reason=request.get("reason"))
+        return preview_command(argv, reason=request.get("reason"), project_path=request.get("project_path"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -296,6 +294,7 @@ def commands_run(request: dict) -> dict:
             approval_id=request.get("approval_id"),
             remember_for_session=bool(request.get("remember_for_session")),
             reason=request.get("reason"),
+            project_path=request.get("project_path"),
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -406,7 +405,24 @@ def fs_write(request: FileWriteRequest) -> FileWriteResponse:
 @router.post("/cmd/run", response_model=CommandRunResponse)
 def cmd_run(request: CommandRunRequest) -> CommandRunResponse:
     try:
-        return run_command(request)
+        result = run_command_with_policy(
+            request.command,
+            approval_id=getattr(request, "approval_id", None),
+            remember_for_session=bool(getattr(request, "remember_for_session", False)),
+            project_path=request.project_path,
+            reason="Compatibility command route. Commands still use RepoOperator command approval policy.",
+        )
+        return CommandRunResponse(
+            project_path=request.project_path,
+            command=result.get("display_command") or request.command,
+            timeout_seconds=request.timeout_seconds or get_settings().default_command_timeout_seconds,
+            exit_code=result.get("exit_code"),
+            stdout=result.get("stdout", ""),
+            stderr=result.get("stderr", ""),
+            timed_out=False,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -437,6 +453,8 @@ def git_branches(project_path: str) -> GitBranchListResponse:
 def git_checkout(request: GitCheckoutRequest) -> GitCheckoutResponse:
     try:
         return checkout_branch(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -447,6 +465,8 @@ def git_checkout(request: GitCheckoutRequest) -> GitCheckoutResponse:
 def git_branch(request: GitBranchCreateRequest) -> GitBranchCreateResponse:
     try:
         return create_branch(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -457,6 +477,8 @@ def git_branch(request: GitBranchCreateRequest) -> GitBranchCreateResponse:
 def git_commit(request: GitCommitRequest) -> GitCommitResponse:
     try:
         return commit_changes(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -467,6 +489,8 @@ def git_commit(request: GitCommitRequest) -> GitCommitResponse:
 def git_push(request: GitPushRequest) -> GitPushResponse:
     try:
         return push_branch(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -479,6 +503,8 @@ def git_merge_request(
 ) -> GitMergeRequestCreateResponse:
     try:
         return create_provider_merge_request(request)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -487,143 +513,17 @@ def git_merge_request(
 
 @router.post("/agent/run", response_model=AgentRunResponse)
 def agent_run(request: AgentRunRequest) -> AgentRunResponse:
-    run_id = new_run_id()
-    start = time.perf_counter()
-    response: AgentRunResponse | None = None
-    record_event(
-        event_type="agent_run_started",
-        repo=request.project_path,
-        branch=request.branch,
-        summary=request.task,
-    )
     try:
-        response = run_agent_task(request).model_copy(update={"run_id": run_id})
-        record_event(
-            event_type="agent_classifier",
-            repo=request.project_path,
-            branch=request.branch,
-            status=response.response_type,
-            summary=(
-                f"classifier={response.classifier or 'unknown'} "
-                f"intent={response.intent_classification or 'unknown'} "
-                f"confidence={response.classifier_confidence if response.classifier_confidence is not None else 'unknown'}"
-            ),
-            files=response.resolved_files or response.files_read,
-        )
-        record_event(
-            event_type="agent_validation",
-            repo=request.project_path,
-            branch=request.branch,
-            status=response.validation_status or "unknown",
-            summary=response.graph_path or "",
-            files=response.files_read,
-        )
-        for file_path in response.files_read:
-            record_event(
-                event_type="file_read",
-                repo=request.project_path,
-                branch=request.branch,
-                summary=f"Agent read {file_path}",
-                files=[file_path],
-            )
-        if response.response_type == "change_proposal":
-            record_event(
-                event_type="proposal",
-                repo=request.project_path,
-                branch=request.branch,
-                summary=response.response,
-                files=[response.proposal_relative_path] if response.proposal_relative_path else [],
-            )
-        if response.response_type == "edit_applied":
-            for record in response.edit_archive:
-                record_event(
-                    event_type="file_edited",
-                    repo=request.project_path,
-                    branch=request.branch,
-                    summary=(
-                        f"Edited {record.get('file_path')} "
-                        f"+{record.get('additions', 0)} -{record.get('deletions', 0)}"
-                    ),
-                    files=[record.get("file_path")] if record.get("file_path") else [],
-                )
-            record_event(
-                event_type="final_summary",
-                repo=request.project_path,
-                branch=request.branch,
-                summary=response.response,
-                files=[record.get("file_path") for record in response.edit_archive if record.get("file_path")],
-            )
-        maybe_record_from_agent_run(request, response)
-        return response
+        return start_run(request, stream=False)
     except ValueError as exc:
-        record_agent_run(
-            run_id=run_id,
-            request=request,
-            response=response,
-            status="error",
-            latency_ms=int((time.perf_counter() - start) * 1000),
-            error=str(exc),
-        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
-        record_agent_run(
-            run_id=run_id,
-            request=request,
-            response=response,
-            status="error",
-            latency_ms=int((time.perf_counter() - start) * 1000),
-            error=str(exc),
-        )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    finally:
-        if response is not None:
-            record_agent_run(
-                run_id=run_id,
-                request=request,
-                response=response,
-                status="ok",
-                latency_ms=int((time.perf_counter() - start) * 1000),
-            )
 
 
 @router.post("/agent/run/stream")
 def agent_run_stream(request: AgentRunRequest) -> StreamingResponse:
-    run_id = new_run_id()
-    start_active_run(run_id=run_id, request=request, thread_id=request.thread_id)
-
-    def worker() -> None:
-        final_result: dict | None = None
-        try:
-            for event_data in stream_agent_orchestration_graph(request, run_id=run_id):
-                try:
-                    event = json.loads(event_data)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("type") == "final_message":
-                    final_result = event.get("result")
-                    if isinstance(final_result, dict):
-                        final_result = {**final_result, "activity_events": list_run_events(run_id)}
-                        event = {**event, "result": final_result}
-                append_run_event(run_id, event)
-            complete_active_run(run_id=run_id, status="completed", final_result=final_result)
-        except Exception as exc:
-            append_run_event(run_id, {"type": "error", "message": str(exc), "status": "failed"})
-            complete_active_run(run_id=run_id, status="failed", error=str(exc))
-
-    Thread(target=worker, daemon=True).start()
-
-    def generate():
-        last_sequence = 0
-        while True:
-            events = list_run_events(run_id, after_sequence=last_sequence)
-            for event in events:
-                last_sequence = int(event.get("sequence") or last_sequence)
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            run = get_run(run_id)
-            if run and run.get("status") != "running" and not events:
-                break
-            time.sleep(0.25)
-        yield "data: [DONE]\n\n"
+    _, generate = stream_run(request)
 
     return StreamingResponse(
         generate(),
@@ -638,7 +538,7 @@ def agent_run_stream(request: AgentRunRequest) -> StreamingResponse:
 
 @router.get("/agent/runs/active")
 def agent_runs_active(thread_id: str | None = None) -> dict:
-    return {"runs": get_active_runs(thread_id=thread_id)}
+    return {"runs": get_active_run(thread_id=thread_id)}
 
 
 @router.get("/agent/runs/{run_id}")
@@ -651,29 +551,55 @@ def agent_run_lookup(run_id: str) -> dict:
 
 @router.get("/agent/runs/{run_id}/events")
 def agent_run_events(run_id: str, after_sequence: int = 0) -> dict:
-    return {"events": list_run_events(run_id, after_sequence=after_sequence)}
+    return {"events": list_events(run_id, after_sequence=after_sequence)}
 
 
 @router.post("/agent/runs/{run_id}/steer")
 def agent_run_steer(run_id: str, payload: dict) -> dict:
-    run = get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found.")
-    content = str(payload.get("content") or "").strip()
-    if not content:
-        raise HTTPException(status_code=400, detail="Steering content must not be empty.")
-    event = record_run_steering(run_id, content)
-    return {"status": "accepted", "event": event}
+    try:
+        return steer_run(
+            run_id,
+            content=payload.get("content"),
+            queued_message_id=payload.get("queued_message_id"),
+        )
+    except ValueError as exc:
+        status_code = 404 if "not found" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.post("/agent/runs/{run_id}/cancel")
 def agent_run_cancel(run_id: str) -> dict:
-    run = get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found.")
-    if run.get("status") not in {"running", "cancelling"}:
-        return {"status": run.get("status"), "run": run}
-    return {"status": "cancelled", "run": request_run_cancellation(run_id)}
+    try:
+        return {"status": "cancelled", "run": cancel_run(run_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/agent/queue")
+def agent_queue_create(payload: dict) -> dict:
+    try:
+        item = enqueue_message(
+            payload.get("thread_id"),
+            str(payload.get("repo") or payload.get("project_path") or ""),
+            payload.get("branch"),
+            str(payload.get("content") or ""),
+        )
+        return {"item": item}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/agent/queue")
+def agent_queue_list(thread_id: str | None = None, repo: str | None = None, branch: str | None = None) -> dict:
+    return {"items": list_queue(thread_id=thread_id, repo=repo, branch=branch)}
+
+
+@router.delete("/agent/queue/{queue_id}")
+def agent_queue_cancel(queue_id: str) -> dict:
+    try:
+        return {"item": cancel_queued_message(queue_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/agent/apply-summary")

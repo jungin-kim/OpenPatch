@@ -10,7 +10,6 @@ from repooperator_worker.config import (
     PERMISSION_MODE_BASIC,
     PERMISSION_MODE_FULL_ACCESS,
     WRITE_MODE_AUTO_APPLY,
-    WRITE_MODE_WRITE_WITH_APPROVAL,
     get_settings,
 )
 from repooperator_worker.schemas import PermissionModeResponse
@@ -46,7 +45,7 @@ def permission_profile(mode: str | None = None) -> dict[str, Any]:
     if selected == PERMISSION_MODE_AUTO_REVIEW:
         return {
             "mode": PERMISSION_MODE_AUTO_REVIEW,
-            "write_mode": WRITE_MODE_WRITE_WITH_APPROVAL,
+            "write_mode": WRITE_MODE_AUTO_APPLY,
             "sandbox": {
                 "scope": "repository",
                 "allowFileRead": True,
@@ -70,7 +69,7 @@ def permission_profile(mode: str | None = None) -> dict[str, Any]:
         }
     return {
         "mode": PERMISSION_MODE_BASIC,
-        "write_mode": WRITE_MODE_WRITE_WITH_APPROVAL,
+        "write_mode": WRITE_MODE_AUTO_APPLY,
         "sandbox": {
             "scope": "repository",
             "allowFileRead": True,

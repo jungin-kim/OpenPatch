@@ -16,6 +16,7 @@ from repooperator_worker.schemas import (
 )
 from repooperator_worker.schemas.responses import GitBranchListResponse, LocalBranchSummary
 from repooperator_worker.services.common import ensure_git_repository, resolve_project_path
+from repooperator_worker.services.command_service import run_command_with_policy
 from repooperator_worker.services.git_providers import ProviderGitOptions, resolve_provider_git_options
 from repooperator_worker.services.review_providers import (
     MergeRequestProviderContext,
@@ -69,13 +70,15 @@ def checkout_branch(request: GitCheckoutRequest) -> GitCheckoutResponse:
     if check.returncode != 0:
         raise ValueError(f"Branch '{request.branch}' does not exist locally.")
 
-    result = run_subprocess(
-        command=["git", "checkout", request.branch],
-        cwd=repo_path,
-        timeout_seconds=60,
+    result = _run_approved_git_command(
+        ["git", "checkout", request.branch],
+        request.project_path,
+        approval_id=request.approval_id,
+        remember_for_session=request.remember_for_session,
+        reason="Switching branches changes repository state and requires approval.",
     )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"Unable to checkout branch '{request.branch}'")
+    if result["exit_code"] != 0:
+        raise RuntimeError(result["stderr"].strip() or f"Unable to checkout branch '{request.branch}'")
 
     head_sha: str | None = None
     try:
@@ -126,9 +129,15 @@ def create_branch(request: GitBranchCreateRequest) -> GitBranchCreateResponse:
     if not request.checkout:
         command = ["git", "branch", request.branch, request.from_ref]
 
-    result = run_subprocess(command=command, cwd=repo_path, timeout_seconds=60)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"Unable to create branch '{request.branch}'")
+    result = _run_approved_git_command(
+        command,
+        request.project_path,
+        approval_id=request.approval_id,
+        remember_for_session=request.remember_for_session,
+        reason="Creating a branch changes repository state and requires approval.",
+    )
+    if result["exit_code"] != 0:
+        raise RuntimeError(result["stderr"].strip() or f"Unable to create branch '{request.branch}'")
 
     head_sha = _git_stdout(["git", "rev-parse", request.branch], repo_path)
     return GitBranchCreateResponse(
@@ -149,13 +158,15 @@ def commit_changes(request: GitCommitRequest) -> GitCommitResponse:
     ensure_git_repository(repo_path)
 
     if request.stage_all:
-        add_result = run_subprocess(
-            command=["git", "add", "--all"],
-            cwd=repo_path,
-            timeout_seconds=60,
+        add_result = _run_approved_git_command(
+            ["git", "add", "--all"],
+            request.project_path,
+            approval_id=request.stage_approval_id,
+            remember_for_session=request.remember_for_session,
+            reason="Staging changes modifies the git index and requires approval.",
         )
-        if add_result.returncode != 0:
-            raise RuntimeError(add_result.stderr.strip() or "git add failed")
+        if add_result["exit_code"] != 0:
+            raise RuntimeError(add_result["stderr"].strip() or "git add failed")
 
     status = run_subprocess(
         command=["git", "diff", "--cached", "--quiet"],
@@ -165,13 +176,15 @@ def commit_changes(request: GitCommitRequest) -> GitCommitResponse:
     if status.returncode == 0:
         raise ValueError("There are no staged changes to commit.")
 
-    result = run_subprocess(
-        command=["git", "commit", "-m", request.message],
-        cwd=repo_path,
-        timeout_seconds=120,
+    result = _run_approved_git_command(
+        ["git", "commit", "-m", request.message],
+        request.project_path,
+        approval_id=request.approval_id,
+        remember_for_session=request.remember_for_session,
+        reason="Creating a commit changes repository history and requires approval.",
     )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "git commit failed")
+    if result["exit_code"] != 0:
+        raise RuntimeError(result["stderr"].strip() or "git commit failed")
 
     commit_sha = _git_stdout(["git", "rev-parse", "HEAD"], repo_path)
     branch = _git_stdout(["git", "branch", "--show-current"], repo_path) or "HEAD"
@@ -194,13 +207,15 @@ def push_branch(request: GitPushRequest) -> GitPushResponse:
         command.append("--set-upstream")
     command.extend([request.remote, request.branch])
 
-    result = run_subprocess(
-        command=_build_git_command(command, provider_options),
-        cwd=repo_path,
-        timeout_seconds=settings.git_push_timeout_seconds,
+    result = _run_approved_git_command(
+        _build_git_command(command, provider_options),
+        request.project_path,
+        approval_id=request.approval_id,
+        remember_for_session=request.remember_for_session,
+        reason="Pushing changes contacts a remote and requires approval.",
     )
-    if result.returncode != 0:
-        raise RuntimeError(_summarize_remote_failure(result.stderr, result.stdout))
+    if result["exit_code"] != 0:
+        raise RuntimeError(_summarize_remote_failure(result["stderr"], result["stdout"]))
 
     return GitPushResponse(
         project_path=request.project_path,
@@ -213,6 +228,15 @@ def push_branch(request: GitPushRequest) -> GitPushResponse:
 def create_provider_merge_request(
     request: GitMergeRequestCreateRequest,
 ) -> GitMergeRequestCreateResponse:
+    from repooperator_worker.services.command_service import preview_command
+
+    preview = preview_command(
+        ["glab", "mr", "create"],
+        project_path=request.project_path,
+        reason="Creating a merge request changes remote review state and requires approval.",
+    )
+    if request.approval_id != preview.get("approval_id"):
+        raise PermissionError("Creating a merge request requires command/action approval.")
     return create_merge_request(
         request,
         MergeRequestProviderContext(settings=get_settings()),
@@ -256,3 +280,23 @@ def _git_stdout(command: list[str], repo_path) -> str:
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or f"{' '.join(command)} failed")
     return result.stdout.strip()
+
+
+def _run_approved_git_command(
+    command: list[str],
+    project_path: str,
+    *,
+    approval_id: str | None,
+    remember_for_session: bool,
+    reason: str,
+) -> dict:
+    try:
+        return run_command_with_policy(
+            command,
+            approval_id=approval_id,
+            remember_for_session=remember_for_session,
+            project_path=project_path,
+            reason=reason,
+        )
+    except PermissionError as exc:
+        raise PermissionError(str(exc)) from exc

@@ -23,9 +23,12 @@ READ_ONLY_PREFIXES = {
     ("git", "branch"),
     ("git", "diff"),
     ("git", "log"),
+    ("git", "remote"),
+    ("git", "rev-parse"),
     ("glab", "mr", "list"),
     ("glab", "mr", "view"),
     ("glab", "pipeline", "list"),
+    ("glab", "auth", "status"),
 }
 
 APPROVAL_PREFIXES = {
@@ -38,6 +41,7 @@ APPROVAL_PREFIXES = {
     ("git", "add"),
     ("git", "commit"),
     ("git", "push"),
+    ("git", "branch"),
     ("glab", "mr", "create"),
     ("glab", "mr", "update"),
 }
@@ -68,8 +72,13 @@ class CommandPreview:
     pattern: str
 
 
-def preview_command(argv: list[str] | str, *, reason: str | None = None) -> dict[str, Any]:
-    preview = _classify_command(_parse_argv(argv), reason=reason)
+def preview_command(
+    argv: list[str] | str,
+    *,
+    reason: str | None = None,
+    project_path: str | None = None,
+) -> dict[str, Any]:
+    preview = _classify_command(_parse_argv(argv), reason=reason, project_path=project_path)
     record_event(
         event_type="command_preview",
         repo=preview.cwd,
@@ -88,8 +97,9 @@ def run_command_with_policy(
     approval_id: str | None = None,
     remember_for_session: bool = False,
     reason: str | None = None,
+    project_path: str | None = None,
 ) -> dict[str, Any]:
-    preview = _classify_command(_parse_argv(argv), reason=reason)
+    preview = _classify_command(_parse_argv(argv), reason=reason, project_path=project_path)
     if preview.blocked:
         record_event(
             event_type="command_denied",
@@ -154,9 +164,14 @@ def revoke_command_approval(approval_id: str) -> dict[str, Any]:
     return {"revoked": bool(removed), "approval_id": approval_id}
 
 
-def _classify_command(argv: list[str], *, reason: str | None = None) -> CommandPreview:
+def _classify_command(
+    argv: list[str],
+    *,
+    reason: str | None = None,
+    project_path: str | None = None,
+) -> CommandPreview:
     active = get_active_repository()
-    repo_path = resolve_project_path(active.project_path) if active else None
+    repo_path = resolve_project_path(project_path) if project_path else (resolve_project_path(active.project_path) if active else None)
     display = shlex.join(argv)
     profile = permission_profile()
     pattern = _pattern_for(argv)
@@ -171,12 +186,13 @@ def _classify_command(argv: list[str], *, reason: str | None = None) -> CommandP
         return _preview(approval_id, argv, display, repo_path, "high", False, False, True, True, True, "Commands that access paths outside the active repository are blocked in Basic permissions and Auto review.", pattern)
     if _has_secret_dump(argv):
         return _preview(approval_id, argv, display, repo_path, "high", False, False, False, True, True, "Commands that may expose secrets are blocked.", pattern)
-    if _matches(argv, DANGEROUS_PREFIXES):
+    policy_argv = _policy_argv(argv)
+    if _matches(policy_argv, DANGEROUS_PREFIXES):
         return _preview(approval_id, argv, display, repo_path, "high", False, False, False, True, True, "This destructive command is blocked by default.", pattern)
 
-    needs_network = argv[0] in {"curl", "wget", "brew"} or tuple(argv[:2]) in {("npm", "install"), ("pip", "install")}
-    read_only = _matches(argv, READ_ONLY_PREFIXES)
-    needs_approval = _matches(argv, APPROVAL_PREFIXES) or needs_network
+    needs_network = policy_argv[0] in {"curl", "wget", "brew"} or tuple(policy_argv[:2]) in {("npm", "install"), ("pip", "install")}
+    read_only = _is_read_only_command(policy_argv)
+    needs_approval = _matches(policy_argv, APPROVAL_PREFIXES) or needs_network
     if read_only:
         needs_approval = False
     if profile["mode"] == PERMISSION_MODE_FULL_ACCESS and not needs_network:
@@ -251,7 +267,38 @@ def _matches(argv: list[str], prefixes: set[tuple[str, ...]]) -> bool:
     return any(tuple(lowered[: len(prefix)]) == prefix for prefix in prefixes)
 
 
+def _is_read_only_command(argv: list[str]) -> bool:
+    lowered = [part.lower() for part in argv]
+    if not lowered:
+        return False
+    if tuple(lowered[:1]) in {("pwd",), ("ls",), ("find",)}:
+        return True
+    if tuple(lowered[:2]) in {
+        ("git", "status"),
+        ("git", "diff"),
+        ("git", "log"),
+        ("git", "remote"),
+        ("git", "rev-parse"),
+    }:
+        return True
+    if tuple(lowered[:3]) == ("glab", "auth", "status"):
+        return True
+    if tuple(lowered[:3]) in {
+        ("glab", "mr", "list"),
+        ("glab", "mr", "view"),
+        ("glab", "pipeline", "list"),
+    }:
+        return True
+    if tuple(lowered[:2]) == ("git", "branch"):
+        if len(lowered) == 2:
+            return True
+        safe_flags = {"--show-current", "--list", "--format=%(refname:short)"}
+        return all(part in safe_flags or part.startswith("--format=") for part in lowered[2:])
+    return False
+
+
 def _pattern_for(argv: list[str]) -> str:
+    argv = _policy_argv(argv)
     if not argv:
         return ""
     if argv[0] in {"git", "glab"}:
@@ -284,6 +331,20 @@ def _touches_outside_repo(argv: list[str], repo_path: str) -> bool:
         if part.startswith("..") or "/../" in part:
             return True
     return False
+
+
+def _policy_argv(argv: list[str]) -> list[str]:
+    if not argv or argv[0] != "git":
+        return argv
+    cleaned = ["git"]
+    index = 1
+    while index < len(argv):
+        if argv[index] == "-c" and index + 1 < len(argv):
+            index += 2
+            continue
+        cleaned.extend(argv[index:])
+        break
+    return cleaned
 
 
 def _redact(text: str) -> str:

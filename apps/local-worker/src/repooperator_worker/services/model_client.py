@@ -1,6 +1,7 @@
 import json
 import socket
 from dataclasses import dataclass
+from typing import Iterator
 from urllib import error, request
 
 from repooperator_worker.config import get_settings
@@ -69,6 +70,41 @@ class OpenAICompatibleModelClient:
             raise RuntimeError("Model API response was empty.")
         return response_text
 
+    def stream_text(self, prompt: ModelGenerationRequest) -> Iterator[dict[str, str]]:
+        payload = {**self._build_payload(prompt), "stream": True}
+        http_request = request.Request(
+            url=self._chat_completions_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._build_headers(),
+            method="POST",
+        )
+        try:
+            with request.urlopen(
+                http_request,
+                timeout=self._settings.model_request_timeout_seconds,
+            ) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line.removeprefix("data:").strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = _extract_stream_delta(chunk)
+                    if delta:
+                        yield delta
+        except (error.HTTPError, error.URLError, TimeoutError, socket.timeout):
+            text = self.generate_text(prompt)
+            reasoning, content = split_visible_reasoning(text)
+            if reasoning:
+                yield {"type": "reasoning_delta", "delta": reasoning}
+            if content:
+                yield {"type": "assistant_delta", "delta": content}
+
     @property
     def _chat_completions_url(self) -> str:
         base_url = self._settings.openai_base_url
@@ -109,3 +145,31 @@ def _extract_response_text(response_payload: dict) -> str:
         return content or reasoning
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError("Model API response did not contain a chat completion message.") from exc
+
+
+def _extract_stream_delta(chunk: dict) -> dict[str, str] | None:
+    try:
+        delta = chunk["choices"][0].get("delta") or {}
+    except (KeyError, IndexError, TypeError):
+        return None
+    reasoning = delta.get("reasoning_content") or delta.get("thinking")
+    if reasoning:
+        return {"type": "reasoning_delta", "delta": str(reasoning)}
+    content = delta.get("content")
+    if content:
+        return {"type": "assistant_delta", "delta": str(content)}
+    return None
+
+
+def split_visible_reasoning(text: str) -> tuple[str, str]:
+    stripped = text or ""
+    if "<think>" not in stripped.lower():
+        return "", stripped
+    lowered = stripped.lower()
+    start = lowered.find("<think>")
+    end = lowered.find("</think>", start)
+    if start == -1 or end == -1:
+        return "", stripped.replace("<think>", "").replace("</think>", "")
+    reasoning = stripped[start + len("<think>") : end].strip()
+    content = (stripped[:start] + stripped[end + len("</think>") :]).strip()
+    return reasoning, content

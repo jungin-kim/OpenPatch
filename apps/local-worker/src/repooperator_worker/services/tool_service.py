@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from repooperator_worker.config import WRITE_MODE_AUTO_APPLY, get_settings
 from repooperator_worker.services.active_repository import get_active_repository
 from repooperator_worker.services.common import resolve_project_path
 from repooperator_worker.services.event_service import record_event
+from repooperator_worker.services.command_service import preview_command, run_command_with_policy
 from repooperator_worker.services.permissions_service import permission_profile
 
 READ_ONLY_COMMANDS = {
@@ -67,7 +66,7 @@ def get_tools_status() -> dict[str, Any]:
 
 def preview_tool_run(argv: list[str]) -> dict[str, Any]:
     command = _classify(argv)
-    return {
+    payload = {
         "argv": command.argv,
         "kind": command.kind,
         "requires_confirmation": command.requires_confirmation,
@@ -75,40 +74,42 @@ def preview_tool_run(argv: list[str]) -> dict[str, Any]:
         "reason": command.reason,
         "cwd": str(_active_repo_path()) if _active_repo_path() else None,
     }
+    if command.allowed:
+        payload["command_preview"] = preview_command(command.argv, reason=command.reason)
+    return payload
 
 
-def run_tool(argv: list[str], confirmed: bool = False) -> dict[str, Any]:
+def run_tool(argv: list[str], confirmed: bool = False, approval_id: str | None = None) -> dict[str, Any]:
     command = _classify(argv)
     repo_path = _active_repo_path()
     if repo_path is None:
         raise ValueError("Open a repository before running local tools.")
     if not command.allowed:
         raise ValueError(command.reason)
-    if command.requires_confirmation and not confirmed:
+    if command.requires_confirmation and not approval_id:
         raise ValueError("This command requires explicit confirmation before it can run.")
-    result = subprocess.run(
+    result = run_command_with_policy(
         command.argv,
-        cwd=repo_path,
-        text=True,
-        capture_output=True,
-        timeout=60,
-        check=False,
+        approval_id=approval_id,
+        remember_for_session=confirmed,
+        project_path=str(repo_path),
+        reason=command.reason,
     )
     record_event(
         event_type="tool_run",
         repo=str(repo_path),
-        status="ok" if result.returncode == 0 else "error",
+        status=result.get("status", "ok"),
         summary=" ".join(command.argv),
         tool=command.argv[0],
         command=command.argv,
-        error=result.stderr[:500] if result.returncode else None,
+        error=(result.get("stderr") or "")[:500] if result.get("exit_code") else None,
     )
     return {
         "argv": command.argv,
         "cwd": str(repo_path),
-        "returncode": result.returncode,
-        "stdout": result.stdout[-12_000:],
-        "stderr": result.stderr[-4_000:],
+        "returncode": result.get("exit_code"),
+        "stdout": result.get("stdout", ""),
+        "stderr": result.get("stderr", ""),
     }
 
 
@@ -126,8 +127,6 @@ def _classify(argv: list[str]) -> ToolCommand:
         return ToolCommand(clean, "read-only", False, True, "Safe read-only command.")
     for prefix in MUTATING_PREFIXES:
         if tuple(clean[: len(prefix)]) == prefix:
-            if get_settings().write_mode != WRITE_MODE_AUTO_APPLY:
-                return ToolCommand(clean, "mutating", True, False, "Mutating tool commands require Full access.")
             return ToolCommand(clean, "mutating", True, True, "Mutating command requires explicit confirmation.")
     return ToolCommand(clean, "blocked", False, False, "Command is not in RepoOperator's allowlist.")
 
@@ -141,6 +140,8 @@ def _active_repo_path() -> Path | None:
 
 def _version(tool: str) -> str | None:
     try:
+        import subprocess
+
         result = subprocess.run([tool, "--version"], text=True, capture_output=True, timeout=5, check=False)
     except OSError:
         return None
@@ -150,6 +151,8 @@ def _version(tool: str) -> str | None:
 def _auth_status(tool: str) -> str:
     if tool == "glab":
         try:
+            import subprocess
+
             result = subprocess.run(["glab", "auth", "status"], text=True, capture_output=True, timeout=8, check=False)
         except OSError:
             return "unknown"

@@ -318,14 +318,14 @@ class WorkerContractTests(unittest.TestCase):
                 settings = get_settings()
 
             self.assertEqual(payload.mode, "auto_review")
-            self.assertEqual(payload.write_mode, "write-with-approval")
-            self.assertEqual(settings.write_mode, "write-with-approval")
+            self.assertEqual(payload.write_mode, "auto-apply")
+            self.assertEqual(settings.write_mode, "auto-apply")
             self.assertEqual(settings.permission_mode, "auto_review")
             updated = json.loads(config_path.read_text(encoding="utf-8"))
             self.assertEqual(updated["model"]["model"], "qwen2.5-coder:7b")
             self.assertEqual(updated["gitProvider"]["token"], "secret-token")
             self.assertEqual(updated["permissions"]["mode"], "auto_review")
-            self.assertEqual(updated["permissions"]["writeMode"], "write-with-approval")
+            self.assertEqual(updated["permissions"]["writeMode"], "auto-apply")
 
     def test_repository_sources_are_loaded_as_list_with_default_separate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:

@@ -2,7 +2,6 @@ import json
 import re
 from pathlib import Path
 
-from repooperator_worker.config import WRITE_MODE_AUTO_APPLY, WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
 from repooperator_worker.schemas import AgentProposeFileRequest, AgentProposeFileResponse
 from repooperator_worker.services.common import (
     ensure_git_repository,
@@ -14,16 +13,16 @@ from repooperator_worker.services.model_client import (
     ModelGenerationRequest,
     OpenAICompatibleModelClient,
 )
+from repooperator_worker.services.permissions_service import permission_profile
 
 MAX_FILE_CHARS = 12_000
 
 
 def propose_file_edit(request: AgentProposeFileRequest) -> AgentProposeFileResponse:
-    settings = get_settings()
-    if settings.write_mode not in {WRITE_MODE_WRITE_WITH_APPROVAL, WRITE_MODE_AUTO_APPLY}:
+    profile = permission_profile()
+    if not profile["sandbox"].get("allowFileWrite"):
         raise ValueError(
-            "Write operations are disabled. "
-            "Use Basic permissions or Auto review to enable repository-scoped change proposals."
+            "File edits are disabled by the current permission profile."
         )
 
     repo_path = resolve_project_path(request.project_path)

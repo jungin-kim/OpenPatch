@@ -17,11 +17,7 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from repooperator_worker.config import (
-    WRITE_MODE_AUTO_APPLY,
-    WRITE_MODE_WRITE_WITH_APPROVAL,
-    get_settings,
-)
+from repooperator_worker.config import get_settings
 from repooperator_worker.schemas import (
     AgentProposeFileRequest,
     AgentRunRequest,
@@ -1103,7 +1099,7 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
         if install_cmd:
             from repooperator_worker.services.command_service import preview_command
 
-            preview = preview_command(install_cmd, reason=install_reason)
+            preview = preview_command(install_cmd, project_path=request.project_path, reason=install_reason)
             result_response = _base_response(
                 request,
                 response=(
@@ -1142,17 +1138,20 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
             )
         return {"result": result_response, "graph_path": "local_tool_request"}
 
-    # glab is installed — check auth status
+    # glab is installed — check auth status through the command policy path.
     try:
-        import subprocess
+        from repooperator_worker.services.command_service import run_command_with_policy
 
-        auth_check = subprocess.run(
+        auth_check_payload = run_command_with_policy(
             ["glab", "auth", "status"],
-            cwd=_get_repo_cwd(request),
-            text=True,
-            capture_output=True,
-            timeout=8,
-            check=False,
+            project_path=request.project_path,
+            reason="Check GitLab CLI authentication status without exposing token values.",
+        )
+        auth_check = subprocess.CompletedProcess(
+            ["glab", "auth", "status"],
+            int(auth_check_payload.get("exit_code") or 0),
+            auth_check_payload.get("stdout", ""),
+            auth_check_payload.get("stderr", ""),
         )
         if auth_check.returncode != 0:
             host = _detect_git_remote_host(request) or "gitlab.com"
@@ -1169,7 +1168,7 @@ def _run_local_tool_request(state: OrchestrationState) -> dict[str, Any]:
                 **_classifier_debug(state),
             )
             return {"result": result_response, "graph_path": "local_tool_request"}
-    except (OSError, subprocess.TimeoutExpired):
+    except (ValueError, RuntimeError, PermissionError):
         pass
 
     # glab authenticated — run mr list
@@ -1231,15 +1230,12 @@ def _detect_git_remote_host(request: AgentRunRequest) -> str | None:
     if not repo_cwd:
         return None
     try:
-        result = subprocess.run(
+        result = _run_policy_command_as_completed(
             ["git", "remote", "get-url", "origin"],
-            cwd=repo_cwd,
-            text=True,
-            capture_output=True,
-            timeout=5,
-            check=False,
+            request.project_path,
+            reason="Read the repository remote host.",
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (ValueError, RuntimeError, PermissionError):
         return None
     url = (result.stdout or "").strip()
     if not url:
@@ -1419,13 +1415,10 @@ def _plan_git_workflow(state: OrchestrationState) -> dict[str, Any]:
 
 
 def _run_git(repo_path: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
+    result = _run_policy_command_as_completed(
         ["git", *args],
-        cwd=repo_path,
-        text=True,
-        capture_output=True,
-        timeout=20,
-        check=False,
+        str(repo_path),
+        reason=f"Inspect git state with `{shlex.join(['git', *args])}`.",
     )
     try:
         from repooperator_worker.services.event_service import record_event
@@ -1442,6 +1435,23 @@ def _run_git(repo_path: Path, args: list[str]) -> subprocess.CompletedProcess[st
     except Exception:  # noqa: BLE001
         logger.debug("could not record git workflow event", exc_info=True)
     return result
+
+
+def _run_policy_command_as_completed(
+    command: list[str],
+    project_path: str,
+    *,
+    reason: str,
+) -> subprocess.CompletedProcess[str]:
+    from repooperator_worker.services.command_service import run_command_with_policy
+
+    payload = run_command_with_policy(command, project_path=project_path, reason=reason)
+    return subprocess.CompletedProcess(
+        command,
+        int(payload.get("exit_code") or 0),
+        payload.get("stdout", ""),
+        payload.get("stderr", ""),
+    )
 
 
 def _normalize_git_action(value: Any) -> str:
@@ -1498,31 +1508,9 @@ def _propose_commit_message(request: AgentRunRequest, changed_files: list[str], 
 
 
 def _command_preview_for_repo(argv: list[str], repo_path: Path, *, reason: str) -> dict[str, Any]:
-    pattern = " ".join(argv[:3] if argv and argv[0] in {"git", "glab"} else argv[:2])
-    approval_id = "cmd_" + uuid.uuid5(uuid.NAMESPACE_URL, f"{repo_path}:{pattern}").hex[:12]
-    read_only = tuple(part.lower() for part in argv[:2]) in {
-        ("git", "status"),
-        ("git", "diff"),
-        ("git", "log"),
-        ("git", "branch"),
-    }
-    display = shlex.join(argv)
-    return {
-        "type": "command_approval",
-        "approval_id": approval_id,
-        "command": argv,
-        "display_command": display,
-        "cwd": str(repo_path),
-        "risk": "low" if read_only else "medium",
-        "read_only": read_only,
-        "needs_network": argv[:2] in [["git", "push"], ["glab", "mr"]],
-        "touches_outside_repo": False,
-        "needs_approval": not read_only,
-        "blocked": False,
-        "reason": reason,
-        "pattern": pattern,
-        "options": ["yes", "yes_session", "no_explain"],
-    }
+    from repooperator_worker.services.command_service import preview_command
+
+    return preview_command(argv, project_path=str(repo_path), reason=reason)
 
 
 def _format_git_status_response(request: AgentRunRequest, status: subprocess.CompletedProcess[str], stat: subprocess.CompletedProcess[str]) -> str:
@@ -1590,7 +1578,7 @@ def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
     from repooperator_worker.services.command_service import preview_command, run_command_with_policy
 
     command, reason = _command_for_classification(state)
-    preview = preview_command(command, reason=reason)
+    preview = preview_command(command, project_path=request.project_path, reason=reason)
     if preview.get("blocked"):
         result = _base_response(
             request,
@@ -1616,7 +1604,12 @@ def _run_local_command_request(state: OrchestrationState) -> dict[str, Any]:
         )
         return {"result": result, "graph_path": "command_approval"}
     try:
-        command_result = run_command_with_policy(command, approval_id=preview.get("approval_id"))
+        command_result = run_command_with_policy(
+            command,
+            approval_id=preview.get("approval_id"),
+            project_path=request.project_path,
+            reason=reason,
+        )
         response = (
             f"Ran `{command_result.get('display_command')}` in `{command_result.get('cwd')}` "
             f"and exited with {command_result.get('exit_code')}."
@@ -1709,6 +1702,7 @@ def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
     step_results: list[dict[str, Any]] = []
     run_id = str(state.get("run_id") or f"run-{uuid.uuid4().hex[:12]}")
     plan_id = f"plan-{uuid.uuid4().hex[:10]}"
+    steering_notes: list[str] = []
 
     steps = _parse_task_steps_with_llm(state)
     if not steps:
@@ -1731,6 +1725,38 @@ def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
     plan_events.append(plan_created)
 
     for i, step in enumerate(steps):
+        from repooperator_worker.services.agent_run_coordinator import consume_steering, should_cancel
+
+        if should_cancel(run_id):
+            cancel_event = _activity_event(
+                run_id=run_id,
+                phase="Finished",
+                label="Run cancelled",
+                detail="Stopped at a safe checkpoint before the next plan step.",
+                status="failed",
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+            )
+            cancel_event.update({"event_type": "run_cancelled", "plan_id": plan_id})
+            append_run_event(run_id, cancel_event)
+            plan_events.append(cancel_event)
+            break
+        steering = consume_steering(run_id)
+        if steering:
+            steering_text = " ".join(str(item.get("content") or "") for item in steering if item.get("content"))
+            if steering_text:
+                steering_notes.append(steering_text)
+                step["instruction"] = f"{step.get('instruction') or request.task}\n\nSteering instruction: {steering_text}"
+                steering_event = _activity_event(
+                    run_id=run_id,
+                    phase="Planning",
+                    label="Applied steering instruction",
+                    detail=(" ".join(steering_text.split()))[:220],
+                    status="completed",
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                )
+                steering_event.update({"event_type": "steering_applied_to_plan", "plan_id": plan_id})
+                append_run_event(run_id, steering_event)
+                plan_events.append(steering_event)
         step_id = f"{plan_id}-step-{i + 1}"
         elapsed_start = int((time.perf_counter() - started) * 1000)
         started_event = _activity_event(
@@ -1925,6 +1951,17 @@ def _execute_plan_step(
     run_id = str(state.get("run_id") or f"run-{uuid.uuid4().hex[:12]}")
     plan_id = str(state.get("plan_id") or "")
     step_id = str(state.get("step_id") or "")
+    from repooperator_worker.services.agent_run_coordinator import should_cancel
+
+    if should_cancel(run_id):
+        return {
+            "step_index": step.get("step_index", 0),
+            "file": file,
+            "intent": intent,
+            "response": "Run cancelled before this step executed.",
+            "elapsed_ms": 0,
+            "error": "cancelled",
+        }
 
     if intent == "write" and file:
         try:

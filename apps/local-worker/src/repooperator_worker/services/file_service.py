@@ -1,4 +1,3 @@
-from repooperator_worker.config import WRITE_MODE_AUTO_APPLY, WRITE_MODE_WRITE_WITH_APPROVAL, get_settings
 from repooperator_worker.schemas import (
     FileReadRequest,
     FileReadResponse,
@@ -11,6 +10,7 @@ from repooperator_worker.services.common import (
     resolve_project_path,
 )
 from repooperator_worker.services.event_service import record_event
+from repooperator_worker.services.permissions_service import permission_profile
 
 
 def read_text_file(request: FileReadRequest) -> FileReadResponse:
@@ -43,11 +43,10 @@ def read_text_file(request: FileReadRequest) -> FileReadResponse:
 
 
 def write_text_file(request: FileWriteRequest) -> FileWriteResponse:
-    settings = get_settings()
-    if settings.write_mode not in {WRITE_MODE_WRITE_WITH_APPROVAL, WRITE_MODE_AUTO_APPLY}:
+    profile = permission_profile()
+    if not profile["sandbox"].get("allowFileWrite"):
         raise ValueError(
-            "Write operations are disabled. "
-            "Use Basic permissions or Auto review to apply repository-scoped changes."
+            "File writes are disabled by the current permission profile."
         )
 
     repo_path = resolve_project_path(request.project_path)
@@ -55,6 +54,10 @@ def write_text_file(request: FileWriteRequest) -> FileWriteResponse:
 
     if target_path.exists() and not target_path.is_file():
         raise ValueError(f"Target is not a file: {request.relative_path}")
+    if not request.content.strip():
+        raise ValueError("File content must not be empty.")
+    if _looks_like_secret_dump(request.content):
+        raise ValueError("The proposed file content appears to contain secret material and was blocked.")
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     encoded_content = request.content.encode(request.encoding)
@@ -73,3 +76,15 @@ def write_text_file(request: FileWriteRequest) -> FileWriteResponse:
         files=[request.relative_path],
     )
     return response
+
+
+def _looks_like_secret_dump(content: str) -> bool:
+    lowered = content.lower()
+    high_risk_markers = (
+        "-----begin private key-----",
+        "aws_secret_access_key=",
+        "openai_api_key=",
+        "github_token=",
+        "gitlab_token=",
+    )
+    return any(marker in lowered for marker in high_risk_markers)

@@ -1,46 +1,28 @@
-import os
-import subprocess
-
 from repooperator_worker.config import get_settings
 from repooperator_worker.schemas import CommandRunRequest, CommandRunResponse
-from repooperator_worker.services.common import resolve_project_path
-from repooperator_worker.services.subprocess_utils import run_subprocess
+from repooperator_worker.services.command_service import run_command_with_policy
 
 
 def run_command(request: CommandRunRequest) -> CommandRunResponse:
-    repo_path = resolve_project_path(request.project_path)
-    timeout_seconds = request.timeout_seconds or get_settings().default_command_timeout_seconds
+    """Deprecated compatibility adapter.
 
-    # TODO: Insert an approval or allowlist policy check here before executing shell commands.
-    try:
-        result = run_subprocess(
-            command=["sh", "-lc", request.command],
-            cwd=repo_path,
-            timeout_seconds=timeout_seconds,
-            env=os.environ.copy(),
-        )
-        return CommandRunResponse(
-            project_path=request.project_path,
-            command=request.command,
-            timeout_seconds=timeout_seconds,
-            exit_code=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            timed_out=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"")
-        stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"")
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        return CommandRunResponse(
-            project_path=request.project_path,
-            command=request.command,
-            timeout_seconds=timeout_seconds,
-            exit_code=None,
-            stdout=stdout,
-            stderr=stderr,
-            timed_out=True,
-        )
+    Public routes must use ``command_service`` directly. This adapter remains
+    only for older internal imports and still enforces the same command policy.
+    """
+    timeout_seconds = request.timeout_seconds or get_settings().default_command_timeout_seconds
+    result = run_command_with_policy(
+        request.command,
+        approval_id=request.approval_id,
+        remember_for_session=request.remember_for_session,
+        project_path=request.project_path,
+        reason="Compatibility command adapter. Commands still use RepoOperator command approval policy.",
+    )
+    return CommandRunResponse(
+        project_path=request.project_path,
+        command=result.get("display_command") or request.command,
+        timeout_seconds=timeout_seconds,
+        exit_code=result.get("exit_code"),
+        stdout=result.get("stdout", ""),
+        stderr=result.get("stderr", ""),
+        timed_out=False,
+    )

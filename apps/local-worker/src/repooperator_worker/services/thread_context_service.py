@@ -12,12 +12,13 @@ extracts durable thread state and validates exact symbol/file carry-over.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from repooperator_worker.schemas import AgentRunRequest
-from repooperator_worker.services.common import ensure_relative_to_repo, resolve_project_path
+from repooperator_worker.services.common import ensure_relative_to_repo, get_repooperator_home_dir, resolve_project_path
 
 SYMBOL_RE = re.compile(
     r"^\s*(?:async\s+def|def|class)\s+([A-Za-z_][A-Za-z0-9_]*)\b|"
@@ -46,7 +47,7 @@ class ThreadContext:
 
 
 def build_thread_context(request: AgentRunRequest) -> ThreadContext:
-    context = ThreadContext(active_repo=request.project_path, branch=request.branch)
+    context = _load_durable_context(request) or ThreadContext(active_repo=request.project_path, branch=request.branch)
     for message in reversed(request.conversation_history):
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
         for file_path in metadata.get("files_read") or []:
@@ -72,6 +73,31 @@ def build_thread_context(request: AgentRunRequest) -> ThreadContext:
     if not context.last_analyzed_file and context.recent_files:
         context.last_analyzed_file = context.recent_files[0]
     return context
+
+
+def update_thread_context(request: AgentRunRequest, response: Any) -> None:
+    if not request.thread_id:
+        return
+    context = build_thread_context(request)
+    for file_path in getattr(response, "files_read", []) or []:
+        _add_recent_file(context, str(file_path))
+    for file_path in getattr(response, "resolved_files", []) or []:
+        _add_recent_file(context, str(file_path))
+    selected = getattr(response, "selected_target_file", None) or getattr(response, "proposal_relative_path", None)
+    if selected:
+        context.last_proposed_target_file = str(selected)
+        _add_recent_file(context, str(selected))
+    if getattr(response, "proposal_relative_path", None):
+        context.last_proposal_id = str(getattr(response, "proposal_relative_path"))
+    if getattr(response, "recommendation_context", None):
+        context.last_answer_summary = "Stored structured repository recommendations."
+    if getattr(response, "response", None):
+        context.last_answer_summary = _summarize(str(getattr(response, "response")))
+    for symbol in getattr(response, "resolved_symbols", []) or []:
+        if context.recent_files:
+            context.symbols.setdefault(str(symbol), context.recent_files[0])
+    context.context_source = "durable_thread"
+    _save_durable_context(request.thread_id, context)
 
 
 def resolve_followup_file(request: AgentRunRequest, context: ThreadContext) -> tuple[str | None, str]:
@@ -116,3 +142,51 @@ def _summarize(text: str, max_len: int = 300) -> str:
     if len(cleaned) > max_len:
         return cleaned[: max_len - 1].rstrip() + "..."
     return cleaned
+
+
+def _thread_context_path(thread_id: str) -> Path:
+    safe = "".join(ch for ch in thread_id if ch.isalnum() or ch in {"_", "-"})
+    path = get_repooperator_home_dir() / "threads"
+    path.mkdir(parents=True, exist_ok=True)
+    return path / f"{safe}.context.json"
+
+
+def _load_durable_context(request: AgentRunRequest) -> ThreadContext | None:
+    if not request.thread_id:
+        return None
+    path = _thread_context_path(request.thread_id)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("active_repo") != request.project_path:
+        return None
+    return ThreadContext(
+        active_repo=request.project_path,
+        branch=request.branch or payload.get("branch"),
+        recent_files=[str(item) for item in payload.get("recent_files", []) if isinstance(item, str)],
+        symbols={str(key): str(value) for key, value in (payload.get("symbols") or {}).items()},
+        last_analyzed_file=payload.get("last_analyzed_file"),
+        last_proposed_target_file=payload.get("last_proposed_target_file"),
+        last_candidate_files=[str(item) for item in payload.get("last_candidate_files", []) if isinstance(item, str)],
+        last_proposal_id=payload.get("last_proposal_id"),
+        last_answer_summary=payload.get("last_answer_summary"),
+        context_source="durable_thread",
+    )
+
+
+def _save_durable_context(thread_id: str, context: ThreadContext) -> None:
+    payload = {
+        "active_repo": context.active_repo,
+        "branch": context.branch,
+        "recent_files": context.recent_files[:20],
+        "symbols": context.symbols,
+        "last_analyzed_file": context.last_analyzed_file,
+        "last_proposed_target_file": context.last_proposed_target_file,
+        "last_candidate_files": context.last_candidate_files[:20],
+        "last_proposal_id": context.last_proposal_id,
+        "last_answer_summary": context.last_answer_summary,
+    }
+    _thread_context_path(thread_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

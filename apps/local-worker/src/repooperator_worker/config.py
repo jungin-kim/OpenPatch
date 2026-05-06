@@ -344,7 +344,7 @@ def _resolve_write_mode(runtime_config: dict) -> str:
     if permission_mode == PERMISSION_MODE_FULL_ACCESS:
         return WRITE_MODE_AUTO_APPLY
     if permission_mode in {PERMISSION_MODE_BASIC, PERMISSION_MODE_AUTO_REVIEW}:
-        return WRITE_MODE_WRITE_WITH_APPROVAL
+        return WRITE_MODE_AUTO_APPLY
 
     permissions = runtime_config.get("permissions")
     if isinstance(permissions, dict):
@@ -352,7 +352,7 @@ def _resolve_write_mode(runtime_config: dict) -> str:
         if mode and mode.lower() in _VALID_WRITE_MODES:
             return mode.lower()
 
-    return WRITE_MODE_WRITE_WITH_APPROVAL
+    return WRITE_MODE_AUTO_APPLY
 
 
 def _resolve_permission_mode(runtime_config: dict) -> str:
