@@ -220,14 +220,22 @@ export type AgentRunPayload = {
 export type AgentActivityEvent = {
   type?: "progress_delta" | string;
   id?: string;
+  activity_id?: string | null;
   run_id?: string;
   sequence?: number | null;
   event_type?: string | null;
   phase?: string;
   label?: string;
   detail?: string;
+  detail_delta?: string | null;
   message?: string;
   safe_reasoning_summary?: string | null;
+  summary_delta?: string | null;
+  current_action?: string | null;
+  observation?: string | null;
+  observation_delta?: string | null;
+  next_action?: string | null;
+  next_action_delta?: string | null;
   related_search_query?: string | null;
   aggregate?: Record<string, unknown> | null;
   status?: "pending" | "running" | "completed" | "failed" | "waiting" | string;

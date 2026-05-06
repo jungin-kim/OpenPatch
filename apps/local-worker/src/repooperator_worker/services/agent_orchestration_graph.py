@@ -409,6 +409,7 @@ def _activity_event(
     detail: str = "",
     status: str = "completed",
     elapsed_ms: int | None = None,
+    duration_ms: int | None = None,
     files: list[str] | None = None,
     command: str | None = None,
     proposal_id: str | None = None,
@@ -442,12 +443,22 @@ def _append_activity_event(
     detail: str = "",
     status: str = "completed",
     elapsed_ms: int | None = None,
+    duration_ms: int | None = None,
     files: list[str] | None = None,
     command: str | None = None,
     proposal_id: str | None = None,
+    activity_id: str | None = None,
+    current_action: str | None = None,
+    observation: str | None = None,
+    next_action: str | None = None,
+    detail_delta: str | None = None,
+    observation_delta: str | None = None,
+    next_action_delta: str | None = None,
+    summary_delta: str | None = None,
     safe_reasoning_summary: str | None = None,
     related_search_query: str | None = None,
     aggregate: dict[str, Any] | None = None,
+    started_at: str | None = None,
     events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     event = _activity_event(
@@ -464,11 +475,31 @@ def _append_activity_event(
     event.update(
         {
             "event_type": event_type,
+            "activity_id": activity_id,
             "thread_id": request.thread_id,
             "repo": request.project_path,
             "branch": request.branch,
+            "updated_at": _utc_now(),
         }
     )
+    if started_at:
+        event["started_at"] = started_at
+    if duration_ms is not None:
+        event["duration_ms"] = duration_ms
+    if current_action:
+        event["current_action"] = current_action
+    if observation:
+        event["observation"] = observation
+    if next_action:
+        event["next_action"] = next_action
+    if detail_delta:
+        event["detail_delta"] = detail_delta
+    if observation_delta:
+        event["observation_delta"] = observation_delta
+    if next_action_delta:
+        event["next_action_delta"] = next_action_delta
+    if summary_delta:
+        event["summary_delta"] = summary_delta
     if safe_reasoning_summary:
         event["safe_reasoning_summary"] = safe_reasoning_summary
     if related_search_query:
@@ -1219,6 +1250,11 @@ def _should_use_repository_wide_review(state: OrchestrationState) -> bool:
     return False
 
 
+def _activity_id(prefix: str, value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.:-]+", "-", value.strip()).strip("-")
+    return f"{prefix}:{safe[:160] or uuid.uuid4().hex[:8]}"
+
+
 def _repository_wide_review(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
     run_id = str(state.get("run_id") or f"run-{uuid.uuid4().hex[:12]}")
@@ -1232,8 +1268,12 @@ def _repository_wide_review(state: OrchestrationState) -> dict[str, Any]:
         phase="Thinking",
         label="Planned repository review",
         detail="I will inventory readable source, config, and docs files, review each selected file separately, then summarize only confirmed findings.",
-        event_type="narrative_summary",
+        event_type="activity_completed",
+        activity_id="repository-review-plan",
         elapsed_ms=0,
+        current_action="Planning a bounded repository review.",
+        observation="No files have been reviewed yet.",
+        next_action="Inventory readable files and skip generated, binary, dependency, or oversized paths.",
         safe_reasoning_summary=(
             "Repository-wide review is split by file so a timeout in one file does not create unsupported conclusions."
         ),
@@ -1249,8 +1289,12 @@ def _repository_wide_review(state: OrchestrationState) -> dict[str, Any]:
         phase="Searching",
         label="Listed repository files",
         detail=f"Selected {len(selected)} readable file(s) and skipped {len(skipped)} unsupported, generated, dependency, or large file(s).",
-        event_type="file_search",
+        event_type="activity_completed",
+        activity_id="repository-inventory",
         elapsed_ms=int((time.perf_counter() - started) * 1000),
+        current_action="Inventorying repository files.",
+        observation=f"Selected {len(selected)} readable file(s); skipped {len(skipped)} file(s).",
+        next_action="Review selected files one at a time.",
         related_search_query="repository inventory",
         aggregate={
             "files_selected": len(selected),
@@ -1267,8 +1311,12 @@ def _repository_wide_review(state: OrchestrationState) -> dict[str, Any]:
             phase="Searching",
             label="Selected files for review",
             detail=", ".join(selected[:8]) + (" ..." if len(selected) > 8 else ""),
-            event_type="file_selected",
+            event_type="activity_completed",
+            activity_id="repository-file-selection",
             elapsed_ms=int((time.perf_counter() - started) * 1000),
+            current_action="Choosing review targets.",
+            observation="Readable source, config, and documentation files were selected within the run limit.",
+            next_action=f"Start with `{selected[0]}`." if selected else None,
             files=selected[:8],
             events=activity_events,
         )
@@ -1284,101 +1332,155 @@ def _repository_wide_review(state: OrchestrationState) -> dict[str, Any]:
 
     for relative_path in selected:
         file_started = time.perf_counter()
+        file_started_at = _utc_now()
+        file_activity_id = _activity_id("review-file", relative_path)
+        file_title = Path(relative_path).name
+        read_summary = _progress_summary_for_file(
+            relative_path=relative_path,
+            phase="reading",
+        )
         _append_activity_event(
             request=request,
             run_id=run_id,
             phase="Reading files",
-            label=f"Reading {Path(relative_path).name}",
-            detail=f"Reading `{relative_path}` before file-level review.",
-            event_type="file_read",
+            label=file_title,
+            detail=read_summary["detail"],
+            event_type="activity_started",
+            activity_id=file_activity_id,
             status="running",
             elapsed_ms=int((time.perf_counter() - started) * 1000),
             files=[relative_path],
+            current_action=read_summary["current_action"],
+            observation=read_summary["observation"],
+            next_action=read_summary["next_action"],
+            safe_reasoning_summary=read_summary["safe_reasoning_summary"],
+            started_at=file_started_at,
             events=activity_events,
         )
         read_result = _read_review_file(repo_path, relative_path)
         read_elapsed = int((time.perf_counter() - file_started) * 1000)
         if read_result.get("error"):
             read_failures.append({"file": relative_path, "reason": read_result["error"]})
+            failure_summary = _progress_summary_for_file(
+                relative_path=relative_path,
+                phase="failed",
+                observation=str(read_result["error"]),
+            )
             _append_activity_event(
                 request=request,
                 run_id=run_id,
                 phase="Reading files",
-                label=f"Skipped {Path(relative_path).name}",
-                detail=str(read_result["error"]),
-                event_type="partial_result",
+                label=file_title,
+                detail=failure_summary["detail"],
+                event_type="activity_failed",
+                activity_id=file_activity_id,
                 status="failed",
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
+                duration_ms=int((time.perf_counter() - file_started) * 1000),
                 files=[relative_path],
+                current_action=failure_summary["current_action"],
+                observation=failure_summary["observation"],
+                next_action=failure_summary["next_action"],
+                safe_reasoning_summary=failure_summary["safe_reasoning_summary"],
+                started_at=file_started_at,
                 events=activity_events,
             )
             continue
-        _append_activity_event(
-            request=request,
-            run_id=run_id,
-            phase="Reading files",
-            label=f"Read {Path(relative_path).name}",
-            detail=(
-                "File content was truncated for review."
-                if read_result.get("truncated")
-                else "File content was read for review."
-            ),
-            event_type="file_read",
-            elapsed_ms=int((time.perf_counter() - started) * 1000),
-            files=[relative_path],
-            aggregate={"duration_ms": read_elapsed},
-            events=activity_events,
+        content = str(read_result["content"])
+        read_observation = _file_read_observation(relative_path, content, bool(read_result.get("truncated")))
+        review_summary = _progress_summary_for_file(
+            relative_path=relative_path,
+            phase="reviewing",
+            content_preview=content[:1400],
+            observation=read_observation,
         )
-
         _append_activity_event(
             request=request,
             run_id=run_id,
-            phase="Thinking",
-            label=f"Reviewing {Path(relative_path).name}",
-            detail="Running a per-file review call with only this file and repository metadata.",
-            event_type="step_started",
+            phase="Reviewing",
+            label=file_title,
+            detail=review_summary["detail"],
+            detail_delta=" " + review_summary["detail"],
+            event_type="activity_updated",
+            activity_id=file_activity_id,
             status="running",
             elapsed_ms=int((time.perf_counter() - started) * 1000),
+            duration_ms=None,
             files=[relative_path],
-            safe_reasoning_summary="This file is reviewed independently to keep findings evidence-based.",
+            current_action=review_summary["current_action"],
+            observation=review_summary["observation"],
+            observation_delta=" " + review_summary["observation"],
+            next_action=review_summary["next_action"],
+            next_action_delta=" " + review_summary["next_action"],
+            safe_reasoning_summary=review_summary["safe_reasoning_summary"],
+            summary_delta=" " + review_summary["safe_reasoning_summary"],
+            started_at=file_started_at,
+            aggregate={"duration_ms": read_elapsed},
             events=activity_events,
         )
         review_result = _review_single_file(
             request=request,
             relative_path=relative_path,
-            content=str(read_result["content"]),
+            content=content,
             truncated=bool(read_result.get("truncated")),
             client=client,
         )
         if review_result.get("timed_out"):
             timed_out.append(review_result)
+            timeout_observation = f"Model review did not return within {review_result.get('elapsed_seconds')}s."
             _append_activity_event(
                 request=request,
                 run_id=run_id,
-                phase="Thinking",
-                label=f"Timed out reviewing {Path(relative_path).name}",
+                phase="Reviewing",
+                label=file_title,
                 detail=(
                     f"Timed out after {review_result.get('elapsed_seconds')}s. "
                     "Marking this file as not reviewed and continuing with the next file."
                 ),
-                event_type="timeout",
+                event_type="activity_failed",
+                activity_id=file_activity_id,
                 status="failed",
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
+                duration_ms=int((time.perf_counter() - file_started) * 1000),
                 files=[relative_path],
+                current_action="Skipping this file after timeout.",
+                observation=timeout_observation,
+                observation_delta=" " + timeout_observation,
+                next_action="Continue with the remaining selected files.",
+                next_action_delta=" Continue with the remaining selected files.",
+                safe_reasoning_summary="Timed-out files stay out of confirmed findings.",
+                started_at=file_started_at,
                 events=activity_events,
             )
             continue
         reviewed.append(review_result)
+        completed_observation = _truncate_for_event(str(review_result.get("summary") or "Completed file-level review."))
+        completed_summary = _progress_summary_for_file(
+            relative_path=relative_path,
+            phase="completed",
+            content_preview=content[:1400],
+            observation=completed_observation,
+        )
         _append_activity_event(
             request=request,
             run_id=run_id,
-            phase="Thinking",
-            label=f"Reviewed {Path(relative_path).name}",
-            detail=_truncate_for_event(str(review_result.get("summary") or "Completed file-level review.")),
-            event_type="step_completed",
+            phase="Reviewing",
+            label=file_title,
+            detail=completed_summary["detail"],
+            detail_delta=" " + completed_summary["detail"],
+            event_type="activity_completed",
+            activity_id=file_activity_id,
             elapsed_ms=int((time.perf_counter() - started) * 1000),
+            duration_ms=int((time.perf_counter() - file_started) * 1000),
             files=[relative_path],
-            safe_reasoning_summary="Findings from this row are grounded in the file content just read.",
+            current_action=completed_summary["current_action"],
+            observation=completed_summary["observation"],
+            observation_delta=" " + completed_summary["observation"],
+            next_action=completed_summary["next_action"],
+            next_action_delta=" " + completed_summary["next_action"],
+            safe_reasoning_summary=completed_summary["safe_reasoning_summary"],
+            summary_delta=" " + completed_summary["safe_reasoning_summary"],
+            started_at=file_started_at,
             events=activity_events,
         )
 
@@ -1401,8 +1503,16 @@ def _repository_wide_review(state: OrchestrationState) -> dict[str, Any]:
             f"timed out on {counters['timed_out_count']} file(s), "
             f"and skipped {counters['files_skipped_count']} file(s)."
         ),
-        event_type="aggregate_summary",
+        event_type="activity_completed",
+        activity_id="repository-review-aggregate",
         elapsed_ms=int((time.perf_counter() - started) * 1000),
+        current_action="Aggregating completed file reviews.",
+        observation=(
+            f"Reviewed {counters['files_reviewed_count']} file(s), "
+            f"timed out on {counters['timed_out_count']} file(s), "
+            f"and skipped {counters['files_skipped_count']} file(s)."
+        ),
+        next_action="Prepare the final answer from completed evidence only.",
         aggregate=counters,
         events=activity_events,
     )
@@ -1421,8 +1531,12 @@ def _repository_wide_review(state: OrchestrationState) -> dict[str, Any]:
         phase="Finished",
         label="Prepared evidence-based review summary",
         detail="The final answer only includes confirmed findings from files that completed review.",
-        event_type="final_summary",
+        event_type="activity_completed",
+        activity_id="repository-review-final-summary",
         elapsed_ms=int((time.perf_counter() - started) * 1000),
+        current_action="Preparing final summary.",
+        observation="Timed-out and skipped files are separated from confirmed findings.",
+        next_action="Return the answer to the chat.",
         safe_reasoning_summary="Timed-out and skipped files are reported separately rather than used for conclusions.",
         events=activity_events,
     )
@@ -1518,6 +1632,129 @@ def _read_review_file(repo_path: Path, relative_path: str) -> dict[str, Any]:
     truncated = len(raw) > MAX_REPOSITORY_REVIEW_PROMPT_CHARS
     content = raw[:MAX_REPOSITORY_REVIEW_PROMPT_CHARS].decode("utf-8", errors="replace")
     return {"content": content, "truncated": truncated}
+
+
+def _file_read_observation(relative_path: str, content: str, truncated: bool) -> str:
+    line_count = len(content.splitlines())
+    suffix = " Content was truncated for review." if truncated else ""
+    return f"Read {line_count} line(s) from `{relative_path}`.{suffix}"
+
+
+def _progress_summary_for_file(
+    *,
+    relative_path: str,
+    phase: str,
+    content_preview: str = "",
+    observation: str = "",
+) -> dict[str, str]:
+    path = Path(relative_path)
+    lower_name = path.name.lower()
+    suffix = path.suffix.lower()
+    descriptor = _file_descriptor(path)
+    if phase == "reading":
+        return {
+            "detail": f"Reading `{relative_path}`.",
+            "current_action": f"Reading {descriptor}.",
+            "observation": "No content has been inspected yet.",
+            "next_action": "Review the file purpose and look for confirmed issues from its contents.",
+            "safe_reasoning_summary": f"`{path.name}` is being inspected as {descriptor}.",
+        }
+    if phase == "reviewing":
+        metadata = _content_metadata_summary(relative_path, content_preview)
+        return {
+            "detail": f"Read file content. Reviewing {descriptor}.",
+            "current_action": f"Checking {descriptor} for concrete, file-backed findings.",
+            "observation": metadata or observation or f"Read `{relative_path}`.",
+            "next_action": "Use the file-level review result as evidence only if it completes.",
+            "safe_reasoning_summary": _phase_summary_from_file(relative_path, suffix, lower_name, metadata),
+        }
+    if phase == "completed":
+        return {
+            "detail": "Completed file-level review.",
+            "current_action": "File review complete.",
+            "observation": observation or "No confirmed issue was reported from this file.",
+            "next_action": "Move to the next selected file or aggregate completed results.",
+            "safe_reasoning_summary": f"`{path.name}` has a completed review result and can be used as evidence.",
+        }
+    if phase == "failed":
+        return {
+            "detail": f"Could not review `{relative_path}`.",
+            "current_action": "Skipping this file.",
+            "observation": observation or "The file could not be read safely.",
+            "next_action": "Continue with the remaining selected files.",
+            "safe_reasoning_summary": f"`{path.name}` will not be used as confirmed evidence.",
+        }
+    return {
+        "detail": f"Working on `{relative_path}`.",
+        "current_action": "Inspecting file.",
+        "observation": observation,
+        "next_action": "Continue the repository review.",
+        "safe_reasoning_summary": f"Progress is based on `{path.name}`.",
+    }
+
+
+def _file_descriptor(path: Path) -> str:
+    suffix = path.suffix.lower()
+    name = path.name.lower()
+    if name in {"readme", "readme.md"} or suffix in {".md", ".rst", ".txt"}:
+        return "documentation"
+    if name in {"package.json", "pyproject.toml", "requirements.txt", "requirements.in"}:
+        return "dependency or packaging metadata"
+    if suffix in {".yml", ".yaml", ".toml", ".json", ".ini", ".cfg", ".properties", ".gradle"}:
+        return "configuration"
+    if suffix in {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".kt", ".swift", ".go", ".rs"}:
+        return f"{suffix.lstrip('.')} source code"
+    if name == "dockerfile":
+        return "container configuration"
+    return "readable repository file"
+
+
+def _content_metadata_summary(relative_path: str, content_preview: str) -> str:
+    path = Path(relative_path)
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    lines = content_preview.splitlines()
+    if name == "package.json":
+        try:
+            payload = json.loads(content_preview)
+            deps = len(payload.get("dependencies") or {})
+            dev_deps = len(payload.get("devDependencies") or {})
+            scripts = sorted((payload.get("scripts") or {}).keys())[:5]
+            script_text = f"; scripts: {', '.join(scripts)}" if scripts else ""
+            return f"Found package metadata with {deps} dependencies and {dev_deps} dev dependencies{script_text}."
+        except json.JSONDecodeError:
+            return "Found package metadata, but the preview was not enough to parse it fully."
+    if name in {"pyproject.toml", "requirements.txt", "requirements.in"}:
+        return f"Found Python packaging/dependency metadata across {len(lines)} preview line(s)."
+    if suffix == ".py":
+        defs = sum(1 for line in lines if line.lstrip().startswith(("def ", "async def ", "class ")))
+        return f"Found Python source with {defs} visible function/class definition(s) in the preview."
+    if suffix in {".ts", ".tsx", ".js", ".jsx"}:
+        imports = sum(1 for line in lines if line.lstrip().startswith(("import ", "export ")))
+        return f"Found web source with {imports} visible import/export line(s) in the preview."
+    if suffix in {".kt", ".java", ".swift", ".go", ".rs"}:
+        return f"Found application source code with {len(lines)} preview line(s)."
+    if suffix in {".md", ".rst", ".txt"} or name in {"readme", "readme.md"}:
+        headings = sum(1 for line in lines if line.lstrip().startswith("#"))
+        return f"Found documentation with {headings} visible heading(s) in the preview."
+    if suffix in {".yml", ".yaml", ".toml", ".json", ".ini", ".cfg", ".properties", ".gradle"}:
+        return f"Found configuration content with {len(lines)} preview line(s)."
+    return f"Read {len(lines)} preview line(s)."
+
+
+def _phase_summary_from_file(relative_path: str, suffix: str, lower_name: str, metadata: str) -> str:
+    path_name = Path(relative_path).name
+    if lower_name in {"readme", "readme.md"}:
+        return f"`{path_name}` documents setup or usage, so the review checks whether guidance matches the repository evidence."
+    if lower_name == "package.json":
+        return f"`{path_name}` controls web scripts and dependency versions, so the review checks packaging and build risk."
+    if lower_name in {"pyproject.toml", "requirements.txt", "requirements.in"}:
+        return f"`{path_name}` affects Python runtime setup, so the review checks dependency and packaging implications."
+    if suffix in {".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".kt", ".swift", ".go", ".rs"}:
+        return f"`{path_name}` is source code; the review focuses on concrete behavior visible in that file."
+    if suffix in {".yml", ".yaml", ".toml", ".json", ".ini", ".cfg", ".properties", ".gradle"}:
+        return f"`{path_name}` is configuration, so the review checks settings and workflow impact."
+    return metadata or f"`{path_name}` is being reviewed from its file content."
 
 
 def _review_single_file(

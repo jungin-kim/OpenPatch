@@ -21,6 +21,7 @@ from repooperator_worker.services.agent_orchestration_graph import (  # noqa: E4
     _repository_wide_review,
     _should_use_repository_wide_review,
 )
+from repooperator_worker.services.event_service import list_run_events  # noqa: E402
 
 
 class _ReviewClient:
@@ -47,6 +48,18 @@ class _ClassifierClient:
 
     def generate_text(self, request):
         return json.dumps(self.payload)
+
+
+class _InspectingReviewClient(_ReviewClient):
+    home: Path
+
+    def generate_text(self, request):
+        if "server.py" in request.user_prompt:
+            events = list_run_events("run_review_test")
+            server_events = [event for event in events if event.get("activity_id") == "review-file:server.py"]
+            if not any(event.get("event_type") == "activity_updated" for event in server_events):
+                raise AssertionError("server.py activity update was not persisted before model review returned")
+        return super().generate_text(request)
 
 
 class RepositoryReviewProgressTests(unittest.TestCase):
@@ -101,14 +114,25 @@ class RepositoryReviewProgressTests(unittest.TestCase):
         result = self._run_review("Please review the whole repository and summarize confirmed file-level findings.")
 
         event_types = [event.get("event_type") for event in result.activity_events]
-        self.assertIn("narrative_summary", event_types)
-        self.assertIn("file_search", event_types)
-        self.assertIn("file_selected", event_types)
-        self.assertIn("file_read", event_types)
-        self.assertIn("step_completed", event_types)
-        self.assertIn("aggregate_summary", event_types)
+        self.assertIn("activity_started", event_types)
+        self.assertIn("activity_updated", event_types)
+        self.assertIn("activity_completed", event_types)
         self.assertTrue(any(event.get("files") for event in result.activity_events))
         self.assertNotIn("context", " ".join(str(event.get("label", "")) for event in result.activity_events).lower())
+
+    def test_file_review_uses_one_stable_activity_id_for_updates(self) -> None:
+        result = self._run_review("Please perform a broad repository review.")
+
+        server_events = [
+            event for event in result.activity_events
+            if event.get("activity_id") == "review-file:server.py"
+        ]
+        self.assertGreaterEqual(len(server_events), 3)
+        self.assertEqual(
+            [event.get("event_type") for event in server_events],
+            ["activity_started", "activity_updated", "activity_completed"],
+        )
+        self.assertEqual({event.get("label") for event in server_events}, {"server.py"})
 
     def test_per_file_timeout_is_partial_and_not_confirmed(self) -> None:
         result = self._run_review("Perform a repository-wide file review.")
@@ -118,14 +142,18 @@ class RepositoryReviewProgressTests(unittest.TestCase):
         self.assertNotIn("slow_module.py` was read successfully", result.response)
         self.assertIn("server.py", result.response)
         self.assertIn("Confirmed File-Level Results", result.response)
-        timeout_events = [event for event in result.activity_events if event.get("event_type") == "timeout"]
+        timeout_events = [
+            event for event in result.activity_events
+            if event.get("activity_id") == "review-file:slow_module.py" and event.get("event_type") == "activity_failed"
+        ]
         self.assertEqual(len(timeout_events), 1)
         self.assertEqual(timeout_events[0].get("files"), ["slow_module.py"])
+        self.assertIn("continuing", str(timeout_events[0].get("detail")).lower())
 
     def test_unsupported_files_are_skipped_with_reason(self) -> None:
         result = self._run_review("Assess every readable file in this project.")
 
-        skipped_event = next(event for event in result.activity_events if event.get("event_type") == "aggregate_summary")
+        skipped_event = next(event for event in result.activity_events if event.get("activity_id") == "repository-review-aggregate")
         aggregate = skipped_event.get("aggregate") or {}
         self.assertGreaterEqual(int(aggregate.get("files_skipped_count") or 0), 1)
         self.assertIn("diagram.pdf", result.response)
@@ -138,6 +166,39 @@ class RepositoryReviewProgressTests(unittest.TestCase):
         self.assertNotIn("<think>", serialized)
         self.assertNotIn("system_prompt", serialized)
         self.assertNotIn("raw model prompt", serialized.lower())
+
+    def test_progress_event_is_persisted_before_long_model_call_finishes(self) -> None:
+        request = self._request("Please review the repository.")
+        with patch(
+            "repooperator_worker.services.agent_orchestration_graph.OpenAICompatibleModelClient",
+            return_value=_InspectingReviewClient(),
+        ), patch(
+            "repooperator_worker.services.event_service.get_repooperator_home_dir",
+            return_value=Path(self.home.name),
+        ):
+            result = _repository_wide_review(
+                {
+                    "request": request,
+                    "intent": "repo_analysis",
+                    "classifier": "llm",
+                    "confidence": 0.9,
+                    "run_id": "run_review_test",
+                }
+            )["result"]
+        self.assertTrue(result.activity_events)
+
+    def test_safe_summary_generator_is_file_specific(self) -> None:
+        result = self._run_review("Please review the repository.")
+        server = next(
+            event for event in result.activity_events
+            if event.get("activity_id") == "review-file:server.py" and event.get("event_type") == "activity_updated"
+        )
+        readme = next(
+            event for event in result.activity_events
+            if event.get("activity_id") == "review-file:README.md" and event.get("event_type") == "activity_updated"
+        )
+        self.assertIn("Python source", str(server.get("observation")))
+        self.assertIn("documents", str(readme.get("safe_reasoning_summary")))
 
     def test_no_completed_summary_when_no_file_review_succeeds(self) -> None:
         class _TimeoutClient(_ReviewClient):

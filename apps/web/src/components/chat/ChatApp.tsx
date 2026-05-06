@@ -137,18 +137,11 @@ export function ChatApp() {
     events?: AgentRunPayload["activity_events"],
     options: { finalizeRunning?: boolean } = {},
   ): ProgressStep[] {
-    const seen = new Set<string>();
-    const steps: ProgressStep[] = [];
+    let steps: ProgressStep[] = [];
     for (const event of events || []) {
       if (event.type !== "progress_delta" || !(event.label || event.message)) continue;
       const step = progressStepFromEvent(event, options);
-      const key = progressStepIdentity(step, steps.length);
-      if (seen.has(key)) {
-        steps[steps.findIndex((item, index) => progressStepIdentity(item, index) === key)] = step;
-        continue;
-      }
-      seen.add(key);
-      steps.push(step);
+      steps = mergeProgressStep(steps, step);
     }
     return steps;
   }
@@ -161,14 +154,22 @@ export function ChatApp() {
       options.finalizeRunning && event.status === "running" ? "completed" : event.status;
     return {
       id: event.id,
+      activityId: event.activity_id,
       runId: event.run_id,
       sequence: event.sequence,
       eventType: event.event_type,
       phase: event.phase,
       label: event.label ?? event.message,
       detail: event.detail,
+      detailDelta: event.detail_delta,
       message: event.message,
       safeReasoningSummary: event.safe_reasoning_summary,
+      summaryDelta: event.summary_delta,
+      currentAction: event.current_action,
+      observation: event.observation,
+      observationDelta: event.observation_delta,
+      nextAction: event.next_action,
+      nextActionDelta: event.next_action_delta,
       relatedSearchQuery: event.related_search_query,
       aggregate: event.aggregate,
       status,
@@ -183,6 +184,7 @@ export function ChatApp() {
   }
 
   function progressStepIdentity(step: ProgressStep, fallbackIndex: number): string {
+    if (step.runId && step.activityId) return `${step.runId}:${step.activityId}`;
     if (step.runId && step.sequence !== undefined && step.sequence !== null) return `${step.runId}:${step.sequence}`;
     if (step.runId && step.id) return `${step.runId}:${step.id}`;
     if (step.id) return step.id;
@@ -193,7 +195,7 @@ export function ChatApp() {
     const incomingKey = progressStepIdentity(incoming, current.length);
     const existingIndex = current.findIndex((step, index) => progressStepIdentity(step, index) === incomingKey);
     if (existingIndex >= 0) {
-      return current.map((step, index) => (index === existingIndex ? incoming : step));
+      return current.map((step, index) => (index === existingIndex ? mergeProgressStepFields(step, incoming) : step));
     }
     const completedPrev = current.map((step, index) =>
       index === current.length - 1 && step.status === "running"
@@ -201,6 +203,25 @@ export function ChatApp() {
         : step,
     );
     return [...completedPrev, incoming];
+  }
+
+  function mergeProgressStepFields(existing: ProgressStep, incoming: ProgressStep): ProgressStep {
+    const merged: ProgressStep = {
+      ...existing,
+      ...incoming,
+      startedAt: existing.startedAt || incoming.startedAt,
+      detail: incoming.detail ?? appendDelta(existing.detail, incoming.detailDelta),
+      observation: incoming.observation ?? appendDelta(existing.observation, incoming.observationDelta),
+      nextAction: incoming.nextAction ?? appendDelta(existing.nextAction, incoming.nextActionDelta),
+      safeReasoningSummary: incoming.safeReasoningSummary ?? appendDelta(existing.safeReasoningSummary, incoming.summaryDelta),
+    };
+    return merged;
+  }
+
+  function appendDelta(base?: string | null, delta?: string | null): string | undefined {
+    const current = base || "";
+    if (!delta) return current || undefined;
+    return `${current}${delta}`;
   }
 
   function mergeProgressEvents(

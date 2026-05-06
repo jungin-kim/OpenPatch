@@ -4,14 +4,22 @@ import { useEffect, useState } from "react";
 
 export type ProgressStep = {
   id?: string;
+  activityId?: string | null;
   runId?: string;
   sequence?: number | null;
   eventType?: string | null;
   phase?: string;
   label?: string;
   detail?: string;
+  detailDelta?: string | null;
   message?: string;
   safeReasoningSummary?: string | null;
+  summaryDelta?: string | null;
+  currentAction?: string | null;
+  observation?: string | null;
+  observationDelta?: string | null;
+  nextAction?: string | null;
+  nextActionDelta?: string | null;
   relatedSearchQuery?: string | null;
   aggregate?: Record<string, unknown> | null;
   status?: string;
@@ -109,6 +117,15 @@ export function ProgressTimeline({ steps, done }: Props) {
                   <span className="progress-step-phase">{step.phase || "Activity"}</span>
                 </span>
                 {step.detail ? <span className="progress-step-detail">{step.detail}</span> : null}
+                {step.currentAction ? (
+                  <span className="progress-step-detail"><strong>Current:</strong> {step.currentAction}</span>
+                ) : null}
+                {step.observation ? (
+                  <span className="progress-step-detail"><strong>Observation:</strong> {step.observation}</span>
+                ) : null}
+                {step.nextAction && step.status === "running" ? (
+                  <span className="progress-step-detail"><strong>Next:</strong> {step.nextAction}</span>
+                ) : null}
                 {step.safeReasoningSummary ? (
                   <span className="progress-step-detail">{step.safeReasoningSummary}</span>
                 ) : null}
@@ -154,6 +171,7 @@ function AggregateProgressDetails({ aggregate }: { aggregate: Record<string, unk
 }
 
 function progressStepKey(step: ProgressStep, index: number): string {
+  if (step.runId && step.activityId) return `${step.runId}:${step.activityId}`;
   if (step.runId && step.sequence !== undefined && step.sequence !== null) {
     return `${step.runId}:${step.sequence}:${step.eventType || "activity"}:${index}`;
   }
