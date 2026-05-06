@@ -41,3 +41,4 @@ apps/web/tsconfig.tsbuildinfo
 packages/cli/runtime/
 packages/cli/*.tgz
 docs/implementation-status-report.md
+packages/cli/package-lock 10.json

@@ -94,7 +94,7 @@ class RepositoryReviewProgressTests(unittest.TestCase):
     def _run_review(self, task: str):
         request = self._request(task)
         with patch(
-            "repooperator_worker.services.agent_orchestration_graph.OpenAICompatibleModelClient",
+            "repooperator_worker.agent_core.repository_review.OpenAICompatibleModelClient",
             return_value=_ReviewClient(),
         ), patch(
             "repooperator_worker.services.event_service.get_repooperator_home_dir",
@@ -170,7 +170,7 @@ class RepositoryReviewProgressTests(unittest.TestCase):
     def test_progress_event_is_persisted_before_long_model_call_finishes(self) -> None:
         request = self._request("Please review the repository.")
         with patch(
-            "repooperator_worker.services.agent_orchestration_graph.OpenAICompatibleModelClient",
+            "repooperator_worker.agent_core.repository_review.OpenAICompatibleModelClient",
             return_value=_InspectingReviewClient(),
         ), patch(
             "repooperator_worker.services.event_service.get_repooperator_home_dir",
@@ -198,7 +198,7 @@ class RepositoryReviewProgressTests(unittest.TestCase):
             if event.get("activity_id") == "review-file:README.md" and event.get("event_type") == "activity_updated"
         )
         self.assertIn("Python source", str(server.get("observation")))
-        self.assertIn("documents", str(readme.get("safe_reasoning_summary")))
+        self.assertIn("documents", str(readme.get("safe_reasoning_summary_delta")))
 
     def test_no_completed_summary_when_no_file_review_succeeds(self) -> None:
         class _TimeoutClient(_ReviewClient):
@@ -207,7 +207,7 @@ class RepositoryReviewProgressTests(unittest.TestCase):
 
         request = self._request("Review the entire codebase.")
         with patch(
-            "repooperator_worker.services.agent_orchestration_graph.OpenAICompatibleModelClient",
+            "repooperator_worker.agent_core.repository_review.OpenAICompatibleModelClient",
             return_value=_TimeoutClient(),
         ), patch(
             "repooperator_worker.services.event_service.get_repooperator_home_dir",
@@ -277,7 +277,7 @@ class RepositoryReviewProgressTests(unittest.TestCase):
             "needs_clarification": False,
         }
         with patch(
-            "repooperator_worker.services.agent_orchestration_graph.OpenAICompatibleModelClient",
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
             return_value=_ClassifierClient(),
         ):
             classified = _classify_intent({"request": request, "pending": {}})
@@ -298,7 +298,7 @@ class RepositoryReviewProgressTests(unittest.TestCase):
             "needs_clarification": False,
         }
         with patch(
-            "repooperator_worker.services.agent_orchestration_graph.OpenAICompatibleModelClient",
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
             return_value=_ClassifierClient(),
         ):
             classified = _classify_intent({"request": request, "pending": {}})

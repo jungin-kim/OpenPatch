@@ -13,18 +13,16 @@ logger = logging.getLogger(__name__)
 
 
 def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
-    """Run the compatibility orchestration path.
+    """Run the authoritative agent_core controller path.
 
     User-facing validation errors are allowed to propagate. Any unexpected
     runtime failure becomes a structured ``agent_error`` so the caller can show
     a retryable error without falling back to old routing.
     """
     try:
-        from repooperator_worker.services.agent_orchestration_graph import (
-            run_agent_orchestration_graph,
-        )
+        from repooperator_worker.agent_core.controller_graph import run_controller_graph
 
-        return run_agent_orchestration_graph(request)
+        return run_controller_graph(request)
     except ValueError:
         raise
     except Exception as exc:  # noqa: BLE001

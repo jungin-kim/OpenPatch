@@ -12,6 +12,7 @@ from repooperator_worker.agent_core.repository_review import run_repository_revi
 from repooperator_worker.agent_core.state import AgentCoreState, ClassifierResult
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
 from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient, split_visible_reasoning
+from repooperator_worker.services.common import ensure_relative_to_repo, resolve_project_path
 from repooperator_worker.services.response_quality_service import clean_user_visible_response
 from repooperator_worker.services.skills_service import enabled_skill_context
 from repooperator_worker.services.active_repository import get_active_repository
@@ -227,6 +228,10 @@ def _answer_with_model(
     skills_context: str = "",
 ) -> str:
     try:
+        try:
+            resolved_repo = str(resolve_project_path(request.project_path))
+        except ValueError:
+            resolved_repo = request.project_path
         prompt = ModelGenerationRequest(
             system_prompt=(
                 "You are RepoOperator, a local-first coding agent proxy. Answer with visible, evidence-backed "
@@ -238,6 +243,7 @@ def _answer_with_model(
                 {
                     "task": request.task,
                     "repo": request.project_path,
+                    "active_repository": f"source: {request.git_provider}\npath: {resolved_repo}",
                     "branch": request.branch,
                     "repo_observation": repo_observation,
                     "files": file_contents,
@@ -253,7 +259,7 @@ def _answer_with_model(
             elif delta.get("type") == "assistant_delta":
                 pieces.append(str(delta.get("delta") or ""))
         raw = "".join(pieces) or OpenAICompatibleModelClient().generate_text(prompt)
-        _hidden, visible = split_visible_reasoning(raw)
+        _reasoning, visible = split_visible_reasoning(raw)
         cleaned, _ = clean_user_visible_response(visible, user_task=request.task)
         return cleaned.strip() or _fallback_answer(request, file_contents, repo_observation)
     except Exception:
@@ -278,16 +284,15 @@ def _initial_state(request: AgentRunRequest, run_id: str) -> AgentCoreState:
 
 
 def _existing_target_files(request: AgentRunRequest, target_files: list[str]) -> list[str]:
-    repo = Path(request.project_path)
+    repo = resolve_project_path(request.project_path).resolve()
     existing: list[str] = []
     for item in target_files:
-        candidate = (repo / item).resolve()
         try:
-            candidate.relative_to(repo.resolve())
+            candidate = ensure_relative_to_repo(repo, item)
         except ValueError:
             continue
         if candidate.is_file():
-            existing.append(str(candidate.relative_to(repo.resolve())))
+            existing.append(str(candidate.relative_to(repo)))
     return existing[:8]
 
 

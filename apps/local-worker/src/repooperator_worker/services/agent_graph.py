@@ -1,13 +1,12 @@
-"""
-LangGraph-based read-only agent graph for RepoOperator.
+"""Deprecated LangGraph-based read-only agent graph for RepoOperator.
 
 Graph shape:
   classify_request → resolve_repo_context → retrieve_or_read_files
                    → answer_read_only → format_response → END
 
-This module is the only part of the agent path that uses LangGraph.
-Everything outside this module (API routes, repo open, provider
-integration, CLI lifecycle, thread management) remains unchanged.
+This module is retained for older direct imports and tests, but it is not part
+of the active /agent/run or /agent/run/stream execution path. Active runs are
+handled by repooperator_worker.agent_core.controller_graph.
 """
 
 import logging

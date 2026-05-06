@@ -81,6 +81,9 @@ class AgentCoreRefactorTests(unittest.TestCase):
             "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
             return_value=_Client(),
         ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ), patch(
             "repooperator_worker.services.agent_graph.run_agent_graph",
             side_effect=AssertionError("legacy read-only graph should not run"),
         ):
@@ -142,4 +145,3 @@ class AgentCoreRefactorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

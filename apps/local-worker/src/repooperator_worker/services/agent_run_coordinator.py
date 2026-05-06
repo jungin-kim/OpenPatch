@@ -44,9 +44,9 @@ def start_run(request: AgentRunRequest, *, stream: bool = False) -> AgentRunResp
     start = time.perf_counter()
     response: AgentRunResponse | None = None
     try:
-        from repooperator_worker.services.agent_service import run_agent_task
+        from repooperator_worker.agent_core.controller_graph import run_controller_graph
 
-        response = run_agent_task(request).model_copy(update={"run_id": run_id})
+        response = run_controller_graph(request, run_id=run_id).model_copy(update={"run_id": run_id})
         _record_response_events(run_id, request, response)
         maybe_record_from_agent_run(request, response)
         update_thread_context(request, response)
@@ -86,9 +86,9 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
         final_result: dict | None = None
         started = time.perf_counter()
         try:
-            from repooperator_worker.services.agent_orchestration_graph import stream_agent_orchestration_graph
+            from repooperator_worker.agent_core.controller_graph import stream_controller_graph
 
-            for event_data in stream_agent_orchestration_graph(request, run_id=run_id):
+            for event in stream_controller_graph(request, run_id=run_id):
                 if should_cancel(run_id):
                     append_activity(
                         run_id,
@@ -100,18 +100,15 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
                     )
                     complete_active_run(run_id=run_id, status="cancelled", error="Cancelled by user.")
                     return
-                try:
-                    event = json.loads(event_data)
-                except json.JSONDecodeError:
-                    continue
+                if isinstance(event, str):
+                    try:
+                        event = json.loads(event)
+                    except json.JSONDecodeError:
+                        continue
                 if event.get("type") == "final_message":
                     final_result = event.get("result")
-                    if isinstance(final_result, dict):
-                        final_result = {**final_result, "activity_events": list_run_events(run_id)}
-                        event = {**event, "result": final_result}
                 append_run_event(run_id, event)
             if isinstance(final_result, dict):
-                final_result = {**final_result, "activity_events": list_run_events(run_id)}
                 try:
                     response = AgentRunResponse.model_validate(final_result)
                     update_thread_context(request, response)

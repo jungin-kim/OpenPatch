@@ -107,6 +107,8 @@ def run_repository_review(
         client = None
 
     for relative_path in selected:
+        if _run_cancelled(run_id):
+            break
         file_started = time.perf_counter()
         started_at = utc_now()
         activity_id = _activity_id("review-file", relative_path)
@@ -169,13 +171,34 @@ def run_repository_review(
             started_at=started_at,
             **review_summary,
         )
+
+        def emit_review_delta(delta: str) -> None:
+            _emit(
+                activity_events,
+                run_id=run_id,
+                request=request,
+                activity_id=activity_id,
+                event_type="activity_delta",
+                phase="Reviewing",
+                label=label,
+                status="running",
+                related_files=[relative_path],
+                started_at=started_at,
+                detail_delta=delta,
+                observation_delta=delta,
+            )
+
         review_result = review_single_file(
             request=request,
             relative_path=relative_path,
             content=content,
             truncated=bool(read_result.get("truncated")),
             client=client,
+            on_delta=emit_review_delta,
+            should_cancel=lambda: _run_cancelled(run_id),
         )
+        if review_result.get("cancelled"):
+            break
         if review_result.get("timed_out"):
             timed_out.append(review_result)
             _emit(
@@ -350,6 +373,8 @@ def review_single_file(
     content: str,
     truncated: bool,
     client: OpenAICompatibleModelClient | None,
+    on_delta: Any | None = None,
+    should_cancel: Any | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     if client is None:
@@ -361,21 +386,48 @@ def review_single_file(
             "elapsed_seconds": 0,
         }
     try:
-        raw = client.generate_text(
-            ModelGenerationRequest(
-                system_prompt=(
-                    "You are RepoOperator performing a file-level code review. Use only the provided file "
-                    "content. Return concise visible review notes: purpose, confirmed issues, improvement "
-                    "opportunities, and evidence. If no issue is confirmed, say so. Do not include hidden reasoning.\n"
-                    + language_guidance_for_task(request.task)
-                ),
-                user_prompt=(
-                    f"Repository: {Path(request.project_path).name}\nFile: {relative_path}\n"
-                    f"Content truncated: {'yes' if truncated else 'no'}\n\n"
-                    f"User review request:\n{request.task}\n\nFile content:\n{content}"
-                ),
-            )
+        prompt = ModelGenerationRequest(
+            system_prompt=(
+                "You are RepoOperator performing a file-level code review. Use only the provided file "
+                "content. Return concise visible review notes: purpose, confirmed issues, improvement "
+                "opportunities, and evidence. If no issue is confirmed, say so. Do not include hidden reasoning.\n"
+                + language_guidance_for_task(request.task)
+            ),
+            user_prompt=(
+                f"Repository: {Path(request.project_path).name}\nFile: {relative_path}\n"
+                f"Content truncated: {'yes' if truncated else 'no'}\n\n"
+                f"User review request:\n{request.task}\n\nFile content:\n{content}"
+            ),
         )
+        pieces: list[str] = []
+        stream_text = getattr(client, "stream_text", None)
+        if callable(stream_text):
+            for delta in stream_text(prompt):
+                if should_cancel and should_cancel():
+                    return {
+                        "file": relative_path,
+                        "cancelled": True,
+                        "elapsed_seconds": int(time.perf_counter() - started),
+                        "summary": "Cancelled before file-level review completed.",
+                    }
+                delta_type = delta.get("type")
+                text = str(delta.get("delta") or "")
+                if not text:
+                    continue
+                if delta_type == "assistant_delta":
+                    pieces.append(text)
+                    if on_delta:
+                        on_delta(text)
+                elif delta_type == "reasoning_delta":
+                    continue
+        raw = "".join(pieces) if pieces else client.generate_text(prompt)
+        if should_cancel and should_cancel():
+            return {
+                "file": relative_path,
+                "cancelled": True,
+                "elapsed_seconds": int(time.perf_counter() - started),
+                "summary": "Cancelled before file-level review completed.",
+            }
         clean, _reasoning = clean_user_visible_response(raw, user_task=request.task)
         return {"file": relative_path, "summary": clean.strip(), "confirmed": True, "elapsed_seconds": int(time.perf_counter() - started)}
     except (ValueError, RuntimeError, TimeoutError) as exc:
@@ -543,6 +595,16 @@ def _activity_id(prefix: str, value: str) -> str:
     return f"{prefix}:{safe[:160] or uuid.uuid4().hex[:8]}"
 
 
+def _run_cancelled(run_id: str) -> bool:
+    try:
+        from repooperator_worker.services.event_service import get_run
+
+        run = get_run(run_id) or {}
+    except Exception:
+        return False
+    return run.get("status") in {"cancelled", "cancelling"}
+
+
 def is_timeout_exception(exc: BaseException) -> bool:
     text = str(exc).lower()
     return "timeout" in text or "timed out" in text or isinstance(exc, TimeoutError)
@@ -559,4 +621,3 @@ def one_line(text: str) -> str:
 def _truncate(text: str, limit: int = 240) -> str:
     cleaned = " ".join(text.split())
     return cleaned if len(cleaned) <= limit else cleaned[: limit - 1].rstrip() + "..."
-

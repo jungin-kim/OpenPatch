@@ -247,7 +247,7 @@ class ControlPlaneSafetyTests(unittest.TestCase):
                 )
 
             with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(config)}, clear=True), patch(
-                "repooperator_worker.services.agent_orchestration_graph.stream_agent_orchestration_graph",
+                "repooperator_worker.agent_core.controller_graph.stream_controller_graph",
                 side_effect=fake_stream,
             ):
                 run_id, stream = stream_run(request)
@@ -275,7 +275,7 @@ class ControlPlaneSafetyTests(unittest.TestCase):
                 yield "{}"
 
             with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(config)}, clear=True), patch(
-                "repooperator_worker.services.agent_orchestration_graph.stream_agent_orchestration_graph",
+                "repooperator_worker.agent_core.controller_graph.stream_controller_graph",
                 side_effect=failing_stream,
             ):
                 run_id, stream = stream_run(request)

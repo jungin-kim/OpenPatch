@@ -6,6 +6,7 @@ from typing import Any
 
 from repooperator_worker.config import get_settings
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
+from repooperator_worker.services.common import resolve_project_path
 from repooperator_worker.services.model_client import OpenAICompatibleModelClient
 
 
@@ -24,7 +25,10 @@ def build_agent_response(
     loop_iteration: int = 1,
     **updates: Any,
 ) -> AgentRunResponse:
-    repo_path = Path(request.project_path)
+    try:
+        repo_path = resolve_project_path(request.project_path)
+    except ValueError:
+        repo_path = Path(request.project_path)
     top_level_entries: list[str] = []
     if repo_path.exists():
         try:
@@ -88,4 +92,3 @@ def _git_branch(repo_path: Path) -> str | None:
         return None
     branch = result.stdout.strip()
     return branch or None
-

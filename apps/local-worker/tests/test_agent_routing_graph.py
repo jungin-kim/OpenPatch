@@ -1,7 +1,9 @@
+import inspect
 import json
-import subprocess
+import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -12,588 +14,242 @@ SRC_DIR = TESTS_DIR.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from repooperator_worker.schemas import (  # noqa: E402
-    AgentProposeFileResponse,
-    AgentRunRequest,
-    AgentRunResponse,
-    ConversationMessage,
-)
+from repooperator_worker.agent_core.controller_graph import _existing_target_files, _answer_with_model  # noqa: E402
+from repooperator_worker.agent_core.repository_review import review_single_file  # noqa: E402
+from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse  # noqa: E402
 from repooperator_worker.services.agent_orchestration_graph import (  # noqa: E402
     run_agent_orchestration_graph,
     stream_agent_orchestration_graph,
 )
+from repooperator_worker.services.agent_run_coordinator import start_run, stream_run  # noqa: E402
 from repooperator_worker.services.agent_service import run_agent_task  # noqa: E402
+from repooperator_worker.services.event_service import list_run_events  # noqa: E402
 
 
-class _ClassifierClient:
-    response: dict
-
+class _StreamingReviewClient:
     @property
     def model_name(self) -> str:
         return "test-model"
 
-    def generate_text(self, request):
-        if "intent classifier" not in request.system_prompt.lower():
-            raise RuntimeError("Only classifier calls are mocked in this test.")
-        return json.dumps(self.response)
+    def stream_text(self, _request):
+        yield {"type": "assistant_delta", "delta": "Purpose: checks the fixture. "}
+        yield {"type": "assistant_delta", "delta": "Confirmed issues: none."}
+
+    def generate_text(self, _request):
+        raise AssertionError("review_single_file should prefer stream_text")
 
 
-class AgentRoutingGraphTests(unittest.TestCase):
+class ActivePathMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.repo = Path(self.tmp.name)
-        (self.repo / "trim_videos.py").write_text(
-            "def split_video(input_path):\n    return input_path\n",
+        self.home = tempfile.TemporaryDirectory()
+        self.repo_base = Path(self.tmp.name) / "repos"
+        self.repo = self.repo_base / "jungin-kim" / "EldersNiceShot"
+        self.repo.mkdir(parents=True)
+        (self.repo / "README.md").write_text("# Fixture\n", encoding="utf-8")
+        (self.repo / "app.py").write_text("def main():\n    return 1\n", encoding="utf-8")
+        self.config = Path(self.tmp.name) / "config.json"
+        self.config.write_text(
+            json.dumps(
+                {
+                    "repooperatorHomeDir": self.home.name,
+                    "localRepoBaseDir": str(self.repo_base),
+                    "openai": {"baseUrl": "http://127.0.0.1:11434/v1", "apiKey": "test", "model": "test-model"},
+                }
+            ),
             encoding="utf-8",
         )
-        (self.repo / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
-        nested = self.repo / "CosyVoice" / "runtime" / "triton_trtllm"
-        nested.mkdir(parents=True)
-        (nested / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
-        (self.repo / "README.md").write_text("# Demo\n", encoding="utf-8")
-        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
-        subprocess.run(["git", "config", "user.name", "RepoOperator Test"], cwd=self.repo, check=True)
-        subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
-        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=self.repo, check=True, capture_output=True)
 
     def tearDown(self) -> None:
+        self.home.cleanup()
         self.tmp.cleanup()
 
-    def _request(self, task: str, history: list[ConversationMessage] | None = None) -> AgentRunRequest:
+    def _request(self, project_path: str | None = None) -> AgentRunRequest:
         return AgentRunRequest(
-            project_path=str(self.repo),
+            project_path=project_path or str(self.repo),
             git_provider="local",
             branch="main",
-            task=task,
-            conversation_history=history or [],
+            thread_id="thread-active-path",
+            task="Explain README.md",
+            conversation_history=[],
         )
 
-    def _run_with_classifier(self, payload: dict, request: AgentRunRequest):
-        _ClassifierClient.response = payload
+    def _response(self, request: AgentRunRequest, run_id: str | None = None) -> AgentRunResponse:
+        return AgentRunResponse(
+            project_path=request.project_path,
+            git_provider=request.git_provider,
+            active_repository_source=request.git_provider,
+            active_repository_path=request.project_path,
+            active_branch=request.branch,
+            task=request.task,
+            model="test-model",
+            branch=request.branch,
+            repo_root_name="EldersNiceShot",
+            context_summary="",
+            top_level_entries=[],
+            readme_included=False,
+            diff_included=False,
+            is_git_repository=True,
+            files_read=["README.md"],
+            response="README.md describes the fixture.",
+            response_type="assistant_answer",
+            intent_classification="read_only_question",
+            graph_path="agent_core:test",
+            agent_flow="agent_core_controller",
+            run_id=run_id,
+        )
+
+    def test_agent_service_calls_agent_core_controller(self) -> None:
+        request = self._request()
+        called: list[str] = []
+
+        def fake_controller(req):
+            called.append(req.task)
+            return self._response(req)
+
         with patch(
-            "repooperator_worker.services.agent_orchestration_graph.OpenAICompatibleModelClient",
-            return_value=_ClassifierClient(),
+            "repooperator_worker.agent_core.controller_graph.run_controller_graph",
+            side_effect=fake_controller,
         ), patch(
-            "repooperator_worker.services.agent_orchestration_graph.get_active_repository",
-            return_value=None,
-        ):
-            return run_agent_orchestration_graph(request)
-
-    def test_followup_change_confirmation_routes_to_previous_file(self) -> None:
-        history = [
-            ConversationMessage(role="user", content="trim_videos.py 코드 분석해줘"),
-            ConversationMessage(
-                role="assistant",
-                content="Refactor split_video in trim_videos.py by validating inputs.",
-                metadata={
-                    "response_type": "assistant_answer",
-                    "files_read": ["trim_videos.py"],
-                    "thread_context_symbols": ["split_video"],
-                },
-            ),
-        ]
-        request = self._request("please turn that prior recommendation into a patch", history)
-
-        with patch(
-            "repooperator_worker.services.context_reference_service.OpenAICompatibleModelClient",
-            return_value=_ClassifierClient(),
-        ), patch(
-            "repooperator_worker.services.agent_orchestration_graph.propose_file_edit",
-            return_value=AgentProposeFileResponse(
-                project_path=str(self.repo),
-                relative_path="trim_videos.py",
-                model="test-model",
-                context_summary="test",
-                original_content="def split_video(input_path):\n    return input_path\n",
-                proposed_content="def split_video(input_path):\n    if not input_path:\n        raise ValueError('input_path required')\n    return input_path\n",
-            ),
-        ):
-            result = self._run_with_classifier(
-                {
-                    "intent": "write_confirmation",
-                    "confidence": 0.94,
-                    "target_files": ["trim_videos.py"],
-                    "target_symbols": ["split_video"],
-                    "requested_action": "prepare_refactor",
-                    "needs_tool": None,
-                    "needs_clarification": False,
-                    "clarification_question": None,
-                },
-                request,
-            )
-
-        self.assertEqual(result.response_type, "edit_applied")
-        self.assertEqual(result.intent_classification, "write_confirmation")
-        self.assertEqual(result.proposal_relative_path, "trim_videos.py")
-        self.assertEqual(result.classifier, "llm")
-        self.assertEqual(result.stop_reason, "completed")
-        self.assertGreaterEqual(result.loop_iteration, 1)
-        self.assertEqual(result.edit_archive[0]["file_path"], "trim_videos.py")
-        self.assertEqual(result.edit_archive[0]["status"], "modified")
-        self.assertGreater(result.edit_archive[0]["additions"], 0)
-        self.assertIn("ValueError", (self.repo / "trim_videos.py").read_text(encoding="utf-8"))
-
-    def test_read_followup_keeps_symbol_context(self) -> None:
-        history = [
-            ConversationMessage(role="user", content="trim_videos.py 코드 분석해줘"),
-            ConversationMessage(
-                role="assistant",
-                content="split_video is defined in trim_videos.py.",
-                metadata={
-                    "response_type": "assistant_answer",
-                    "files_read": ["trim_videos.py"],
-                    "thread_context_symbols": ["split_video"],
-                },
-            ),
-        ]
-        request = self._request("review the previously discussed split_video function for improvements", history)
-        with patch("repooperator_worker.services.agent_graph.run_agent_graph") as run_read_only:
-            run_read_only.return_value = AgentRunResponse(
-                project_path=str(self.repo),
-                git_provider="local",
-                active_repository_source="local",
-                active_repository_path=str(self.repo),
-                active_branch="main",
-                task=request.task,
-                model="test-model",
-                branch="main",
-                repo_root_name=Path(self.repo).name,
-                context_summary="split_video is present in trim_videos.py.",
-                top_level_entries=[],
-                readme_included=False,
-                diff_included=False,
-                is_git_repository=True,
-                files_read=["trim_videos.py"],
-                response="split_video can validate inputs and return explicit outputs.",
-                response_type="assistant_answer",
-                thread_context_files=["trim_videos.py"],
-                thread_context_symbols=["split_video"],
-            )
-            result = self._run_with_classifier(
-                {
-                    "intent": "read_only_question",
-                    "confidence": 0.9,
-                    "target_files": ["trim_videos.py"],
-                    "target_symbols": ["split_video"],
-                    "requested_action": "analyze_symbol",
-                    "needs_tool": None,
-                    "needs_clarification": False,
-                    "clarification_question": None,
-                },
-                request,
-            )
-        self.assertEqual(result.intent_classification, "read_only_question")
-        self.assertIn("split_video", result.thread_context_symbols)
-
-    def test_commit_request_routes_to_git_workflow_not_proposal(self) -> None:
-        (self.repo / "README.md").write_text("# Demo\n\nChanged\n", encoding="utf-8")
-        request = self._request("prepare a local commit for the current working tree changes")
-        result = self._run_with_classifier(
-            {
-                "intent": "git_workflow_request",
-                "confidence": 0.95,
-                "target_files": [],
-                "target_symbols": [],
-                "requested_action": "commit",
-                "git_action": "git_commit_plan",
-                "needs_tool": "git",
-                "needs_clarification": False,
-                "clarification_question": None,
-            },
-            request,
-        )
-        self.assertEqual(result.intent_classification, "git_workflow_request")
-        self.assertEqual(result.response_type, "command_approval")
-        self.assertEqual(result.git_action, "git_commit_plan")
-        self.assertIn("git status --short", result.commands_run)
-        self.assertIn("git add --all", result.commands_planned)
-        self.assertIn("next_command_approval", result.command_approval)
-        self.assertEqual(result.command_approval["next_command_approval"]["command"][:3], ["git", "commit", "-m"])
-        self.assertIsNone(result.proposal_relative_path)
-
-    def test_recent_commit_uses_git_log_not_status(self) -> None:
-        result = self._run_with_classifier(
-            {
-                "intent": "git_workflow_request",
-                "confidence": 0.95,
-                "target_files": [],
-                "target_symbols": [],
-                "requested_action": "recent_commit",
-                "git_action": "git_recent_commit",
-                "needs_tool": "git",
-                "needs_clarification": False,
-                "clarification_question": None,
-            },
-            self._request("show the newest commit details for this branch"),
-        )
-        self.assertEqual(result.response_type, "assistant_answer")
-        self.assertEqual(result.git_action, "git_recent_commit")
-        self.assertIn("git log -1", result.commands_run[0])
-        self.assertIn("Initial commit", result.response)
-
-    def test_review_recommendation_does_not_generate_proposal(self) -> None:
-        request = self._request("suggest improvements for the split_video function")
-        with patch("repooperator_worker.services.agent_graph.run_agent_graph") as run_read_only:
-            run_read_only.return_value = AgentRunResponse(
-                project_path=str(self.repo),
-                git_provider="local",
-                active_repository_source="local",
-                active_repository_path=str(self.repo),
-                active_branch="main",
-                task=request.task,
-                model="test-model",
-                branch="main",
-                repo_root_name=Path(self.repo).name,
-                context_summary="split_video is present.",
-                top_level_entries=[],
-                readme_included=False,
-                diff_included=False,
-                is_git_repository=True,
-                files_read=["trim_videos.py"],
-                response="Suggestions only: validate input and return output paths.",
-                response_type="assistant_answer",
-                thread_context_files=["trim_videos.py"],
-                thread_context_symbols=["split_video"],
-            )
-            result = self._run_with_classifier(
-                {
-                    "intent": "review_recommendation",
-                    "confidence": 0.94,
-                    "target_files": ["trim_videos.py"],
-                    "target_symbols": ["split_video"],
-                    "requested_action": "review_symbol",
-                    "needs_tool": None,
-                    "needs_clarification": False,
-                    "clarification_question": None,
-                },
-                request,
-            )
-        self.assertEqual(result.intent_classification, "review_recommendation")
-        self.assertEqual(result.response_type, "assistant_answer")
-        self.assertIsNone(result.proposal_relative_path)
-
-    def test_mr_request_routes_to_gitlab_tool_flow(self) -> None:
-        request = self._request("summarize merge request status for this repository")
-        with patch("shutil.which", return_value=None):
-            result = self._run_with_classifier(
-                {
-                    "intent": "gitlab_mr_request",
-                    "confidence": 0.96,
-                    "target_files": [],
-                    "target_symbols": [],
-                    "requested_action": "list_merge_requests",
-                    "needs_tool": "glab",
-                    "needs_clarification": False,
-                    "clarification_question": None,
-                },
-                request,
-            )
-        self.assertEqual(result.intent_classification, "gitlab_mr_request")
-        self.assertIn("glab", result.response)
-
-    def test_recommend_files_request_does_not_require_target(self) -> None:
-        result = self._run_with_classifier(
-            {
-                "intent": "recommend_change_targets",
-                "confidence": 0.93,
-                "target_files": [],
-                "target_symbols": [],
-                "requested_action": "recommend_files",
-                "needs_tool": None,
-                "needs_clarification": False,
-                "clarification_question": None,
-            },
-            self._request("recommend the next files worth improving"),
-        )
-        self.assertEqual(result.intent_classification, "recommend_change_targets")
-        self.assertIn("Here are concrete files", result.response)
-
-    def test_candidate_answer_selects_previous_docker_compose_candidate(self) -> None:
-        history = [
-            ConversationMessage(role="user", content="docker-compose.yml 파일 검토해서 수정 제안해줘"),
-            ConversationMessage(
-                role="assistant",
-                content="I found multiple possible targets.",
-                metadata={
-                    "response_type": "clarification",
-                    "clarification_candidates": [
-                        "docker-compose.yml",
-                        "CosyVoice/runtime/triton_trtllm/docker-compose.yml",
-                    ],
-                },
-            ),
-        ]
-        request = self._request("use the root compose file from those options", history)
-        with patch(
-            "repooperator_worker.services.agent_orchestration_graph.propose_file_edit",
-            return_value=AgentProposeFileResponse(
-                project_path=str(self.repo),
-                relative_path="docker-compose.yml",
-                model="test-model",
-                context_summary="test",
-                original_content="services: {}\n",
-                proposed_content="services:\n  app:\n    image: alpine\n",
-            ),
-        ):
-            result = self._run_with_classifier(
-                {
-                    "intent": "file_clarification_answer",
-                    "confidence": 0.95,
-                    "target_files": ["docker-compose.yml"],
-                    "target_symbols": [],
-                    "requested_action": "select_candidate",
-                    "needs_tool": None,
-                    "needs_clarification": False,
-                    "clarification_question": None,
-                },
-                request,
-            )
-        self.assertEqual(result.response_type, "edit_applied")
-        self.assertEqual(result.proposal_relative_path, "docker-compose.yml")
-
-    def test_recommendation_followup_uses_structured_context(self) -> None:
-        recommendation_context = {
-            "recommendation_id": "rec_test",
-            "repo": str(self.repo),
-            "branch": "main",
-            "recommended_files": ["trim_videos.py"],
-            "items": [
-                {
-                    "id": "rec_test_1",
-                    "files": ["trim_videos.py"],
-                    "symbols": ["split_video"],
-                    "suggested_changes": ["Add validation and explicit return values."],
-                    "rationale": "confirmed from file review",
-                    "risk_level": "medium",
-                    "category": "code",
-                    "needs_more_inspection": False,
-                }
-            ],
-        }
-        history = [
-            ConversationMessage(
-                role="assistant",
-                content="I recommend a focused validation refactor.",
-                metadata={
-                    "response_type": "assistant_answer",
-                    "recommendation_context": recommendation_context,
-                    "recommendation_context_loaded": True,
-                    "files_read": ["trim_videos.py"],
-                },
-            )
-        ]
-        request = self._request("continue by preparing the recommended code change", history)
-
-        class _RecommendationResolver:
-            @property
-            def model_name(self) -> str:
-                return "test-model"
-
-            def generate_text(self, request):
-                return json.dumps(
-                    {
-                        "refers_to_previous_recommendation": True,
-                        "selected_recommendation_ids": ["rec_test_1"],
-                        "selected_files": ["trim_videos.py"],
-                        "requested_action": "generate_proposal",
-                        "confidence": 0.91,
-                        "needs_clarification": False,
-                        "clarification_question": None,
-                    }
-                )
-
-        with patch(
-            "repooperator_worker.services.recommendation_context_service.OpenAICompatibleModelClient",
-            return_value=_RecommendationResolver(),
-        ), patch(
-            "repooperator_worker.services.agent_orchestration_graph.propose_file_edit",
-            return_value=AgentProposeFileResponse(
-                project_path=str(self.repo),
-                relative_path="trim_videos.py",
-                model="test-model",
-                context_summary="test",
-                original_content="def split_video(input_path):\n    return input_path\n",
-                proposed_content="def split_video(input_path):\n    if not input_path:\n        raise ValueError('input_path required')\n    return input_path\n",
-            ),
-        ):
-            result = self._run_with_classifier(
-                {
-                    "intent": "write_confirmation",
-                    "confidence": 0.9,
-                    "target_files": [],
-                    "target_symbols": [],
-                    "requested_action": "continue_previous_recommendation",
-                    "needs_tool": None,
-                    "needs_clarification": False,
-                    "clarification_question": None,
-                },
-                request,
-            )
-
-        self.assertEqual(result.response_type, "edit_applied")
-        self.assertTrue(result.recommendation_context_loaded)
-        self.assertEqual(result.proposal_relative_path, "trim_videos.py")
-
-    def test_multi_file_recommendation_followup_asks_for_scope(self) -> None:
-        recommendation_context = {
-            "recommendation_id": "rec_multi",
-            "repo": str(self.repo),
-            "branch": "main",
-            "recommended_files": ["trim_videos.py", "README.md"],
-            "items": [
-                {"id": "rec_multi_1", "files": ["trim_videos.py"], "suggested_changes": ["Improve validation."]},
-                {"id": "rec_multi_2", "files": ["README.md"], "suggested_changes": ["Document usage."]},
-            ],
-        }
-        request = self._request(
-            "prepare the suggested improvements",
-            [
-                ConversationMessage(
-                    role="assistant",
-                    content="Two areas are worth improving.",
-                    metadata={"response_type": "assistant_answer", "recommendation_context": recommendation_context},
-                )
-            ],
-        )
-
-        class _MultiResolver:
-            @property
-            def model_name(self) -> str:
-                return "test-model"
-
-            def generate_text(self, request):
-                return json.dumps(
-                    {
-                        "refers_to_previous_recommendation": True,
-                        "selected_recommendation_ids": ["rec_multi_1", "rec_multi_2"],
-                        "selected_files": ["trim_videos.py", "README.md"],
-                        "requested_action": "generate_proposal",
-                        "confidence": 0.86,
-                        "needs_clarification": False,
-                        "clarification_question": None,
-                    }
-                )
-
-        with patch(
-            "repooperator_worker.services.recommendation_context_service.OpenAICompatibleModelClient",
-            return_value=_MultiResolver(),
-        ):
-            result = self._run_with_classifier(
-                {
-                    "intent": "write_confirmation",
-                    "confidence": 0.9,
-                    "target_files": [],
-                    "target_symbols": [],
-                    "requested_action": "continue_previous_recommendation",
-                    "needs_tool": None,
-                    "needs_clarification": False,
-                    "clarification_question": None,
-                },
-                request,
-            )
-        self.assertEqual(result.response_type, "clarification")
-        self.assertCountEqual(result.clarification_candidates, ["trim_videos.py", "README.md"])
-
-    def test_pasted_spec_without_apply_does_not_select_repo_file(self) -> None:
-        request = self._request(
-            "Here is a structured implementation brief with constraints, verification, and final report sections."
-        )
-        result = self._run_with_classifier(
-            {
-                "intent": "pasted_prompt_or_spec",
-                "confidence": 0.92,
-                "target_files": ["README.md"],
-                "target_symbols": [],
-                "requested_action": "summarize_external_spec",
-                "needs_tool": None,
-                "needs_clarification": False,
-                "clarification_question": None,
-            },
-            request,
-        )
-        self.assertEqual(result.intent_classification, "pasted_prompt_or_spec")
-        self.assertEqual(result.response_type, "assistant_answer")
-        self.assertTrue(result.pasted_prompt_or_spec)
-        self.assertIsNone(result.proposal_relative_path)
-
-    def test_explicit_apply_spec_returns_plan_before_edits(self) -> None:
-        request = self._request(
-            "Apply the attached implementation brief to this repository after planning the affected areas."
-        )
-        result = self._run_with_classifier(
-            {
-                "intent": "apply_spec_to_repo",
-                "confidence": 0.91,
-                "target_files": ["README.md", "trim_videos.py"],
-                "target_symbols": [],
-                "requested_action": "plan_spec_application",
-                "needs_tool": None,
-                "needs_clarification": False,
-                "clarification_question": None,
-            },
-            request,
-        )
-        self.assertEqual(result.intent_classification, "apply_spec_to_repo")
-        self.assertEqual(result.response_type, "assistant_answer")
-        self.assertTrue(result.apply_spec_to_repo)
-        self.assertGreaterEqual(len(result.plan_steps), 3)
-        self.assertIsNone(result.proposal_relative_path)
-
-    def test_agent_service_returns_agent_error_without_legacy_fallback(self) -> None:
-        request = self._request("optimize the container build file")
-        with patch(
             "repooperator_worker.services.agent_orchestration_graph.run_agent_orchestration_graph",
-            side_effect=KeyError("graph exploded"),
-        ), patch(
-            "repooperator_worker.services.agent_service.logger.exception",
+            side_effect=AssertionError("old orchestration graph must not run"),
         ):
             result = run_agent_task(request)
-        self.assertEqual(result.response_type, "agent_error")
-        self.assertEqual(result.graph_path, "agent_error")
-        self.assertNotIn("Switch the permission mode", result.response)
 
-    def test_stream_activity_uses_product_labels_not_internal_nodes(self) -> None:
-        request = self._request("summarize the most recent commit")
-        _ClassifierClient.response = {
-            "intent": "git_workflow_request",
-            "confidence": 0.95,
-            "target_files": [],
-            "target_symbols": [],
-            "requested_action": "recent_commit",
-            "git_action": "git_recent_commit",
-            "needs_tool": "git",
-            "needs_clarification": False,
-            "clarification_question": None,
-        }
-        with patch(
-            "repooperator_worker.services.agent_orchestration_graph.OpenAICompatibleModelClient",
-            return_value=_ClassifierClient(),
+        self.assertEqual(called, [request.task])
+        self.assertEqual(result.agent_flow, "agent_core_controller")
+
+    def test_agent_run_coordinator_sync_calls_agent_core_controller(self) -> None:
+        request = self._request()
+        called: list[str] = []
+
+        def fake_controller(req, *, run_id=None):
+            called.append(str(run_id))
+            return self._response(req, run_id)
+
+        with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
+            "repooperator_worker.agent_core.controller_graph.run_controller_graph",
+            side_effect=fake_controller,
         ), patch(
-            "repooperator_worker.services.agent_orchestration_graph.get_active_repository",
-            return_value=None,
+            "repooperator_worker.services.agent_service.run_agent_task",
+            side_effect=AssertionError("agent_service must not be on coordinator sync path"),
         ):
-            events = [json.loads(item) for item in stream_agent_orchestration_graph(request)]
+            result = start_run(request)
 
-        activity = [event for event in events if event.get("type") == "progress_delta"]
-        labels = [event.get("label", "") for event in activity]
-        serialized_labels = " ".join(labels)
-        self.assertTrue(any(label == "Prepared Git workflow" for label in labels))
-        self.assertNotIn("load_context", serialized_labels)
-        self.assertNotIn("classify_intent", serialized_labels)
-        self.assertNotIn("final_answer", serialized_labels)
-        final = next(event for event in events if event.get("type") == "final_message")
-        self.assertGreaterEqual(len(final["result"]["activity_events"]), 3)
-        self.assertEqual(final["result"]["stop_reason"], "completed")
-        self.assertFalse(
-            any(event.get("status") == "running" for event in final["result"]["activity_events"])
+        self.assertEqual(len(called), 1)
+        self.assertEqual(result.run_id, called[0])
+
+    def test_agent_run_coordinator_stream_calls_agent_core_stream(self) -> None:
+        request = self._request()
+        called: list[str] = []
+
+        def fake_stream(req, *, run_id=None):
+            called.append(str(run_id))
+            yield {"type": "progress_delta", "run_id": run_id, "activity_id": "test", "label": "Working", "status": "completed"}
+            yield {"type": "assistant_delta", "delta": "Done."}
+            yield {"type": "final_message", "result": self._response(req, run_id).model_dump(mode="json")}
+
+        with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
+            "repooperator_worker.agent_core.controller_graph.stream_controller_graph",
+            side_effect=fake_stream,
+        ), patch(
+            "repooperator_worker.services.agent_orchestration_graph.stream_agent_orchestration_graph",
+            side_effect=AssertionError("old stream graph must not run"),
+        ):
+            run_id, stream = stream_run(request)
+            chunks: list[str] = []
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                chunk = next(stream)
+                chunks.append(chunk)
+                if "[DONE]" in chunk:
+                    break
+            sequences = [event["sequence"] for event in list_run_events(run_id)]
+
+        self.assertEqual(called, [run_id])
+        self.assertTrue(any("progress_delta" in chunk for chunk in chunks))
+        self.assertEqual(sequences, sorted(set(sequences)))
+
+    def test_agent_orchestration_graph_is_adapter(self) -> None:
+        request = self._request()
+        with patch(
+            "repooperator_worker.services.agent_orchestration_graph.run_controller_graph",
+            return_value=self._response(request),
+        ) as run_controller:
+            result = run_agent_orchestration_graph(request)
+        self.assertTrue(run_controller.called)
+        self.assertEqual(result.graph_path, "agent_core:test")
+
+        with patch(
+            "repooperator_worker.services.agent_orchestration_graph.stream_controller_graph",
+            return_value=iter([{"type": "final_message", "result": self._response(request).model_dump(mode="json")}]),
+        ) as stream_controller:
+            events = list(stream_agent_orchestration_graph(request, run_id="run-adapter"))
+        self.assertTrue(stream_controller.called)
+        self.assertEqual(events[0]["type"], "final_message")
+
+    def test_old_agent_graph_is_not_imported_by_active_services(self) -> None:
+        import repooperator_worker.services.agent_run_coordinator as coordinator
+        import repooperator_worker.services.agent_service as service
+
+        combined = inspect.getsource(coordinator) + "\n" + inspect.getsource(service)
+        self.assertNotIn("agent_graph", combined)
+        self.assertNotIn("run_agent_graph", combined)
+
+    def test_existing_target_files_resolves_provider_style_project_path(self) -> None:
+        request = self._request("jungin-kim/EldersNiceShot")
+        with patch.dict(
+            os.environ,
+            {"REPOOPERATOR_CONFIG_PATH": str(self.config), "LOCAL_REPO_BASE_DIR": str(self.repo_base)},
+            clear=False,
+        ), patch(
+            "pathlib.Path.cwd",
+            side_effect=AssertionError("current working directory must not be used"),
+        ):
+            self.assertEqual(_existing_target_files(request, ["README.md", "../outside.py"]), ["README.md"])
+
+    def test_visible_reasoning_is_removed_from_final_answer(self) -> None:
+        request = self._request()
+
+        class _Client:
+            def stream_text(self, _prompt):
+                yield {"type": "assistant_delta", "delta": "<think>private notes</think>\nFinal answer"}
+
+            def generate_text(self, _prompt):
+                raise AssertionError("stream result should be used")
+
+        with patch("repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient", return_value=_Client()):
+            answer = _answer_with_model(request, {"README.md": "# Fixture\n"})
+        self.assertEqual(answer, "Final answer")
+        self.assertNotIn("<think>", answer)
+        self.assertNotIn("private notes", answer)
+
+    def test_repository_review_streams_file_deltas_on_same_activity(self) -> None:
+        deltas: list[str] = []
+        result = review_single_file(
+            request=self._request(),
+            relative_path="app.py",
+            content="def main():\n    return 1\n",
+            truncated=False,
+            client=_StreamingReviewClient(),
+            on_delta=deltas.append,
         )
-        durations = [
-            event.get("duration_ms")
-            for event in final["result"]["activity_events"]
-            if event.get("duration_ms") is not None
-        ]
-        self.assertTrue(all(duration >= 0 for duration in durations))
+        self.assertIn("Confirmed issues", result["summary"])
+        self.assertEqual(deltas, ["Purpose: checks the fixture. ", "Confirmed issues: none."])
+
+    def test_repository_review_streaming_honors_cancellation(self) -> None:
+        deltas: list[str] = []
+        result = review_single_file(
+            request=self._request(),
+            relative_path="app.py",
+            content="def main():\n    return 1\n",
+            truncated=False,
+            client=_StreamingReviewClient(),
+            on_delta=deltas.append,
+            should_cancel=lambda: bool(deltas),
+        )
+        self.assertTrue(result["cancelled"])
+        self.assertEqual(deltas, ["Purpose: checks the fixture. "])
 
 
 if __name__ == "__main__":
