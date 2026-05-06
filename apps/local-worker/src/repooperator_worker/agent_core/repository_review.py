@@ -82,6 +82,7 @@ def run_repository_review(
     inventory = inventory_repository_review_files(repo_path)
     selected = inventory["selected"]
     skipped = inventory["skipped"]
+    labels = review_progress_labels(selected)
     _emit(
         activity_events,
         run_id=run_id,
@@ -112,7 +113,7 @@ def run_repository_review(
         file_started = time.perf_counter()
         started_at = utc_now()
         activity_id = _activity_id("review-file", relative_path)
-        label = Path(relative_path).name
+        label = labels.get(relative_path) or relative_path
         read_summary = progress_summary_for_file(relative_path=relative_path, phase="reading")
         _emit(
             activity_events,
@@ -296,7 +297,7 @@ def run_repository_review(
         response=response,
         files_read=[item["file"] for item in reviewed],
         graph_path="agent_core:repository_review",
-        intent_classification=getattr(classifier, "intent", "repo_analysis") if classifier else "repo_analysis",
+        intent_classification=classifier_intent(classifier),
         activity_events=activity_events,
         run_id=run_id,
         skills_used=skills_used or [],
@@ -332,6 +333,8 @@ def inventory_repository_review_files(repo_path: Path) -> dict[str, list[Any]]:
 
 
 def review_skip_reason(path: Path, relative_path: Path) -> str | None:
+    if is_stale_duplicate_copy(relative_path):
+        return "stale duplicate copy"
     parts = {part.lower() for part in relative_path.parts}
     if parts & {item.lower() for item in SKIP_DIRS | frozenset(REPOSITORY_REVIEW_EXTRA_SKIP_DIRS)}:
         return "generated, dependency, cache, or hidden workspace path"
@@ -348,6 +351,36 @@ def review_skip_reason(path: Path, relative_path: Path) -> str | None:
     if size > MAX_REPOSITORY_REVIEW_BYTES:
         return f"larger than {MAX_REPOSITORY_REVIEW_BYTES} bytes"
     return None
+
+
+def is_stale_duplicate_copy(relative_path: Path) -> bool:
+    stem = relative_path.stem.lower()
+    suffix = relative_path.suffix.lower()
+    return suffix in REPOSITORY_REVIEW_SUFFIXES and (stem.endswith(" 2") or stem.startswith("test_") and stem.endswith(" 2"))
+
+
+def review_progress_labels(relative_paths: list[str]) -> dict[str, str]:
+    basenames: dict[str, int] = {}
+    for relative_path in relative_paths:
+        name = Path(relative_path).name
+        basenames[name] = basenames.get(name, 0) + 1
+    labels: dict[str, str] = {}
+    for relative_path in relative_paths:
+        path = Path(relative_path)
+        if basenames.get(path.name, 0) <= 1:
+            labels[relative_path] = path.name
+            continue
+        parent = "root" if str(path.parent) == "." else str(path.parent)
+        labels[relative_path] = f"{path.name} · {parent}"
+    return labels
+
+
+def classifier_intent(classifier: Any | None) -> str:
+    if classifier is None:
+        return "repo_analysis"
+    if isinstance(classifier, dict):
+        return str(classifier.get("intent") or "repo_analysis")
+    return str(getattr(classifier, "intent", "repo_analysis"))
 
 
 def read_review_file(repo_path: Path, relative_path: str) -> dict[str, Any]:

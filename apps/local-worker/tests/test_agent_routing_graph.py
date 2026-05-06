@@ -14,7 +14,9 @@ SRC_DIR = TESTS_DIR.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from repooperator_worker.agent_core.controller_graph import _existing_target_files, _answer_with_model, run_controller_graph, stream_controller_graph  # noqa: E402
+from repooperator_worker.agent_core.action_executor import ActionExecutor  # noqa: E402
+from repooperator_worker.agent_core.actions import AgentAction, ActionResult  # noqa: E402
+from repooperator_worker.agent_core.controller_graph import _existing_target_files, _answer_with_model, parse_steering_instruction, run_controller_graph, stream_controller_graph  # noqa: E402
 from repooperator_worker.agent_core.state import ClassifierResult  # noqa: E402
 from repooperator_worker.agent_core.repository_review import review_single_file  # noqa: E402
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse  # noqa: E402
@@ -24,7 +26,8 @@ from repooperator_worker.services.agent_orchestration_graph import (  # noqa: E4
 )
 from repooperator_worker.services.agent_run_coordinator import start_run, stream_run  # noqa: E402
 from repooperator_worker.services.agent_service import run_agent_task  # noqa: E402
-from repooperator_worker.services.event_service import list_run_events  # noqa: E402
+from repooperator_worker.services.event_service import append_run_event, list_run_events  # noqa: E402
+from repooperator_worker.services.json_safe import json_safe  # noqa: E402
 
 
 class _StreamingReviewClient:
@@ -308,6 +311,134 @@ class ActivePathMigrationTests(unittest.TestCase):
             events = list(stream_controller_graph(request, run_id="stream-no-duplicate"))
         final = next(event for event in events if event.get("type") == "final_message")
         self.assertEqual(final["result"]["activity_events"], [])
+
+    def test_analyze_repository_action_with_classifier_payload_is_json_safe(self) -> None:
+        request = self._request()
+        classifier = ClassifierResult(
+            intent="repo_analysis",
+            confidence=0.9,
+            analysis_scope="repository_wide",
+            requested_workflow="repository_review",
+            requires_repository_wide_review=True,
+        )
+        action = AgentAction(
+            type="analyze_repository",
+            reason_summary="Review repo",
+            payload={"classifier": classifier},
+        )
+        json.dumps(action.model_dump(), ensure_ascii=False)
+        with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
+            "repooperator_worker.agent_core.repository_review.OpenAICompatibleModelClient",
+            return_value=_LoopClient(),
+        ), patch(
+            "repooperator_worker.services.event_service.get_repooperator_home_dir",
+            return_value=Path(self.home.name),
+        ):
+            result = ActionExecutor(run_id="run-json-safe-action", request=request).execute(action)
+            event = append_run_event(
+                "run-json-safe-action",
+                {
+                    "type": "action_result",
+                    "action": action.model_dump(),
+                    "result": result.model_dump(),
+                },
+            )
+        json.dumps(event, ensure_ascii=False)
+        self.assertEqual(result.status, "success")
+        self.assertIsInstance(result.payload.get("response"), dict)
+
+    def test_stream_run_does_not_reappend_persisted_assistant_delta(self) -> None:
+        request = self._request()
+
+        def fake_stream(req, *, run_id=None):
+            persisted = append_run_event(
+                str(run_id),
+                {"type": "assistant_delta", "delta": "Hello once.", "streaming_mode": "model_stream"},
+            )
+            yield persisted
+            yield {"type": "final_message", "result": self._response(req, run_id).model_dump(mode="json")}
+
+        with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
+            "repooperator_worker.services.event_service.get_repooperator_home_dir",
+            return_value=Path(self.home.name),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.stream_controller_graph",
+            side_effect=fake_stream,
+        ):
+            run_id, stream = stream_run(request)
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                if "[DONE]" in next(stream):
+                    break
+            assistant_events = [event for event in list_run_events(run_id) if event.get("type") == "assistant_delta"]
+            sequences = [event["sequence"] for event in list_run_events(run_id)]
+        self.assertEqual(len(assistant_events), 1)
+        self.assertEqual(sequences, sorted(set(sequences)))
+
+    def test_steering_parser_unknown_defers_without_direct_cancel_keyword_routing(self) -> None:
+        request = self._request()
+        state = ClassifierResult()
+        source = inspect.getsource(__import__("repooperator_worker.agent_core.controller_graph", fromlist=["consume_steering_for_state"]).consume_steering_for_state)
+        self.assertNotIn('{"stop", "cancel"}', source)
+        with patch("repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient", side_effect=RuntimeError("offline")):
+            decision = parse_steering_instruction("please decide something later", request, self._state_for_steering(state))
+        self.assertEqual(decision.steering_type, "defer")
+
+    def test_cancel_steering_works_via_structured_parser_output(self) -> None:
+        request = self._request()
+
+        class _SteeringClient:
+            def generate_text(self, _prompt):
+                return json.dumps({"steering_type": "cancel", "target_files": [], "confidence": 0.95, "reason": "user requested cancellation"})
+
+        with patch("repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient", return_value=_SteeringClient()):
+            decision = parse_steering_instruction("irrelevant content", request, self._state_for_steering(ClassifierResult()))
+        self.assertEqual(decision.steering_type, "cancel")
+        self.assertGreaterEqual(decision.confidence, 0.8)
+
+    def test_frontend_progress_merge_does_not_autocomplete_unrelated_running_activity(self) -> None:
+        source = (TESTS_DIR.parents[2] / "apps" / "web" / "src" / "components" / "chat" / "ChatApp.tsx").read_text(encoding="utf-8")
+        merge_body = source.split("function mergeProgressStep(", 1)[1].split("function mergeProgressStepFields", 1)[0]
+        self.assertNotIn("completedPrev", merge_body)
+        self.assertNotIn("index === current.length - 1 && step.status === \"running\"", merge_body)
+
+    def test_repository_review_final_response_json_safe(self) -> None:
+        request = self._request()
+        classifier = ClassifierResult(
+            intent="repo_analysis",
+            confidence=0.9,
+            analysis_scope="repository_wide",
+            requested_workflow="repository_review",
+            requires_repository_wide_review=True,
+        )
+        with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
+            "repooperator_worker.agent_core.controller_graph.classify_intent",
+            return_value=classifier,
+        ), patch(
+            "repooperator_worker.agent_core.repository_review.OpenAICompatibleModelClient",
+            return_value=_LoopClient(),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ), patch(
+            "repooperator_worker.services.event_service.get_repooperator_home_dir",
+            return_value=Path(self.home.name),
+        ):
+            response = run_controller_graph(request, run_id="run-repo-review-json-safe")
+        json.dumps(response.model_dump(mode="json"), ensure_ascii=False)
+        self.assertNotIn("ClassifierResult(", response.response)
+
+    def _state_for_steering(self, classifier: ClassifierResult):
+        from repooperator_worker.agent_core.state import AgentCoreState
+
+        return AgentCoreState(
+            run_id="run-steering-test",
+            thread_id="thread-active-path",
+            repo=str(self.repo),
+            branch="main",
+            user_task="Analyze",
+            classifier_result=classifier,
+        )
 
     def test_agent_service_error_uses_agent_core_metadata(self) -> None:
         request = self._request()

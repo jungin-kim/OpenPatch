@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from repooperator_worker.services.json_safe import json_safe
 
 ActionType = Literal[
     "inspect_repo_tree",
@@ -61,7 +62,7 @@ class AgentAction:
     payload: dict[str, Any] = field(default_factory=dict)
 
     def model_dump(self) -> dict[str, Any]:
-        return {
+        return json_safe({
             "action_id": self.action_id,
             "type": self.type,
             "reason_summary": self.reason_summary,
@@ -73,7 +74,7 @@ class AgentAction:
             "requires_approval": self.requires_approval,
             "created_at": self.created_at,
             "payload": self.payload,
-        }
+        })
 
 
 @dataclass
@@ -91,7 +92,7 @@ class ActionResult:
     payload: dict[str, Any] = field(default_factory=dict)
 
     def model_dump(self) -> dict[str, Any]:
-        return {
+        return json_safe({
             "action_id": self.action_id,
             "status": self.status,
             "observation": self.observation,
@@ -103,5 +104,4 @@ class ActionResult:
             "next_recommended_action": self.next_recommended_action,
             "duration_ms": self.duration_ms,
             "payload": self.payload,
-        }
-
+        })

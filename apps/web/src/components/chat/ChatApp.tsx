@@ -197,12 +197,7 @@ export function ChatApp() {
     if (existingIndex >= 0) {
       return current.map((step, index) => (index === existingIndex ? mergeProgressStepFields(step, incoming) : step));
     }
-    const completedPrev = current.map((step, index) =>
-      index === current.length - 1 && step.status === "running"
-        ? { ...step, status: "completed" }
-        : step,
-    );
-    return [...completedPrev, incoming];
+    return [...current, incoming];
   }
 
   function mergeProgressStepFields(existing: ProgressStep, incoming: ProgressStep): ProgressStep {

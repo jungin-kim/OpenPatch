@@ -22,6 +22,7 @@ from repooperator_worker.services.event_service import (
     summarize_user_message,
 )
 from repooperator_worker.agent_core.actions import ActionResult
+from repooperator_worker.services.json_safe import json_safe, safe_repr
 from repooperator_worker.services.memory_service import maybe_record_from_agent_run
 from repooperator_worker.services.thread_context_service import update_thread_context
 
@@ -47,6 +48,7 @@ def start_run(request: AgentRunRequest, *, stream: bool = False) -> AgentRunResp
         from repooperator_worker.agent_core.controller_graph import run_controller_graph
 
         response = run_controller_graph(request, run_id=run_id).model_copy(update={"run_id": run_id})
+        final_payload = _safe_final_result(response, run_id=run_id)
         _record_response_events(run_id, request, response)
         maybe_record_from_agent_run(request, response)
         update_thread_context(request, response)
@@ -54,7 +56,7 @@ def start_run(request: AgentRunRequest, *, stream: bool = False) -> AgentRunResp
         complete_active_run(
             run_id=run_id,
             status=terminal_status,
-            final_result=response.model_dump(mode="json"),
+            final_result=final_payload,
         )
         if terminal_status == "completed":
             _drain_queue_after_run(request)
@@ -108,8 +110,9 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
                     except json.JSONDecodeError:
                         continue
                 if event.get("type") == "final_message":
-                    final_result = event.get("result")
-                append_run_event(run_id, event)
+                    final_result = json_safe(event.get("result"))
+                if not event.get("persisted"):
+                    append_run_event(run_id, event)
             if isinstance(final_result, dict):
                 try:
                     response = AgentRunResponse.model_validate(final_result)
@@ -360,12 +363,36 @@ def wait_for_approval(run_id: str, approval: dict[str, Any]) -> dict[str, Any]:
 
 
 def record_action_result(run_id: str, result: ActionResult | dict[str, Any]) -> dict[str, Any]:
-    payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    payload = json_safe(result.model_dump() if hasattr(result, "model_dump") else dict(result))
     return append_run_event(run_id, {"type": "action_result", "event_type": "action_result", "status": payload.get("status"), "result": payload})
 
 
 def complete_run(run_id: str, *, status: str, final_result: dict[str, Any] | None = None, error: str | None = None) -> dict[str, Any]:
-    return complete_active_run(run_id=run_id, status=status, final_result=final_result, error=error)
+    return complete_active_run(run_id=run_id, status=status, final_result=json_safe(final_result), error=error)
+
+
+def _safe_final_result(response: AgentRunResponse, *, run_id: str) -> dict[str, Any]:
+    try:
+        payload = response.model_dump(mode="json")
+        json.dumps(payload, ensure_ascii=False)
+        return payload
+    except Exception as exc:  # noqa: BLE001
+        payload = json_safe(response)
+        payload["response"] = (
+            "The review completed, but RepoOperator hit an internal metadata serialization error. "
+            "The readable summary is below...\n\n"
+            + str(payload.get("response") or response.response)
+        )
+        append_run_event(
+            run_id,
+            {
+                "type": "error",
+                "event_type": "metadata_serialization_error",
+                "status": "failed",
+                "message": safe_repr(exc, limit=220),
+            },
+        )
+        return json_safe(payload)
 
 
 def _record_response_events(run_id: str, request: AgentRunRequest, response: AgentRunResponse) -> None:

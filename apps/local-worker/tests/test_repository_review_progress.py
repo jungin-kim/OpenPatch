@@ -13,6 +13,10 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from repooperator_worker.schemas import AgentRunRequest  # noqa: E402
+from repooperator_worker.agent_core.repository_review import (  # noqa: E402
+    inventory_repository_review_files,
+    review_progress_labels,
+)
 from repooperator_worker.services.agent_orchestration_graph import (  # noqa: E402
     REPOSITORY_REVIEW_BINARY_SUFFIXES,
     REPOSITORY_REVIEW_SUFFIXES,
@@ -68,7 +72,11 @@ class RepositoryReviewProgressTests(unittest.TestCase):
         self.repo = Path(self.tmp.name) / "fixture"
         self.repo.mkdir()
         (self.repo / "README.md").write_text("# Fixture\n\nSmall mixed repository.\n", encoding="utf-8")
+        docs = self.repo / "docs"
+        docs.mkdir()
+        (docs / "README.md").write_text("# Docs\n", encoding="utf-8")
         (self.repo / "server.py").write_text("def handle():\n    return {'ok': True}\n", encoding="utf-8")
+        (self.repo / "test_agent_routing_graph 2.py").write_text("def stale():\n    return True\n", encoding="utf-8")
         (self.repo / "slow_module.py").write_text("def slow():\n    return 'needs review'\n", encoding="utf-8")
         (self.repo / "Client.kt").write_text("fun main() { println(\"hi\") }\n", encoding="utf-8")
         (self.repo / "diagram.pdf").write_bytes(b"%PDF-1.4\x00binary")
@@ -238,6 +246,18 @@ class RepositoryReviewProgressTests(unittest.TestCase):
             "requested_workflow": "other",
         }
         self.assertTrue(_should_use_repository_wide_review(state))
+
+    def test_duplicate_basename_labels_are_disambiguated(self) -> None:
+        labels = review_progress_labels(["README.md", "docs/README.md", "package.json"])
+        self.assertEqual(labels["README.md"], "README.md · root")
+        self.assertEqual(labels["docs/README.md"], "README.md · docs")
+        self.assertEqual(labels["package.json"], "package.json")
+
+    def test_stale_duplicate_copy_is_skipped_from_review_selection(self) -> None:
+        inventory = inventory_repository_review_files(self.repo)
+        self.assertNotIn("test_agent_routing_graph 2.py", inventory["selected"])
+        stale = [item for item in inventory["skipped"] if item["file"] == "test_agent_routing_graph 2.py"]
+        self.assertEqual(stale[0]["reason"], "stale duplicate copy")
 
     def test_selected_files_override_repository_wide_classifier_fields(self) -> None:
         request = AgentRunRequest(project_path=str(self.repo), git_provider="local", branch="main", task="Focus this pass.")

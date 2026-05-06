@@ -4,6 +4,7 @@ import json
 import re
 import shlex
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -17,6 +18,7 @@ from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
 from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient, split_visible_reasoning
 from repooperator_worker.services.common import ensure_relative_to_repo, resolve_project_path
 from repooperator_worker.services.event_service import append_run_event, get_run, list_run_events
+from repooperator_worker.services.json_safe import json_safe, safe_repr
 from repooperator_worker.services.response_quality_service import clean_user_visible_response
 from repooperator_worker.services.skills_service import enabled_skill_context
 from repooperator_worker.services.active_repository import get_active_repository
@@ -50,6 +52,36 @@ SUPPORTED_INTENTS = {
     "git_workflow_request", "gitlab_mr_request", "multi_step_request", "pasted_prompt_or_spec",
     "apply_spec_to_repo", "ambiguous",
 }
+SUPPORTED_STEERING_TYPES = {
+    "add_target_file",
+    "change_output_format",
+    "cancel",
+    "continue",
+    "defer",
+    "unknown",
+}
+
+STEERING_PROMPT = """\
+You are RepoOperator's steering parser. Return JSON only.
+Schema:
+{
+  "steering_type": "add_target_file|change_output_format|cancel|continue|defer|unknown",
+  "target_files": [],
+  "output_format": null,
+  "confidence": 0.0,
+  "reason": "short explanation"
+}
+Extract only a structured steering decision for an already-running agent. Do not route by language keywords.
+"""
+
+
+@dataclass
+class SteeringDecision:
+    steering_type: str = "unknown"
+    target_files: list[str] | None = None
+    output_format: str | None = None
+    confidence: float = 0.0
+    reason: str = ""
 
 
 def run_controller_graph(
@@ -212,15 +244,19 @@ def consume_steering_for_state(state: AgentCoreState, request: AgentRunRequest) 
         content = str(item.get("content") or "").strip()
         state.steering_instructions.append(item)
         applied = False
-        target_files = _existing_target_files(request, _file_tokens(content))
-        if target_files:
+        decision = parse_steering_instruction(content, request, state)
+        target_files = _existing_target_files(request, decision.target_files or [])
+        if decision.steering_type == "add_target_file" and target_files:
             existing = list(state.classifier_result.target_files)
             for path in target_files:
                 if path not in existing:
                     existing.append(path)
             state.classifier_result.target_files = existing
             applied = True
-        if any(word in content.lower().split() for word in {"stop", "cancel"}):
+        if decision.steering_type == "change_output_format" and decision.output_format and decision.confidence >= 0.65:
+            state.observations.append(f"Steering requested output format: {decision.output_format}.")
+            applied = True
+        if decision.steering_type == "cancel" and decision.confidence >= 0.8:
             state.cancellation_requested = True
             state.stop_reason = "cancelled"
             applied = True
@@ -234,13 +270,50 @@ def consume_steering_for_state(state: AgentCoreState, request: AgentRunRequest) 
             label="Updated plan from steering" if applied else "Steering deferred",
             status="completed",
             observation=(
-                "Steering updated target files or stop state."
+                decision.reason or "Steering updated structured run state."
                 if applied
-                else "Steering was recorded, but it did not safely map to the current action."
+                else decision.reason or "Steering was recorded, but it did not safely map to the current action."
             ),
             detail=content[:220],
-            aggregate={"steering_event_type": event_type},
+            aggregate={"steering_event_type": event_type, "decision": json_safe(decision)},
         )
+
+
+def parse_steering_instruction(content: str, request: AgentRunRequest, state: AgentCoreState) -> SteeringDecision:
+    raw_content = (content or "").strip()
+    if not raw_content:
+        return SteeringDecision(steering_type="defer", target_files=[], confidence=0.0, reason="Empty steering instruction.")
+    try:
+        raw = OpenAICompatibleModelClient().generate_text(
+            ModelGenerationRequest(
+                system_prompt=STEERING_PROMPT,
+                user_prompt=json.dumps(
+                    {
+                        "task": request.task,
+                        "steering": raw_content,
+                        "current_target_files": state.classifier_result.target_files,
+                        "files_read": state.files_read,
+                        "stop_reason": state.stop_reason,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        decision = _validate_steering_payload(_parse_json(raw))
+        if decision.steering_type != "unknown" and decision.confidence >= 0.5:
+            return decision
+    except Exception as exc:  # noqa: BLE001
+        return SteeringDecision(steering_type="defer", target_files=[], confidence=0.0, reason=f"Steering parser unavailable: {safe_repr(exc, limit=160)}")
+
+    file_targets = _file_tokens(raw_content)
+    if file_targets:
+        return SteeringDecision(
+            steering_type="add_target_file",
+            target_files=file_targets,
+            confidence=0.55,
+            reason="Detected explicit file path tokens; paths still require repository containment validation.",
+        )
+    return SteeringDecision(steering_type="defer", target_files=[], confidence=0.0, reason="No safe structured steering decision was available.")
 
 
 def controller_choose_next_action(state: AgentCoreState, request: AgentRunRequest) -> AgentAction:
@@ -248,11 +321,12 @@ def controller_choose_next_action(state: AgentCoreState, request: AgentRunReques
     if classifier.needs_clarification:
         return AgentAction(type="ask_clarification", reason_summary="Ask for missing routing information.")
     if should_use_repository_wide_review(classifier) and not _has_action(state, "analyze_repository"):
+        classifier_payload = json_safe(classifier)
         return AgentAction(
             type="analyze_repository",
             reason_summary="Run a bounded repository-wide review.",
             expected_output="Completed per-file review evidence.",
-            payload={"classifier": classifier},
+            payload=dict(classifier=classifier_payload),
         )
     target_files = _existing_target_files(request, classifier.target_files)
     unread = [path for path in target_files if path not in state.files_read]
@@ -321,6 +395,8 @@ def observe_result(state: AgentCoreState, action: AgentAction, result: ActionRes
         response = result.payload.get("response")
         if isinstance(response, AgentRunResponse):
             state.final_response = response.response
+        elif isinstance(response, dict):
+            state.final_response = str(response.get("response") or "")
 
 
 def update_plan(state: AgentCoreState, action: AgentAction, result: ActionResult, request: AgentRunRequest) -> None:
@@ -378,7 +454,7 @@ def build_final_answer_text(
 def build_final_response(state: AgentCoreState, request: AgentRunRequest) -> AgentRunResponse:
     review_response = _repository_review_response(state)
     if review_response and state.stop_reason not in {"cancelled", "waiting_approval"}:
-        return review_response.model_copy(update={"loop_iteration": state.loop_iteration})
+        return _response_json_safe(review_response.model_copy(update={"loop_iteration": state.loop_iteration}), request)
     response_type = "command_approval" if state.pending_approval else "assistant_answer"
     graph_path = "agent_core:" + (
         "cancelled" if state.stop_reason == "cancelled"
@@ -386,7 +462,7 @@ def build_final_response(state: AgentCoreState, request: AgentRunRequest) -> Age
         else "read_file_answer" if state.files_read
         else "general_answer"
     )
-    return build_agent_response(
+    return _response_json_safe(build_agent_response(
         request,
         response=state.final_response,
         response_type=response_type,
@@ -401,7 +477,7 @@ def build_final_response(state: AgentCoreState, request: AgentRunRequest) -> Age
         commands_planned=[shlex.join(list(state.pending_approval.get("command") or []))] if state.pending_approval else [],
         commands_run=state.commands_run,
         activity_events=[],
-    )
+    ), request)
 
 
 def _validate_active_repository(request: AgentRunRequest) -> None:
@@ -434,7 +510,8 @@ def stream_controller_graph(request: AgentRunRequest, *, run_id: str | None = No
     if not _streamed_assistant_delta(run_id or ""):
         for chunk in _chunk_text(response.response):
             yield {"type": "assistant_delta", "delta": chunk, "streaming_mode": "post_hoc_chunking"}
-    yield {"type": "final_message", "result": response.model_copy(update={"activity_events": []}).model_dump(mode="json")}
+    final = _response_json_safe(response.model_copy(update={"activity_events": []}), request)
+    yield {"type": "final_message", "result": final.model_dump(mode="json")}
 
 
 def classify_intent(request: AgentRunRequest) -> ClassifierResult:
@@ -485,6 +562,24 @@ def _validate_classifier_payload(payload: dict[str, Any], request: AgentRunReque
         clarification_question=payload.get("clarification_question"),
         requires_repository_wide_review=bool(payload.get("requires_repository_wide_review")),
         raw=payload,
+    )
+
+
+def _validate_steering_payload(payload: dict[str, Any]) -> SteeringDecision:
+    steering_type = str(payload.get("steering_type") or "unknown")
+    if steering_type not in SUPPORTED_STEERING_TYPES:
+        steering_type = "unknown"
+    target_files = [str(item).strip().lstrip("/") for item in payload.get("target_files") or [] if str(item).strip()]
+    try:
+        confidence = float(payload.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return SteeringDecision(
+        steering_type=steering_type,
+        target_files=target_files,
+        output_format=str(payload.get("output_format")) if payload.get("output_format") else None,
+        confidence=max(0.0, min(1.0, confidence)),
+        reason=str(payload.get("reason") or ""),
     )
 
 
@@ -601,6 +696,11 @@ def _repository_review_response(state: AgentCoreState) -> AgentRunResponse | Non
         response = result.payload.get("response")
         if isinstance(response, AgentRunResponse):
             return response
+        if isinstance(response, dict):
+            try:
+                return AgentRunResponse.model_validate(response)
+            except Exception:
+                continue
     return None
 
 
@@ -657,9 +757,47 @@ def _latest_sequence(run_id: str | None) -> int:
 
 def _append_run_event_safe(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
     try:
-        return append_run_event(run_id, event)
+        return append_run_event(run_id, json_safe(event))
     except OSError:
-        return event
+        return json_safe(event)
+
+
+def _response_json_safe(response: AgentRunResponse, request: AgentRunRequest) -> AgentRunResponse:
+    try:
+        payload = response.model_dump(mode="json")
+        json.dumps(payload, ensure_ascii=False)
+        return response
+    except Exception as exc:  # noqa: BLE001
+        safe_payload = json_safe(response)
+        safe_payload["response"] = (
+            "The review completed, but RepoOperator hit an internal metadata serialization error. "
+            "The readable summary is below...\n\n"
+            + str(safe_payload.get("response") or response.response)
+        )
+        safe_payload["activity_events"] = json_safe(safe_payload.get("activity_events") or [])
+        safe_payload["stop_reason"] = safe_payload.get("stop_reason") or "completed_with_metadata_error"
+        _append_run_event_safe(
+            response.run_id or "run_controller",
+            {
+                "type": "error",
+                "event_type": "metadata_serialization_error",
+                "status": "failed",
+                "message": safe_repr(exc, limit=220),
+            },
+        )
+        return build_agent_response(
+            request,
+            response=str(safe_payload.get("response") or ""),
+            response_type=str(safe_payload.get("response_type") or "assistant_answer"),
+            files_read=list(safe_payload.get("files_read") or []),
+            graph_path=str(safe_payload.get("graph_path") or "agent_core:metadata_sanitized"),
+            intent_classification=safe_payload.get("intent_classification"),
+            run_id=safe_payload.get("run_id"),
+            skills_used=list(safe_payload.get("skills_used") or []),
+            stop_reason=str(safe_payload.get("stop_reason") or "completed_with_metadata_error"),
+            loop_iteration=int(safe_payload.get("loop_iteration") or 1),
+            activity_events=list(safe_payload.get("activity_events") or []),
+        )
 
 
 def _command_for_classifier(classifier: ClassifierResult) -> list[str]:

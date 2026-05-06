@@ -7,6 +7,7 @@ from typing import Any
 from repooperator_worker.config import get_settings
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
 from repooperator_worker.services.common import resolve_project_path
+from repooperator_worker.services.json_safe import json_safe
 from repooperator_worker.services.model_client import OpenAICompatibleModelClient
 
 
@@ -64,8 +65,8 @@ def build_agent_response(
         "stop_reason": stop_reason,
         "loop_iteration": loop_iteration,
     }
-    payload.update(updates)
-    return AgentRunResponse(**payload)
+    payload.update(json_safe(updates))
+    return AgentRunResponse(**json_safe(payload))
 
 
 def _model_name() -> str:

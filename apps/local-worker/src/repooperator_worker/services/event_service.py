@@ -10,6 +10,7 @@ from typing import Any
 
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
 from repooperator_worker.services.common import get_repooperator_home_dir
+from repooperator_worker.services.json_safe import json_safe
 
 
 def _runs_dir() -> Path:
@@ -69,7 +70,7 @@ def start_active_run(
     }
     with _RUN_LOCK:
         try:
-            _run_meta_file(run_id).write_text(json.dumps(record, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            _run_meta_file(run_id).write_text(json.dumps(json_safe(record), ensure_ascii=False, sort_keys=True), encoding="utf-8")
         except OSError:
             pass
     return record
@@ -80,7 +81,7 @@ def append_run_event(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
         events = list_run_events(run_id)
         sequence = int(event.get("sequence") or len(events) + 1)
         meta = get_run(run_id) or {}
-        record = {
+        record = json_safe({
             **event,
             "run_id": run_id,
             "thread_id": event.get("thread_id") or meta.get("thread_id"),
@@ -88,7 +89,8 @@ def append_run_event(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
             "branch": event.get("branch") or meta.get("branch"),
             "sequence": sequence,
             "timestamp": event.get("timestamp") or _now_iso(),
-        }
+            "persisted": True,
+        })
         if not record.get("id"):
             record["id"] = f"{run_id}-event-{sequence}"
         try:
@@ -116,12 +118,12 @@ def complete_active_run(
             {
                 "status": status,
                 "completed_at": completed_at,
-                "final_result": final_result,
+                "final_result": json_safe(final_result),
                 "error": error,
             }
         )
         try:
-            _run_meta_file(run_id).write_text(json.dumps(meta, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            _run_meta_file(run_id).write_text(json.dumps(json_safe(meta), ensure_ascii=False, sort_keys=True), encoding="utf-8")
         except OSError:
             pass
     return meta
@@ -170,7 +172,7 @@ def record_run_steering(run_id: str, content: str) -> dict[str, Any]:
     )
     meta["steering_instructions"] = steering
     try:
-        _run_meta_file(run_id).write_text(json.dumps(meta, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        _run_meta_file(run_id).write_text(json.dumps(json_safe(meta), ensure_ascii=False, sort_keys=True), encoding="utf-8")
     except OSError:
         pass
     return event
@@ -290,7 +292,7 @@ def record_agent_run(
     }
     try:
         with _runs_file().open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+            handle.write(json.dumps(json_safe(record), ensure_ascii=False, sort_keys=True) + "\n")
     except OSError:
         pass
     return record
@@ -323,7 +325,7 @@ def record_event(
     }
     try:
         with _runs_file().open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+            handle.write(json.dumps(json_safe(record), ensure_ascii=False, sort_keys=True) + "\n")
     except OSError:
         pass
     return record
@@ -371,7 +373,7 @@ def _finalize_running_events(run_id: str, *, status: str, ended_at: str) -> None
             event["ended_at"] = event.get("ended_at") or ended_at
             if event.get("duration_ms") is None:
                 event["duration_ms"] = _duration_ms(event.get("started_at"), event["ended_at"])
-        finalized.append(json.dumps(event, ensure_ascii=False, sort_keys=True))
+        finalized.append(json.dumps(json_safe(event), ensure_ascii=False, sort_keys=True))
     try:
         path.write_text("\n".join(finalized) + ("\n" if finalized else ""), encoding="utf-8")
     except OSError:

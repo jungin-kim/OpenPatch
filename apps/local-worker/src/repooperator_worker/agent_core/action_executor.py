@@ -33,7 +33,7 @@ class ActionExecutor:
                     status="success",
                     observation="Repository review completed.",
                     files_read=response.files_read,
-                    payload={"response": response},
+                    payload={"response": response.model_dump(mode="json")},
                 )
             elif action.type in {"preview_command", "inspect_git_state"}:
                 result = self._preview_command(action)
