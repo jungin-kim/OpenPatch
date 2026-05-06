@@ -7,7 +7,9 @@ from repooperator_worker.config import get_settings
 from repooperator_worker.services.active_repository import get_active_repository
 from repooperator_worker.services.common import resolve_project_path
 
-# Built-in skills are always loaded; user/repo skills with the same name override them.
+# Built-in skills are always loaded. Effective planner skills are resolved from
+# source-aware identities so repo/user skills can refine behavior without
+# deleting built-ins from Debug.
 BUILTIN_SKILLS: list[dict[str, Any]] = [
     {
         "name": "Git Workflow",
@@ -69,22 +71,21 @@ Rules:
 
 
 def discover_skills() -> dict[str, Any]:
-    # Start with built-ins; user/repo skills override by name (case-insensitive).
-    layered: dict[str, dict[str, Any]] = {}
+    discovered: list[dict[str, Any]] = []
     for skill in BUILTIN_SKILLS:
-        layered[skill["name"].lower()] = skill
+        discovered.append(_with_identity(skill))
 
     paths = _skill_paths()
     for scope, path, source_type in paths:
         if path.exists() and path.is_file():
             for skill in _parse_skills_file(path, scope, source_type):
-                layered[skill["name"].lower()] = skill
+                discovered.append(_with_identity(skill))
 
-    return {"skills": list(layered.values())}
+    return {"skills": discovered, "effective_skills": resolve_effective_skills(discovered)}
 
 
 def enabled_skill_context(max_chars: int = 4_000) -> tuple[str, list[str]]:
-    discovered = discover_skills()["skills"]
+    discovered = discover_skills()["effective_skills"]
     enabled = [skill for skill in discovered if skill.get("enabled")]
     if not enabled:
         return "", []
@@ -94,7 +95,8 @@ def enabled_skill_context(max_chars: int = 4_000) -> tuple[str, list[str]]:
     for skill in enabled:
         # Prefer full body for richer planner context; fall back to description.
         body = skill.get("body") or skill.get("description") or ""
-        header = f"### Skill: {skill.get('name')} ({skill.get('scope')})\n"
+        provenance = f"{skill.get('source_type')}:{skill.get('source_path')}"
+        header = f"### Skill: {skill.get('name')} ({skill.get('scope')}; {provenance})\n"
         block = header + body.strip()
         if len(block) > remaining:
             # Try a truncated version using just description.
@@ -103,17 +105,37 @@ def enabled_skill_context(max_chars: int = 4_000) -> tuple[str, list[str]]:
             if len(block) > remaining:
                 break
         blocks.append(block)
-        used.append(str(skill.get("name")))
+        used.append(str(skill.get("identity") or skill.get("name")))
         remaining -= len(block)
     if not blocks:
         return "", []
     return "Enabled repository skills:\n\n" + "\n\n---\n\n".join(blocks), used
 
 
+def resolve_effective_skills(skills: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Return planner-effective skills with provenance-preserving priority.
+
+    Debug callers should use ``skills`` to see every discovered skill. The
+    planner uses this resolved list where repo > user > builtin for same names.
+    """
+    items = skills if skills is not None else discover_skills()["skills"]
+    priority = {"builtin": 0, "user": 1, "repo": 2}
+    by_name: dict[str, dict[str, Any]] = {}
+    for skill in items:
+        key = str(skill.get("name") or "").lower()
+        current = by_name.get(key)
+        if current is None or priority.get(str(skill.get("source_type")), 0) >= priority.get(str(current.get("source_type")), 0):
+            by_name[key] = skill
+    return list(by_name.values())
+
+
 def _skill_paths() -> list[tuple[str, Path, str]]:
     settings = get_settings()
     paths: list[tuple[str, Path, str]] = []
-    active = get_active_repository()
+    try:
+        active = get_active_repository()
+    except Exception:
+        active = None
     if active:
         try:
             repo_root = resolve_project_path(active.project_path)
@@ -160,7 +182,7 @@ def _skill_payload(
     body = "\n".join(body_lines).strip()
     # First non-empty line is used as the short description.
     description = next((l.strip() for l in body_lines if l.strip()), "")[:700]
-    return {
+    return _with_identity({
         "name": name,
         "source_path": str(path),
         "source_type": source_type,
@@ -168,4 +190,21 @@ def _skill_payload(
         "description": description,
         "body": body[:3000],
         "enabled": True,
+    })
+
+
+def _with_identity(skill: dict[str, Any]) -> dict[str, Any]:
+    source_type = str(skill.get("source_type") or skill.get("scope") or "unknown")
+    source_path = str(skill.get("source_path") or "")
+    name = str(skill.get("name") or "")
+    return {
+        **skill,
+        "source_type": source_type,
+        "source_path": source_path,
+        "identity": f"{source_type}:{source_path}:{name}",
+        "provenance": {
+            "source_type": source_type,
+            "source_path": source_path,
+            "name": name,
+        },
     }

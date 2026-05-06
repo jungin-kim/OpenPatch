@@ -170,7 +170,10 @@ def _classify_command(
     reason: str | None = None,
     project_path: str | None = None,
 ) -> CommandPreview:
-    active = get_active_repository()
+    try:
+        active = get_active_repository()
+    except Exception:
+        active = None
     repo_path = resolve_project_path(project_path) if project_path else (resolve_project_path(active.project_path) if active else None)
     display = shlex.join(argv)
     profile = permission_profile()

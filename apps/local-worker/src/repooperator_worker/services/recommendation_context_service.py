@@ -22,11 +22,16 @@ class RecommendationItem:
     id: str
     files: list[str]
     symbols: list[str] = field(default_factory=list)
+    exact_issue: str = ""
     suggested_changes: list[str] = field(default_factory=list)
+    proposed_change_plan: list[str] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
     rationale: str = ""
     risk_level: str = "medium"
     category: str = "code"
+    confidence: float = 0.5
     needs_more_inspection: bool = False
+    generated_from: str = "file_content"
 
 
 def build_recommendation_context(
@@ -50,11 +55,27 @@ def build_recommendation_context(
                 "id": item_id,
                 "files": [relative_path],
                 "symbols": [],
+                "exact_issue": "",
                 "suggested_changes": [_suggestion_for_path(relative_path, category)],
+                "proposed_change_plan": [
+                    f"Re-read `{relative_path}` before editing.",
+                    "Prepare a focused diff backed by the inspected file content.",
+                    "Validate that the change stays inside the repository and preserves existing behavior.",
+                ],
+                "evidence": [
+                    {
+                        "file": relative_path,
+                        "symbol": None,
+                        "excerpt": _evidence_excerpt(relative_path, candidate_files),
+                        "reason": reason,
+                    }
+                ],
                 "rationale": reason,
                 "risk_level": "low" if category in {"docs", "test"} else "medium",
                 "category": category,
+                "confidence": 0.7 if relative_path in files_read else 0.45,
                 "needs_more_inspection": relative_path not in files_read,
+                "generated_from": "file_content" if relative_path in files_read else "filename_inference",
             }
         )
     return {
@@ -142,6 +163,15 @@ def selected_recommendation_items(
         file_set = set(selected_files)
         return [item for item in items if file_set.intersection(set(item.get("files") or []))]
     return items
+
+
+def _evidence_excerpt(relative_path: str, candidate_files: list[tuple[str, str]] | None) -> str:
+    if not candidate_files:
+        return ""
+    for path, reason in candidate_files:
+        if path == relative_path:
+            return _summarize(reason, 180)
+    return ""
 
 
 def _validate_resolution(payload: dict[str, Any], context: dict[str, Any], project_path: str) -> dict[str, Any]:

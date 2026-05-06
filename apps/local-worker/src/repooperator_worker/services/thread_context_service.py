@@ -190,3 +190,18 @@ def _save_durable_context(thread_id: str, context: ThreadContext) -> None:
         "last_answer_summary": context.last_answer_summary,
     }
     _thread_context_path(thread_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def list_thread_context_items(limit: int = 100) -> dict[str, Any]:
+    directory = get_repooperator_home_dir() / "threads"
+    items: list[dict[str, Any]] = []
+    if not directory.exists():
+        return {"items": []}
+    for path in sorted(directory.glob("*.context.json"), key=lambda item: item.stat().st_mtime if item.exists() else 0):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            items.append({"thread_id": path.name.removesuffix(".context.json"), **payload})
+    return {"items": list(reversed(items[-limit:]))}

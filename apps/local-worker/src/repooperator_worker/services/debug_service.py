@@ -5,6 +5,7 @@ from repooperator_worker.services.event_service import get_active_runs, list_rec
 from repooperator_worker.services.memory_service import list_memory_items
 from repooperator_worker.services.permissions_service import permission_profile
 from repooperator_worker.services.skills_service import discover_skills
+from repooperator_worker.services.thread_context_service import list_thread_context_items
 
 
 def get_debug_runtime_status() -> dict:
@@ -38,8 +39,10 @@ def get_debug_runtime_status() -> dict:
             "effective_sources": settings.configured_repository_sources,
         },
         "agent": {
-            "orchestration_mode": "LangGraph",
+            "orchestration_mode": "agent_core_controller",
         },
+        "thread_context": list_thread_context_items(),
+        "memory": list_memory_items(),
         "recent_runs": list_recent_runs(),
         "active_runs": get_active_runs(),
     }

@@ -62,30 +62,9 @@ SKIP_DIRS: frozenset[str] = frozenset({
     "coverage", "target",  # Rust/Java build dirs
 })
 
-# ── Query classification ───────────────────────────────────────────────────────
+# ── Structured retrieval intent ────────────────────────────────────────────────
 
 _FILE_RE = re.compile(r'\b([\w./\\-]+\.[a-zA-Z]{1,6})\b')
-
-_REVIEW_PHRASES = frozenset({
-    "review the code", "code review", "review this project", "review the project",
-    "review the codebase", "review the repo", "review everything", "review all",
-    "analyze the project", "analyze the codebase", "analyze the repo",
-    "full review", "overall review",
-})
-
-_ARCH_PHRASES = frozenset({
-    "architecture", "entrypoint", "entry point", "startup", "how does it start",
-    "how does the app", "how does the server", "how does this work",
-    "how is it structured", "overall structure", "codebase structure",
-    "project structure", "main module", "routing", "how is this organized",
-    "show me how", "walk me through",
-})
-
-_DEP_PHRASES = frozenset({
-    "dependencies", "requirements", "packages", "libraries",
-    "what does it depend", "what libraries", "what packages", "imports",
-})
-
 
 class QueryType:
     FILE_SPECIFIC = "file_specific"
@@ -96,14 +75,25 @@ class QueryType:
     GENERAL = "general"
 
 
+@dataclass
+class StructuredRetrievalIntent:
+    analysis_scope: str = "unknown"
+    requested_workflow: str = "other"
+    target_files: list[str] = field(default_factory=list)
+    target_symbols: list[str] = field(default_factory=list)
+    retrieval_goal: str = "answer"
+    file_types_requested: list[str] = field(default_factory=list)
+
+
 def classify_query(task: str) -> tuple[str, list[str]]:
     """
-    Returns (query_type, targets) where targets is a list of file or dir names
-    extracted from the task text.
-    """
-    lower = task.lower()
+    Compatibility classifier for callers that have not been migrated to
+    StructuredRetrievalIntent yet.
 
-    # Collect file references (words with extensions)
+    This intentionally avoids natural-language phrase routing. It only extracts
+    explicit file references; otherwise it returns GENERAL so broad workflow
+    decisions come from the LLM classifier and validated structured fields.
+    """
     file_refs: list[str] = []
     for match in _FILE_RE.finditer(task):
         candidate = match.group(1)
@@ -113,25 +103,29 @@ def classify_query(task: str) -> tuple[str, list[str]]:
 
     if file_refs:
         return QueryType.FILE_SPECIFIC, file_refs
+    return QueryType.GENERAL, []
 
-    if any(phrase in lower for phrase in _REVIEW_PHRASES):
+
+def classify_structured_intent(intent: StructuredRetrievalIntent | dict | None) -> tuple[str, list[str]]:
+    if intent is None:
+        return QueryType.GENERAL, []
+    if isinstance(intent, dict):
+        intent = StructuredRetrievalIntent(
+            analysis_scope=str(intent.get("analysis_scope") or "unknown"),
+            requested_workflow=str(intent.get("requested_workflow") or "other"),
+            target_files=[str(item) for item in intent.get("target_files") or []],
+            target_symbols=[str(item) for item in intent.get("target_symbols") or []],
+            retrieval_goal=str(intent.get("retrieval_goal") or "answer"),
+            file_types_requested=[str(item) for item in intent.get("file_types_requested") or []],
+        )
+    if intent.target_files:
+        return QueryType.FILE_SPECIFIC, intent.target_files
+    if intent.analysis_scope == "repository_wide" or intent.requested_workflow == "repository_review":
         return QueryType.PROJECT_REVIEW, []
-
-    if any(phrase in lower for phrase in _ARCH_PHRASES):
+    if intent.retrieval_goal == "architecture":
         return QueryType.ARCHITECTURE, []
-
-    if any(phrase in lower for phrase in _DEP_PHRASES):
+    if intent.retrieval_goal == "dependencies":
         return QueryType.DEPENDENCY, []
-
-    # Loose directory mention: "in the X directory", "the X/ folder", etc.
-    dir_match = re.search(
-        r'\b(?:in|under|inside|within)\s+(?:the\s+)?["\']?([\w./\\-]+/?)["\']?\s*'
-        r'(?:dir(?:ectory)?|folder|module|package)?',
-        lower,
-    )
-    if dir_match:
-        return QueryType.DIR_SPECIFIC, [dir_match.group(1).rstrip("/")]
-
     return QueryType.GENERAL, []
 
 
@@ -266,9 +260,9 @@ def _find_file(repo_path: Path, filename: str) -> list[Path]:
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
-def retrieve_context(repo_path: Path, task: str) -> RetrievalResult:
-    """Classify the task and retrieve relevant files from the repository."""
-    query_type, targets = classify_query(task)
+def retrieve_context(repo_path: Path, task: str, intent: StructuredRetrievalIntent | dict | None = None) -> RetrievalResult:
+    """Retrieve relevant files from structured classifier fields."""
+    query_type, targets = classify_structured_intent(intent) if intent is not None else classify_query(task)
 
     if query_type == QueryType.FILE_SPECIFIC:
         return _retrieve_files(repo_path, targets)

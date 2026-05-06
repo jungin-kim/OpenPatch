@@ -208,6 +208,36 @@ def list_run_events(run_id: str, *, after_sequence: int = 0) -> list[dict[str, A
     return events
 
 
+def list_activity_states(run_id: str) -> list[dict[str, Any]]:
+    """Return UI-facing merged activity cards for a run.
+
+    Raw events remain append-only in ``list_run_events``. This view merges by
+    stable ``activity_id`` so Reading -> Reviewing -> Completed transitions
+    update one card instead of creating duplicate cards.
+    """
+    states: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for event in list_run_events(run_id):
+        activity_id = event.get("activity_id")
+        if not activity_id:
+            continue
+        key = str(activity_id)
+        if key not in states:
+            states[key] = dict(event)
+            order.append(key)
+            continue
+        merged = states[key]
+        for field, value in event.items():
+            if value in (None, "", [], {}):
+                continue
+            if field.endswith("_delta") and merged.get(field):
+                merged[field] = str(merged[field]) + str(value)
+            else:
+                merged[field] = value
+        states[key] = merged
+    return [states[key] for key in order]
+
+
 def get_active_runs(thread_id: str | None = None) -> list[dict[str, Any]]:
     active: list[dict[str, Any]] = []
     active_statuses = {"pending", "running", "waiting_approval", "cancelling"}

@@ -3205,6 +3205,7 @@ _COMPILED_GRAPH = _build_graph().compile()
 
 
 def run_agent_orchestration_graph(request: AgentRunRequest) -> AgentRunResponse:
+    """Compatibility adapter for existing write flows during agent-core migration."""
     final_state = _COMPILED_GRAPH.invoke({"request": request})
     result = final_state.get("result")
     if result is None:

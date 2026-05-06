@@ -1,9 +1,4 @@
-"""Authoritative agent entry point for /agent/run.
-
-RepoOperator intentionally uses ``agent_orchestration_graph`` as the single
-agent routing path. Older keyword-first routing was removed so a graph failure
-cannot silently re-enable legacy write or intent behavior.
-"""
+"""Authoritative agent entry point for /agent/run."""
 
 from __future__ import annotations
 
@@ -18,11 +13,11 @@ logger = logging.getLogger(__name__)
 
 
 def run_agent_task(request: AgentRunRequest) -> AgentRunResponse:
-    """Run the LangGraph orchestration path.
+    """Run the compatibility orchestration path.
 
-    User-facing validation errors from the graph are allowed to propagate. Any
-    unexpected graph/runtime failure becomes a structured ``agent_error`` so
-    the caller can show a retryable error without falling back to old routing.
+    User-facing validation errors are allowed to propagate. Any unexpected
+    runtime failure becomes a structured ``agent_error`` so the caller can show
+    a retryable error without falling back to old routing.
     """
     try:
         from repooperator_worker.services.agent_orchestration_graph import (

@@ -86,31 +86,6 @@ def maybe_record_from_agent_run(request: AgentRunRequest, response: AgentRunResp
                 tags=["explicit"],
             )
         )
-    if response.response_type == "change_proposal" and response.proposal_relative_path:
-        # Store only a compact proposal summary. The actual diff remains in the thread/proposal flow.
-        records.append(
-            add_memory(
-                memory_type="proposal_summary",
-                content=f"Proposed change for {response.proposal_relative_path}: {response.response}",
-                source="agent_run",
-                repo=request.project_path,
-                tags=["proposal", "pending-approval"],
-            )
-        )
-    if response.response_type == "edit_applied" and response.edit_archive:
-        for record in response.edit_archive:
-            file_path = record.get("file_path")
-            if not file_path:
-                continue
-            records.append(
-                add_memory(
-                    memory_type="applied_edit_summary",
-                    content=f"Modified {file_path}: {record.get('summary') or response.response}",
-                    source="agent_run",
-                    repo=request.project_path,
-                    tags=["file-edit", "auto-applied"],
-                )
-            )
     return records
 
 

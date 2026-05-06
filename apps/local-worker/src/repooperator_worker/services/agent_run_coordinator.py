@@ -21,6 +21,7 @@ from repooperator_worker.services.event_service import (
     start_active_run,
     summarize_user_message,
 )
+from repooperator_worker.agent_core.actions import ActionResult
 from repooperator_worker.services.memory_service import maybe_record_from_agent_run
 from repooperator_worker.services.thread_context_service import update_thread_context
 
@@ -294,12 +295,14 @@ def append_activity(
     related_files: list[str] | None = None,
     related_command: list[str] | None = None,
 ) -> dict[str, Any]:
+    stable_activity_id = f"{event_type}:{label.lower().replace(' ', '-')}"
     return append_run_event(
         run_id,
         {
             "id": f"{run_id}-{event_type}-{uuid.uuid4().hex[:8]}",
             "type": "progress_delta",
             "event_type": event_type,
+            "activity_id": stable_activity_id,
             "phase": phase,
             "label": label,
             "detail": detail,
@@ -313,6 +316,55 @@ def append_activity(
             "ended_at": _now_iso() if status in {"completed", "failed"} else None,
         },
     )
+
+
+def append_activity_started(run_id: str, **kwargs: Any) -> dict[str, Any]:
+    return append_activity(run_id, event_type="activity_started", status="running", **kwargs)
+
+
+def append_activity_update(run_id: str, **kwargs: Any) -> dict[str, Any]:
+    return append_activity(run_id, event_type="activity_updated", **kwargs)
+
+
+def append_activity_delta(run_id: str, **kwargs: Any) -> dict[str, Any]:
+    return append_activity(run_id, event_type="activity_delta", **kwargs)
+
+
+def append_activity_completed(run_id: str, **kwargs: Any) -> dict[str, Any]:
+    return append_activity(run_id, event_type="activity_completed", status="completed", **kwargs)
+
+
+def check_cancel(run_id: str) -> bool:
+    return should_cancel(run_id)
+
+
+def wait_for_approval(run_id: str, approval: dict[str, Any]) -> dict[str, Any]:
+    meta = get_run(run_id) or {"id": run_id}
+    meta["status"] = "waiting_approval"
+    meta["pending_approval"] = approval
+    _run_meta = get_repooperator_home_dir() / "runs" / run_id / "meta.json"
+    try:
+        _run_meta.write_text(json.dumps(meta, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+    append_activity(
+        run_id,
+        phase="Commands",
+        label="Waiting for command approval",
+        status="waiting",
+        event_type="approval_waiting",
+        detail=str(approval.get("reason") or "Command requires approval."),
+    )
+    return meta
+
+
+def record_action_result(run_id: str, result: ActionResult | dict[str, Any]) -> dict[str, Any]:
+    payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+    return append_run_event(run_id, {"type": "action_result", "event_type": "action_result", "status": payload.get("status"), "result": payload})
+
+
+def complete_run(run_id: str, *, status: str, final_result: dict[str, Any] | None = None, error: str | None = None) -> dict[str, Any]:
+    return complete_active_run(run_id=run_id, status=status, final_result=final_result, error=error)
 
 
 def _record_response_events(run_id: str, request: AgentRunRequest, response: AgentRunResponse) -> None:
