@@ -523,10 +523,10 @@ def agent_run(request: AgentRunRequest) -> AgentRunResponse:
 
 @router.post("/agent/run/stream")
 def agent_run_stream(request: AgentRunRequest) -> StreamingResponse:
-    _, generate = stream_run(request)
+    _, event_stream = stream_run(request)
 
     return StreamingResponse(
-        generate(),
+        event_stream,
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

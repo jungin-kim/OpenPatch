@@ -127,6 +127,7 @@ export function ChatApp() {
   const activeRepositoryOpenRequestIdRef = useRef<string | null>(null);
   const queuedMessagesRef = useRef<QueuedMessage[]>([]);
   const activeThreadIdRef = useRef<string | null>(null);
+  const activeRunLastSequenceRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
@@ -197,6 +198,25 @@ export function ChatApp() {
         : step,
     );
     return [...completedPrev, incoming];
+  }
+
+  function mergeProgressEvents(
+    current: ProgressStep[],
+    events: AgentRunPayload["activity_events"] | undefined,
+    options: { finalizeRunning?: boolean } = {},
+  ): ProgressStep[] {
+    let next = current;
+    for (const event of events || []) {
+      const step = progressStepFromEvent(event, options);
+      next = mergeProgressStep(next, step);
+    }
+    return options.finalizeRunning
+      ? next.map((step) => (step.status === "running" ? { ...step, status: "completed" } : step))
+      : next;
+  }
+
+  function maxEventSequence(events?: AgentRunPayload["activity_events"]): number {
+    return Math.max(0, ...(events || []).map((event) => Number(event.sequence || 0)));
   }
 
   function activeRunStorageKey(threadId: string) {
@@ -337,6 +357,7 @@ export function ChatApp() {
           getAgentRunEvents(runId),
         ]);
         if (cancelled) return;
+        activeRunLastSequenceRef.current[runId] = maxEventSequence(eventPayload.events as AgentRunPayload["activity_events"]);
         if (run.status === "running") {
           setProgressSteps(normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"]));
           setQuestionPending(true);
@@ -392,19 +413,19 @@ export function ChatApp() {
     const timer = window.setInterval(() => {
       void (async () => {
         try {
+          const afterSequence = activeRunLastSequenceRef.current[activeRunId] || 0;
           const [run, eventPayload] = await Promise.all([
             getAgentRun(activeRunId),
-            getAgentRunEvents(activeRunId),
+            getAgentRunEvents(activeRunId, afterSequence),
           ]);
           if (cancelled) return;
+          const events = eventPayload.events as AgentRunPayload["activity_events"];
+          activeRunLastSequenceRef.current[activeRunId] = Math.max(afterSequence, maxEventSequence(events));
           if (run.status !== "running") {
-            setProgressSteps(
-              normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"], {
-                finalizeRunning: true,
-              }),
-            );
+            setProgressSteps((current) => mergeProgressEvents(current, events, { finalizeRunning: true }));
             rememberActiveRun(null);
             setQuestionPending(false);
+            delete activeRunLastSequenceRef.current[activeRunId];
             if (run.final_result) {
               const assistantMessage: ChatMessage = {
                 id: `${Date.now()}-poll-run`,
@@ -424,7 +445,7 @@ export function ChatApp() {
               });
             }
           } else {
-            setProgressSteps(normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"]));
+            setProgressSteps((current) => mergeProgressEvents(current, events));
           }
         } catch {
           // Keep the current visible state; SSE may still be active.
@@ -991,6 +1012,12 @@ export function ChatApp() {
           });
         } else if (event.type === "progress_delta") {
           if (event.run_id && event.run_id !== activeRunId) rememberActiveRun(event.run_id, runThreadId);
+          if (event.run_id && event.sequence) {
+            activeRunLastSequenceRef.current[event.run_id] = Math.max(
+              activeRunLastSequenceRef.current[event.run_id] || 0,
+              Number(event.sequence || 0),
+            );
+          }
           if (activeThreadIdRef.current !== runThreadId) continue;
           setProgressSteps((prev) => {
             const next = mergeProgressStep(prev, progressStepFromEvent(event));

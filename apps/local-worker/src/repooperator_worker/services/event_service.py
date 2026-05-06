@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -80,13 +81,13 @@ def append_run_event(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
         sequence = int(event.get("sequence") or len(events) + 1)
         meta = get_run(run_id) or {}
         record = {
+            **event,
             "run_id": run_id,
             "thread_id": event.get("thread_id") or meta.get("thread_id"),
             "repo": event.get("repo") or meta.get("repo"),
             "branch": event.get("branch") or meta.get("branch"),
             "sequence": sequence,
             "timestamp": event.get("timestamp") or _now_iso(),
-            **event,
         }
         if not record.get("id"):
             record["id"] = f"{run_id}-event-{sequence}"
@@ -109,10 +110,12 @@ def complete_active_run(
         meta = get_run(run_id) or {"id": run_id}
         if meta.get("status") in {"cancelled", "cancelling"} and status == "completed":
             status = "cancelled"
+        completed_at = _now_iso()
+        _finalize_running_events(run_id, status=status, ended_at=completed_at)
         meta.update(
             {
                 "status": status,
-                "completed_at": _now_iso(),
+                "completed_at": completed_at,
                 "final_result": final_result,
                 "error": error,
             }
@@ -125,10 +128,15 @@ def complete_active_run(
 
 
 def request_run_cancellation(run_id: str) -> dict[str, Any]:
+    meta = get_run(run_id) or {}
     append_run_event(
         run_id,
         {
             "type": "progress_delta",
+            "event_type": "cancellation_requested",
+            "thread_id": meta.get("thread_id"),
+            "repo": meta.get("repo"),
+            "branch": meta.get("branch"),
             "phase": "Finished",
             "label": "Cancellation requested",
             "detail": "RepoOperator will stop this run at the next safe checkpoint.",
@@ -202,12 +210,13 @@ def list_run_events(run_id: str, *, after_sequence: int = 0) -> list[dict[str, A
 
 def get_active_runs(thread_id: str | None = None) -> list[dict[str, Any]]:
     active: list[dict[str, Any]] = []
+    active_statuses = {"pending", "running", "waiting_approval", "cancelling"}
     for meta_path in _runs_dir().glob("*/meta.json"):
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
         except (OSError, json.JSONDecodeError):
             continue
-        if meta.get("status") != "running":
+        if meta.get("status") not in active_statuses:
             continue
         if thread_id and meta.get("thread_id") != thread_id:
             continue
@@ -303,3 +312,56 @@ def list_recent_runs(limit: int = 50) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             continue
     return list(reversed(runs[-limit:]))
+
+
+def _finalize_running_events(run_id: str, *, status: str, ended_at: str) -> None:
+    path = _run_events_file(run_id)
+    if not path.exists():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return
+    finalized: list[str] = []
+    final_status = "completed"
+    if status == "cancelled":
+        final_status = "cancelled"
+    elif status == "failed":
+        final_status = "failed"
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            finalized.append(line)
+            continue
+        if event.get("type") == "progress_delta" and event.get("status") == "running":
+            event["status"] = final_status
+            event["ended_at"] = event.get("ended_at") or ended_at
+            if event.get("duration_ms") is None:
+                event["duration_ms"] = _duration_ms(event.get("started_at"), event["ended_at"])
+        finalized.append(json.dumps(event, ensure_ascii=False, sort_keys=True))
+    try:
+        path.write_text("\n".join(finalized) + ("\n" if finalized else ""), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _duration_ms(started_at: str | None, ended_at: str | None) -> int | None:
+    if not started_at or not ended_at:
+        return None
+    try:
+        start = _parse_iso(started_at)
+        end = _parse_iso(ended_at)
+    except ValueError:
+        return None
+    return max(0, int((end - start).total_seconds() * 1000))
+
+
+def _parse_iso(value: str) -> datetime:
+    normalized = value.replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed

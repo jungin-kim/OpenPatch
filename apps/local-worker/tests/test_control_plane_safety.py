@@ -22,8 +22,9 @@ from repooperator_worker.services.agent_run_coordinator import (  # noqa: E402
     list_queue,
     start_run,
     steer_run,
+    stream_run,
 )
-from repooperator_worker.services.event_service import get_run, list_run_events  # noqa: E402
+from repooperator_worker.services.event_service import append_run_event, complete_active_run, get_active_runs, get_run, list_run_events, start_active_run  # noqa: E402
 from repooperator_worker.services.file_service import write_text_file  # noqa: E402
 from repooperator_worker.services.command_runner import run_command  # noqa: E402
 from repooperator_worker.services.command_service import preview_command  # noqa: E402
@@ -182,15 +183,126 @@ class ControlPlaneSafetyTests(unittest.TestCase):
             config = _write_config(home)
             request = AgentRunRequest(project_path=str(repo), thread_id="thread-b", task="Analyze files.")
             with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(config)}, clear=True):
-                from repooperator_worker.services.event_service import new_run_id, start_active_run
+                from repooperator_worker.services.event_service import new_run_id
 
                 run_id = new_run_id()
                 start_active_run(run_id=run_id, request=request, thread_id="thread-b")
+                append_run_event(
+                    run_id,
+                    {
+                        "type": "progress_delta",
+                        "phase": "Reading",
+                        "label": "Reading files",
+                        "status": "running",
+                        "started_at": "2026-05-06T00:00:00Z",
+                    },
+                )
                 steering = steer_run(run_id, content="Prefer a narrower pass.")
                 self.assertEqual(steering["status"], "accepted")
                 self.assertTrue(consume_steering(run_id))
                 cancelled = cancel_run(run_id)
                 self.assertEqual(cancelled["status"], "cancelled")
+                events = list_run_events(run_id)
+                self.assertTrue(all(event.get("status") != "running" for event in events))
+                cancellation = [event for event in events if event.get("event_type") == "cancellation_requested"][0]
+                self.assertEqual(cancellation["thread_id"], "thread-b")
+                self.assertEqual(cancellation["repo"], str(repo))
+                self.assertNotIn(run_id, {item["id"] for item in get_active_runs()})
+
+    def test_stream_run_returns_generator_object_and_done(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            home = Path(temp_home)
+            repo = home / "repo"
+            _init_repo(repo)
+            config = _write_config(home)
+            request = AgentRunRequest(project_path=str(repo), thread_id="thread-stream", task="Stream a summary.")
+
+            def fake_stream(_request, *, run_id=None):
+                yield json.dumps(
+                    {
+                        "type": "progress_delta",
+                        "run_id": run_id,
+                        "phase": "Thinking",
+                        "label": "Working",
+                        "status": "completed",
+                    }
+                )
+                yield json.dumps(
+                    {
+                        "type": "final_message",
+                        "run_id": run_id,
+                        "result": AgentRunResponse(
+                            project_path=str(repo),
+                            task=request.task,
+                            model="test-model",
+                            repo_root_name="repo",
+                            context_summary="",
+                            top_level_entries=[],
+                            readme_included=False,
+                            diff_included=False,
+                            is_git_repository=True,
+                            response="Done.",
+                        ).model_dump(),
+                    }
+                )
+
+            with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(config)}, clear=True), patch(
+                "repooperator_worker.services.agent_orchestration_graph.stream_agent_orchestration_graph",
+                side_effect=fake_stream,
+            ):
+                run_id, stream = stream_run(request)
+                self.assertTrue(hasattr(stream, "__iter__"))
+                chunks = []
+                for _ in range(10):
+                    chunk = next(stream)
+                    chunks.append(chunk)
+                    if "[DONE]" in chunk:
+                        break
+                self.assertTrue(any("progress_delta" in chunk for chunk in chunks))
+                self.assertTrue(chunks[-1].strip().endswith("[DONE]"))
+                self.assertEqual(get_run(run_id)["status"], "completed")
+
+    def test_failed_stream_records_failed_run_and_error_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            home = Path(temp_home)
+            repo = home / "repo"
+            _init_repo(repo)
+            config = _write_config(home)
+            request = AgentRunRequest(project_path=str(repo), thread_id="thread-fail", task="Stream failure.")
+
+            def failing_stream(_request, *, run_id=None):
+                raise RuntimeError("simulated stream failure")
+                yield "{}"
+
+            with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(config)}, clear=True), patch(
+                "repooperator_worker.services.agent_orchestration_graph.stream_agent_orchestration_graph",
+                side_effect=failing_stream,
+            ):
+                run_id, stream = stream_run(request)
+                chunks = []
+                for _ in range(10):
+                    chunk = next(stream)
+                    chunks.append(chunk)
+                    if "[DONE]" in chunk:
+                        break
+                self.assertEqual(get_run(run_id)["status"], "failed")
+                self.assertTrue(any(event.get("type") == "error" for event in list_run_events(run_id)))
+
+    def test_active_runs_exclude_terminal_statuses(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            home = Path(temp_home)
+            repo = home / "repo"
+            _init_repo(repo)
+            config = _write_config(home)
+            request = AgentRunRequest(project_path=str(repo), thread_id="thread-active", task="Check active runs.")
+            with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(config)}, clear=True):
+                from repooperator_worker.services.event_service import new_run_id
+
+                run_id = new_run_id()
+                start_active_run(run_id=run_id, request=request, thread_id="thread-active")
+                self.assertIn(run_id, {item["id"] for item in get_active_runs()})
+                complete_active_run(run_id=run_id, status="completed")
+                self.assertNotIn(run_id, {item["id"] for item in get_active_runs()})
 
     def test_visible_reasoning_is_separated_from_final_answer(self) -> None:
         reasoning, answer = split_visible_reasoning("<think>check repository context</think>\nFinal answer")
