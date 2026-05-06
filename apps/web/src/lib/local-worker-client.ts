@@ -227,6 +227,9 @@ export type AgentActivityEvent = {
   label?: string;
   detail?: string;
   message?: string;
+  safe_reasoning_summary?: string | null;
+  related_search_query?: string | null;
+  aggregate?: Record<string, unknown> | null;
   status?: "pending" | "running" | "completed" | "failed" | "waiting" | string;
   started_at?: string | null;
   ended_at?: string | null;

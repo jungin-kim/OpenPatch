@@ -599,6 +599,21 @@ class WorkerContractTests(unittest.TestCase):
 
             def fake_generate_text(_client, prompt) -> str:
                 prompts.append(prompt.user_prompt)
+                if "intent classifier" in prompt.system_prompt.lower():
+                    return json.dumps(
+                        {
+                            "intent": "read_only_question",
+                            "confidence": 0.9,
+                            "analysis_scope": "unknown",
+                            "requested_workflow": "other",
+                            "requires_repository_wide_review": False,
+                            "target_files": [],
+                            "target_symbols": [],
+                            "requested_action": "answer",
+                            "needs_clarification": False,
+                            "clarification_question": None,
+                        }
+                    )
                 return "grounded answer"
 
             with patch.dict(

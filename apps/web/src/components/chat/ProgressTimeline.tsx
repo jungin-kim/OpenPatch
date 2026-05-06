@@ -11,6 +11,9 @@ export type ProgressStep = {
   label?: string;
   detail?: string;
   message?: string;
+  safeReasoningSummary?: string | null;
+  relatedSearchQuery?: string | null;
+  aggregate?: Record<string, unknown> | null;
   status?: string;
   startedAt?: string | null;
   endedAt?: string | null;
@@ -106,6 +109,13 @@ export function ProgressTimeline({ steps, done }: Props) {
                   <span className="progress-step-phase">{step.phase || "Activity"}</span>
                 </span>
                 {step.detail ? <span className="progress-step-detail">{step.detail}</span> : null}
+                {step.safeReasoningSummary ? (
+                  <span className="progress-step-detail">{step.safeReasoningSummary}</span>
+                ) : null}
+                {step.relatedSearchQuery ? (
+                  <span className="progress-step-related">Searched: <code>{step.relatedSearchQuery}</code></span>
+                ) : null}
+                {step.aggregate ? <AggregateProgressDetails aggregate={step.aggregate} /> : null}
                 {step.files?.length ? (
                   <span className="progress-step-related">{step.files.join(", ")}</span>
                 ) : null}
@@ -120,6 +130,26 @@ export function ProgressTimeline({ steps, done }: Props) {
         })}
       </div>
     </section>
+  );
+}
+
+function AggregateProgressDetails({ aggregate }: { aggregate: Record<string, unknown> }) {
+  const entries = Object.entries(aggregate).filter(([, value]) =>
+    typeof value === "string" || typeof value === "number" || typeof value === "boolean",
+  );
+  if (!entries.length) return null;
+  return (
+    <details className="progress-step-aggregate">
+      <summary>Details</summary>
+      <dl>
+        {entries.map(([key, value]) => (
+          <div key={key}>
+            <dt>{key.replaceAll("_", " ")}</dt>
+            <dd>{String(value)}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   );
 }
 

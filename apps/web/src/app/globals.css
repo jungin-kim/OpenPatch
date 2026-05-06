@@ -1664,6 +1664,35 @@ select {
   font-size: 0.72rem;
 }
 
+.progress-step-aggregate {
+  color: var(--muted);
+}
+
+.progress-step-aggregate summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.progress-step-aggregate dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 4px 0 0;
+}
+
+.progress-step-aggregate div {
+  display: contents;
+}
+
+.progress-step-aggregate dt {
+  text-transform: capitalize;
+}
+
+.progress-step-aggregate dd {
+  margin: 0;
+  color: var(--foreground);
+}
+
 .progress-step-status {
   font-size: 0.68rem;
   text-transform: uppercase;

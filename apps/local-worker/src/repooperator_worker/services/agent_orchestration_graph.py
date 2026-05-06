@@ -88,6 +88,99 @@ SUPPORTED_SUFFIXES = {
     ".sh",
 }
 
+REPOSITORY_REVIEW_SUFFIXES = {
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".java",
+    ".kt",
+    ".swift",
+    ".go",
+    ".rs",
+    ".rb",
+    ".php",
+    ".cs",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".sh",
+    ".sql",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".json",
+    ".ini",
+    ".cfg",
+    ".properties",
+    ".gradle",
+    ".md",
+    ".rst",
+    ".txt",
+    ".html",
+    ".css",
+}
+
+REPOSITORY_REVIEW_FILENAMES = {
+    "dockerfile",
+    "makefile",
+    "requirements.txt",
+    "requirements.in",
+    "pyproject.toml",
+    "package.json",
+    "readme",
+    "readme.md",
+}
+
+REPOSITORY_REVIEW_BINARY_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico",
+    ".pdf",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".tgz",
+    ".7z",
+    ".rar",
+    ".mp3",
+    ".mp4",
+    ".mov",
+    ".wav",
+    ".onnx",
+    ".pt",
+    ".pth",
+    ".bin",
+    ".sqlite",
+    ".db",
+    ".pyc",
+}
+
+REPOSITORY_REVIEW_EXTRA_SKIP_DIRS = {
+    ".git",
+    ".claude",
+    "node_modules",
+    "runtime",
+    ".next",
+    "dist",
+    "build",
+    "out",
+    "coverage",
+    ".venv",
+    "venv",
+    "__pycache__",
+}
+
+MAX_REPOSITORY_REVIEW_FILES = 12
+MAX_REPOSITORY_REVIEW_BYTES = 120_000
+MAX_REPOSITORY_REVIEW_PROMPT_CHARS = 22_000
+SMALL_REVIEW_RETRY_CHARS = 12_000
+
 FILE_TOKEN_RE = re.compile(r"[A-Za-z0-9_./\\-]+")
 
 SUPPORTED_INTENTS: set[str] = {
@@ -115,6 +208,9 @@ Schema:
 {
   "intent": "read_only_question|repo_analysis|recommend_change_targets|review_recommendation|write_request|write_confirmation|file_clarification_answer|local_command_request|git_workflow_request|gitlab_mr_request|multi_step_request|pasted_prompt_or_spec|apply_spec_to_repo|ambiguous",
   "confidence": 0.0,
+  "analysis_scope": "single_file|selected_files|repository_wide|unknown",
+  "requested_workflow": "repository_review|file_review|code_change|git_workflow|command|other",
+  "requires_repository_wide_review": false,
   "target_files": [],
   "target_symbols": [],
   "requested_action": "short action summary",
@@ -145,6 +241,10 @@ English requests are both expected. Do not expose hidden reasoning.
 
 Important distinctions:
 - Requests for improvement advice or review points are review_recommendation, not edits.
+- Decide whether analysis scope is a single file, selected files, the whole repository, or unknown.
+- Set requested_workflow to repository_review when the user wants whole-repository or file-by-file repository review.
+- Set requires_repository_wide_review to true only when the repository-wide map/reduce review workflow is appropriate.
+- Use file_review for selected-file review, code_change for edits, git_workflow for Git actions, command for local commands, and other when none apply.
 - Requests to make or apply changes are write_request or write_confirmation depending on prior context.
 - Requests about commit history are git_workflow_request with git_action "git_recent_commit".
 - Requests to create a local commit from current changes are git_workflow_request with git_action "git_commit_plan".
@@ -166,6 +266,9 @@ class OrchestrationState(TypedDict, total=False):
     intent: Intent
     confidence: float
     intent_reason: str
+    analysis_scope: str | None
+    requested_workflow: str | None
+    requires_repository_wide_review: bool
     file_hints: list[str]
     target_files: list[str]
     target_symbols: list[str]
@@ -329,6 +432,55 @@ def _activity_event(
     }
 
 
+def _append_activity_event(
+    *,
+    request: AgentRunRequest,
+    run_id: str,
+    phase: str,
+    label: str,
+    event_type: str,
+    detail: str = "",
+    status: str = "completed",
+    elapsed_ms: int | None = None,
+    files: list[str] | None = None,
+    command: str | None = None,
+    proposal_id: str | None = None,
+    safe_reasoning_summary: str | None = None,
+    related_search_query: str | None = None,
+    aggregate: dict[str, Any] | None = None,
+    events: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    event = _activity_event(
+        run_id=run_id,
+        phase=phase,
+        label=label,
+        detail=detail,
+        status=status,
+        elapsed_ms=elapsed_ms,
+        files=files,
+        command=command,
+        proposal_id=proposal_id,
+    )
+    event.update(
+        {
+            "event_type": event_type,
+            "thread_id": request.thread_id,
+            "repo": request.project_path,
+            "branch": request.branch,
+        }
+    )
+    if safe_reasoning_summary:
+        event["safe_reasoning_summary"] = safe_reasoning_summary
+    if related_search_query:
+        event["related_search_query"] = related_search_query
+    if aggregate is not None:
+        event["aggregate"] = aggregate
+    stored = append_run_event(run_id, event)
+    if events is not None:
+        events.append(stored)
+    return stored
+
+
 def _finalize_activity_events(events: list[dict[str, Any]], *, status: str = "completed") -> list[dict[str, Any]]:
     finalized: list[dict[str, Any]] = []
     now = _utc_now()
@@ -372,6 +524,9 @@ def _classifier_debug(state: OrchestrationState) -> dict[str, Any]:
         "git_action": state.get("git_action"),
         "commands_planned": state.get("commands_planned") or [],
         "commands_run": state.get("commands_run") or [],
+        "analysis_scope": state.get("analysis_scope"),
+        "requested_workflow": state.get("requested_workflow"),
+        "requires_repository_wide_review": bool(state.get("requires_repository_wide_review")),
         "recommendation_context_loaded": bool(state.get("recommendation_context")),
         "selected_recommendation_ids": (
             state.get("recommendation_resolution", {}).get("selected_recommendation_ids", [])
@@ -430,6 +585,9 @@ def _load_context(state: OrchestrationState) -> dict[str, Any]:
         "recommendation_resolution": None,
         "pasted_prompt_or_spec": False,
         "apply_spec_to_repo": False,
+        "analysis_scope": "unknown",
+        "requested_workflow": "other",
+        "requires_repository_wide_review": False,
         "classifier": "llm",
         "validation_status": "not_started",
         "graph_path": "load_context",
@@ -505,10 +663,17 @@ def _classify_intent(state: OrchestrationState) -> dict[str, Any]:
     if classification.get("needs_clarification") and not candidates:
         candidates = target_files or pending.get("candidates") or thread_context.recent_files[:8]
 
+    analysis_scope = _normalize_analysis_scope(classification.get("analysis_scope"))
+    requested_workflow = _normalize_requested_workflow(classification.get("requested_workflow"))
+    requires_repository_wide_review = bool(classification.get("requires_repository_wide_review"))
+
     return {
         "intent": intent,
         "confidence": confidence,
         "intent_reason": str(classification.get("requested_action") or ""),
+        "analysis_scope": analysis_scope,
+        "requested_workflow": requested_workflow,
+        "requires_repository_wide_review": requires_repository_wide_review,
         "file_hints": file_hints,
         "target_files": target_files,
         "target_symbols": target_symbols,
@@ -692,6 +857,9 @@ def _ask_clarification(state: OrchestrationState) -> dict[str, Any]:
 
 def _recommend_change_targets(state: OrchestrationState) -> dict[str, Any]:
     request = state["request"]
+    if _should_use_repository_wide_review(state):
+        return _repository_wide_review(state)
+
     context = build_query_aware_context(request.project_path, request.task)
     repo_path = resolve_project_path(request.project_path)
     candidate_files = _recommend_candidate_files(repo_path)
@@ -1039,10 +1207,507 @@ def _proposal_error(state: OrchestrationState) -> dict[str, Any]:
     return {"result": result, "graph_path": "proposal_error"}
 
 
+def _should_use_repository_wide_review(state: OrchestrationState) -> bool:
+    if state.get("target_files") or state.get("file_hints"):
+        return False
+    if state.get("requires_repository_wide_review") is True:
+        return True
+    if state.get("analysis_scope") == "repository_wide":
+        return True
+    if state.get("requested_workflow") == "repository_review":
+        return True
+    return False
+
+
+def _repository_wide_review(state: OrchestrationState) -> dict[str, Any]:
+    request = state["request"]
+    run_id = str(state.get("run_id") or f"run-{uuid.uuid4().hex[:12]}")
+    started = time.perf_counter()
+    activity_events: list[dict[str, Any]] = []
+    repo_path = resolve_project_path(request.project_path)
+
+    _append_activity_event(
+        request=request,
+        run_id=run_id,
+        phase="Thinking",
+        label="Planned repository review",
+        detail="I will inventory readable source, config, and docs files, review each selected file separately, then summarize only confirmed findings.",
+        event_type="narrative_summary",
+        elapsed_ms=0,
+        safe_reasoning_summary=(
+            "Repository-wide review is split by file so a timeout in one file does not create unsupported conclusions."
+        ),
+        events=activity_events,
+    )
+
+    inventory = _inventory_repository_review_files(repo_path)
+    selected = inventory["selected"]
+    skipped = inventory["skipped"]
+    _append_activity_event(
+        request=request,
+        run_id=run_id,
+        phase="Searching",
+        label="Listed repository files",
+        detail=f"Selected {len(selected)} readable file(s) and skipped {len(skipped)} unsupported, generated, dependency, or large file(s).",
+        event_type="file_search",
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+        related_search_query="repository inventory",
+        aggregate={
+            "files_selected": len(selected),
+            "files_skipped": len(skipped),
+            "searches_count": 1,
+        },
+        events=activity_events,
+    )
+
+    if selected:
+        _append_activity_event(
+            request=request,
+            run_id=run_id,
+            phase="Searching",
+            label="Selected files for review",
+            detail=", ".join(selected[:8]) + (" ..." if len(selected) > 8 else ""),
+            event_type="file_selected",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            files=selected[:8],
+            events=activity_events,
+        )
+
+    reviewed: list[dict[str, Any]] = []
+    timed_out: list[dict[str, Any]] = []
+    read_failures: list[dict[str, Any]] = []
+    client: OpenAICompatibleModelClient | None = None
+    try:
+        client = OpenAICompatibleModelClient()
+    except (ValueError, RuntimeError) as exc:
+        logger.info("Repository review model client unavailable: %r", exc)
+
+    for relative_path in selected:
+        file_started = time.perf_counter()
+        _append_activity_event(
+            request=request,
+            run_id=run_id,
+            phase="Reading files",
+            label=f"Reading {Path(relative_path).name}",
+            detail=f"Reading `{relative_path}` before file-level review.",
+            event_type="file_read",
+            status="running",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            files=[relative_path],
+            events=activity_events,
+        )
+        read_result = _read_review_file(repo_path, relative_path)
+        read_elapsed = int((time.perf_counter() - file_started) * 1000)
+        if read_result.get("error"):
+            read_failures.append({"file": relative_path, "reason": read_result["error"]})
+            _append_activity_event(
+                request=request,
+                run_id=run_id,
+                phase="Reading files",
+                label=f"Skipped {Path(relative_path).name}",
+                detail=str(read_result["error"]),
+                event_type="partial_result",
+                status="failed",
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                files=[relative_path],
+                events=activity_events,
+            )
+            continue
+        _append_activity_event(
+            request=request,
+            run_id=run_id,
+            phase="Reading files",
+            label=f"Read {Path(relative_path).name}",
+            detail=(
+                "File content was truncated for review."
+                if read_result.get("truncated")
+                else "File content was read for review."
+            ),
+            event_type="file_read",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            files=[relative_path],
+            aggregate={"duration_ms": read_elapsed},
+            events=activity_events,
+        )
+
+        _append_activity_event(
+            request=request,
+            run_id=run_id,
+            phase="Thinking",
+            label=f"Reviewing {Path(relative_path).name}",
+            detail="Running a per-file review call with only this file and repository metadata.",
+            event_type="step_started",
+            status="running",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            files=[relative_path],
+            safe_reasoning_summary="This file is reviewed independently to keep findings evidence-based.",
+            events=activity_events,
+        )
+        review_result = _review_single_file(
+            request=request,
+            relative_path=relative_path,
+            content=str(read_result["content"]),
+            truncated=bool(read_result.get("truncated")),
+            client=client,
+        )
+        if review_result.get("timed_out"):
+            timed_out.append(review_result)
+            _append_activity_event(
+                request=request,
+                run_id=run_id,
+                phase="Thinking",
+                label=f"Timed out reviewing {Path(relative_path).name}",
+                detail=(
+                    f"Timed out after {review_result.get('elapsed_seconds')}s. "
+                    "Marking this file as not reviewed and continuing with the next file."
+                ),
+                event_type="timeout",
+                status="failed",
+                elapsed_ms=int((time.perf_counter() - started) * 1000),
+                files=[relative_path],
+                events=activity_events,
+            )
+            continue
+        reviewed.append(review_result)
+        _append_activity_event(
+            request=request,
+            run_id=run_id,
+            phase="Thinking",
+            label=f"Reviewed {Path(relative_path).name}",
+            detail=_truncate_for_event(str(review_result.get("summary") or "Completed file-level review.")),
+            event_type="step_completed",
+            elapsed_ms=int((time.perf_counter() - started) * 1000),
+            files=[relative_path],
+            safe_reasoning_summary="Findings from this row are grounded in the file content just read.",
+            events=activity_events,
+        )
+
+    counters = {
+        "files_read_count": len(reviewed) + len(timed_out),
+        "files_reviewed_count": len(reviewed),
+        "files_skipped_count": len(skipped) + len(read_failures),
+        "searches_count": 1,
+        "timed_out_count": len(timed_out),
+        "commands_count": 0,
+        "edits_count": 0,
+    }
+    _append_activity_event(
+        request=request,
+        run_id=run_id,
+        phase="Searching",
+        label=f"Explored {counters['files_read_count']} files, searched {counters['searches_count']} time",
+        detail=(
+            f"Reviewed {counters['files_reviewed_count']} file(s), "
+            f"timed out on {counters['timed_out_count']} file(s), "
+            f"and skipped {counters['files_skipped_count']} file(s)."
+        ),
+        event_type="aggregate_summary",
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+        aggregate=counters,
+        events=activity_events,
+    )
+
+    response = _format_repository_review_response(
+        request=request,
+        selected_files=selected,
+        reviewed=reviewed,
+        timed_out=timed_out,
+        skipped=skipped,
+        read_failures=read_failures,
+    )
+    _append_activity_event(
+        request=request,
+        run_id=run_id,
+        phase="Finished",
+        label="Prepared evidence-based review summary",
+        detail="The final answer only includes confirmed findings from files that completed review.",
+        event_type="final_summary",
+        elapsed_ms=int((time.perf_counter() - started) * 1000),
+        safe_reasoning_summary="Timed-out and skipped files are reported separately rather than used for conclusions.",
+        events=activity_events,
+    )
+
+    thread_context = state.get("thread_context") or ThreadContext(request.project_path, request.branch)
+    result = _base_response(
+        request,
+        response=response,
+        response_type="assistant_answer",
+        files_read=[item["file"] for item in reviewed],
+        intent_classification=state.get("intent") or "repo_analysis",
+        graph_path="repository_wide_review",
+        skills_used=state.get("skills_used", []),
+        thread_context_files=thread_context.recent_files,
+        thread_context_symbols=thread_context.symbol_names,
+        context_source="repository_wide_review",
+        activity_events=activity_events,
+        run_id=run_id,
+        stop_reason="completed",
+        **_classifier_debug(state),
+    )
+    return {"result": result, "graph_path": "repository_wide_review", "activity_events": activity_events}
+
+
+def _inventory_repository_review_files(repo_path: Path) -> dict[str, list[Any]]:
+    selected_paths: list[Path] = []
+    skipped: list[dict[str, str]] = []
+    source_candidates: list[Path] = []
+
+    for path in sorted(repo_path.rglob("*"), key=lambda p: (len(p.relative_to(repo_path).parts), str(p).lower())):
+        if len(selected_paths) >= MAX_REPOSITORY_REVIEW_FILES:
+            break
+        if not path.is_file():
+            continue
+        rel = path.relative_to(repo_path)
+        rel_text = str(rel)
+        skip_reason = _review_skip_reason(path, rel)
+        if skip_reason:
+            skipped.append({"file": rel_text, "reason": skip_reason})
+            continue
+        source_candidates.append(path)
+
+    priority_names = {"readme.md", "readme", "pyproject.toml", "package.json", "requirements.txt"}
+    source_candidates.sort(
+        key=lambda p: (
+            0 if p.name.lower() in priority_names else 1,
+            0 if p.suffix.lower() in {".py", ".kt", ".java", ".ts", ".tsx", ".js"} else 1,
+            len(p.relative_to(repo_path).parts),
+            str(p).lower(),
+        )
+    )
+    selected_paths = source_candidates[:MAX_REPOSITORY_REVIEW_FILES]
+    for path in source_candidates[MAX_REPOSITORY_REVIEW_FILES:]:
+        skipped.append({"file": str(path.relative_to(repo_path)), "reason": "review file limit reached"})
+
+    return {
+        "selected": [str(path.relative_to(repo_path)) for path in selected_paths],
+        "skipped": skipped,
+    }
+
+
+def _review_skip_reason(path: Path, relative_path: Path) -> str | None:
+    parts = {part.lower() for part in relative_path.parts}
+    if parts & {item.lower() for item in SKIP_DIRS | frozenset(REPOSITORY_REVIEW_EXTRA_SKIP_DIRS)}:
+        return "generated, dependency, cache, or hidden workspace path"
+    suffix = path.suffix.lower()
+    name = path.name.lower()
+    if suffix in REPOSITORY_REVIEW_BINARY_SUFFIXES:
+        return "binary or unsupported file type"
+    if suffix not in REPOSITORY_REVIEW_SUFFIXES and name not in REPOSITORY_REVIEW_FILENAMES:
+        return "unsupported file type"
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return "could not stat file"
+    if size > MAX_REPOSITORY_REVIEW_BYTES:
+        return f"larger than {MAX_REPOSITORY_REVIEW_BYTES} bytes"
+    return None
+
+
+def _read_review_file(repo_path: Path, relative_path: str) -> dict[str, Any]:
+    path = (repo_path / relative_path).resolve()
+    try:
+        path.relative_to(repo_path.resolve())
+    except ValueError:
+        return {"error": "path is outside the active repository"}
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        return {"error": f"could not read file: {exc}"}
+    if b"\0" in raw[:4096]:
+        return {"error": "binary content detected"}
+    truncated = len(raw) > MAX_REPOSITORY_REVIEW_PROMPT_CHARS
+    content = raw[:MAX_REPOSITORY_REVIEW_PROMPT_CHARS].decode("utf-8", errors="replace")
+    return {"content": content, "truncated": truncated}
+
+
+def _review_single_file(
+    *,
+    request: AgentRunRequest,
+    relative_path: str,
+    content: str,
+    truncated: bool,
+    client: OpenAICompatibleModelClient | None,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    if client is None:
+        return {
+            "file": relative_path,
+            "summary": _fallback_file_review_summary(relative_path, content, truncated),
+            "confirmed": True,
+            "fallback": True,
+            "elapsed_seconds": int(time.perf_counter() - started),
+        }
+
+    attempts = 2 if len(content) <= SMALL_REVIEW_RETRY_CHARS else 1
+    for attempt in range(attempts):
+        try:
+            raw_response = client.generate_text(
+                ModelGenerationRequest(
+                    system_prompt=(
+                        "You are RepoOperator performing a file-level code review. "
+                        "Use only the provided file content. Return concise visible review notes: "
+                        "purpose, confirmed issues, improvement opportunities, and evidence. "
+                        "If no issue is confirmed, say so. Do not include hidden reasoning.\n"
+                        + language_guidance_for_task(request.task)
+                    ),
+                    user_prompt=(
+                        f"Repository: {Path(request.project_path).name}\n"
+                        f"File: {relative_path}\n"
+                        f"Content truncated: {'yes' if truncated else 'no'}\n\n"
+                        f"User review request:\n{request.task}\n\n"
+                        f"File content:\n{content}"
+                    ),
+                )
+            )
+            clean_response, _reasoning = clean_user_visible_response(raw_response, user_task=request.task)
+            return {
+                "file": relative_path,
+                "summary": clean_response.strip() or "Completed file-level review.",
+                "confirmed": True,
+                "attempts": attempt + 1,
+                "elapsed_seconds": int(time.perf_counter() - started),
+            }
+        except (ValueError, RuntimeError, TimeoutError) as exc:
+            if _is_timeout_exception(exc):
+                if attempt + 1 < attempts:
+                    continue
+                return {
+                    "file": relative_path,
+                    "timed_out": True,
+                    "error": "model_timeout",
+                    "elapsed_seconds": max(1, int(time.perf_counter() - started)),
+                    "summary": "Timed out before file-level review completed.",
+                }
+            return {
+                "file": relative_path,
+                "summary": f"Could not complete model review for this file: {_safe_error_summary(exc)}",
+                "confirmed": False,
+                "error": "model_error",
+                "elapsed_seconds": int(time.perf_counter() - started),
+            }
+
+    return {
+        "file": relative_path,
+        "timed_out": True,
+        "error": "model_timeout",
+        "elapsed_seconds": max(1, int(time.perf_counter() - started)),
+        "summary": "Timed out before file-level review completed.",
+    }
+
+
+def _is_timeout_exception(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "timeout" in text or "timed out" in text or isinstance(exc, TimeoutError)
+
+
+def _safe_error_summary(exc: BaseException) -> str:
+    text = " ".join(str(exc).split())
+    if not text:
+        return exc.__class__.__name__
+    return text[:220]
+
+
+def _fallback_file_review_summary(relative_path: str, content: str, truncated: bool) -> str:
+    lines = content.splitlines()
+    non_empty = [line for line in lines if line.strip()]
+    suffix_note = " Content was truncated before review." if truncated else ""
+    return (
+        f"`{relative_path}` was read successfully. It contains {len(lines)} line(s) "
+        f"({len(non_empty)} non-empty). No model review was available, so this is a structural observation only."
+        f"{suffix_note}"
+    )
+
+
+def _format_repository_review_response(
+    *,
+    request: AgentRunRequest,
+    selected_files: list[str],
+    reviewed: list[dict[str, Any]],
+    timed_out: list[dict[str, Any]],
+    skipped: list[dict[str, str]],
+    read_failures: list[dict[str, str]],
+) -> str:
+    korean = user_prefers_korean(request.task)
+    if korean:
+        if not reviewed:
+            lines = [
+                "파일별 코드 리뷰가 완료되지 않았습니다.",
+                "",
+                "현재 확인 가능한 것은 저장소 구조와 파일 선택 결과뿐입니다. 타임아웃 또는 읽기 실패가 발생한 파일은 확인된 문제로 다루지 않았습니다.",
+            ]
+        else:
+            lines = [
+                f"분석 가능한 파일 {len(selected_files)}개 중 {len(reviewed)}개를 파일별로 검토했습니다.",
+                "",
+                "## 확인된 파일별 결과",
+            ]
+            for item in reviewed:
+                lines.extend([f"- `{item['file']}`", f"  {_indent_one_line(str(item.get('summary') or '검토 완료'))}"])
+        if timed_out:
+            lines.extend(["", "## 타임아웃으로 검토하지 못한 파일"])
+            lines.extend(
+                f"- `{item['file']}`: {item.get('elapsed_seconds', 0)}초 후 타임아웃"
+                for item in timed_out
+            )
+        if skipped or read_failures:
+            lines.extend(["", "## 제외되거나 읽지 못한 파일"])
+            for item in [*skipped[:12], *read_failures[:12]]:
+                lines.append(f"- `{item['file']}`: {item['reason']}")
+        lines.extend([
+            "",
+            "위 결론은 실제로 읽고 검토가 끝난 파일에만 근거합니다. 제외되거나 타임아웃된 파일에 대해서는 보안 문제나 구현 문제를 단정하지 않았습니다.",
+        ])
+        return "\n".join(lines)
+
+    if not reviewed:
+        lines = [
+            "File-by-file code review did not complete.",
+            "",
+            "The reliable result is limited to repository inventory and file selection. Timed-out or unreadable files are not used as confirmed findings.",
+        ]
+    else:
+        lines = [
+            f"Reviewed {len(reviewed)} of {len(selected_files)} selected readable file(s).",
+            "",
+            "## Confirmed File-Level Results",
+        ]
+        for item in reviewed:
+            lines.extend([f"- `{item['file']}`", f"  {_indent_one_line(str(item.get('summary') or 'Review completed.'))}"])
+    if timed_out:
+        lines.extend(["", "## Not Reviewed Due To Timeout"])
+        lines.extend(
+            f"- `{item['file']}`: timed out after {item.get('elapsed_seconds', 0)}s"
+            for item in timed_out
+        )
+    if skipped or read_failures:
+        lines.extend(["", "## Skipped Or Unreadable Files"])
+        for item in [*skipped[:12], *read_failures[:12]]:
+            lines.append(f"- `{item['file']}`: {item['reason']}")
+    lines.extend([
+        "",
+        "I only treated completed per-file reviews as confirmed evidence. Skipped and timed-out files are listed separately.",
+    ])
+    return "\n".join(lines)
+
+
+def _indent_one_line(text: str) -> str:
+    return " ".join(text.split())[:900]
+
+
+def _truncate_for_event(text: str, limit: int = 240) -> str:
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1].rstrip() + "..."
+
+
 def _answer_read_only(state: OrchestrationState) -> dict[str, Any]:
     from repooperator_worker.services.agent_graph import run_agent_graph
 
     request = state["request"]
+    if _should_use_repository_wide_review(state):
+        return _repository_wide_review(state)
+
     skills_context = state.get("skills_context") or ""
     if state.get("intent") == "review_recommendation":
         request = request.model_copy(
@@ -1697,6 +2362,9 @@ def _resolve_context_reference(state: OrchestrationState) -> dict[str, Any]:
 def _decompose_and_execute(state: OrchestrationState) -> dict[str, Any]:
     """Execute a multi-step task: decompose, run each step, return combined result."""
     request = state["request"]
+    if _should_use_repository_wide_review(state):
+        return _repository_wide_review(state)
+
     started = time.perf_counter()
     plan_events: list[dict] = []
     step_results: list[dict[str, Any]] = []
@@ -2205,6 +2873,8 @@ def _after_decide_next_action(state: OrchestrationState) -> str:
 
 def _after_classify(state: OrchestrationState) -> str:
     intent = state.get("intent")
+    if state.get("needs_clarification"):
+        return "ask_clarification"
     if intent in {"pasted_prompt_or_spec", "apply_spec_to_repo"}:
         return "handle_pasted_spec"
     if intent == "read_only_question":
@@ -2798,6 +3468,20 @@ def _normalize_intent(value: Any) -> Intent:
     return "ambiguous"
 
 
+def _normalize_analysis_scope(value: Any) -> str:
+    scope = str(value or "unknown").strip()
+    if scope in {"single_file", "selected_files", "repository_wide", "unknown"}:
+        return scope
+    return "unknown"
+
+
+def _normalize_requested_workflow(value: Any) -> str:
+    workflow = str(value or "other").strip()
+    if workflow in {"repository_review", "file_review", "code_change", "git_workflow", "command", "other"}:
+        return workflow
+    return "other"
+
+
 def _safe_float(value: Any, *, default: float) -> float:
     try:
         return max(0.0, min(1.0, float(value)))
@@ -2838,6 +3522,8 @@ def _fallback_classification(state: OrchestrationState, file_hints: list[str]) -
             intent="pasted_prompt_or_spec",
             confidence=0.6,
             requested_action="handle_pasted_spec",
+            analysis_scope="unknown",
+            requested_workflow="other",
             classifier="deterministic_fallback",
         )
     if pending.get("candidates") and _matches_pending_candidate(request.task, pending["candidates"]):
@@ -2845,6 +3531,8 @@ def _fallback_classification(state: OrchestrationState, file_hints: list[str]) -
             intent="file_clarification_answer",
             confidence=0.7,
             requested_action="select_candidate",
+            analysis_scope="selected_files",
+            requested_workflow="code_change",
             classifier="deterministic_fallback",
         )
     if file_hints:
@@ -2853,6 +3541,8 @@ def _fallback_classification(state: OrchestrationState, file_hints: list[str]) -
             confidence=0.55,
             target_files=file_hints,
             requested_action="edit_file",
+            analysis_scope="selected_files",
+            requested_workflow="code_change",
             classifier="deterministic_fallback",
         )
     if "mr" in lowered or "merge request" in lowered:
@@ -2861,12 +3551,18 @@ def _fallback_classification(state: OrchestrationState, file_hints: list[str]) -
             confidence=0.55,
             requested_action="list_merge_requests",
             needs_tool="glab",
+            analysis_scope="unknown",
+            requested_workflow="git_workflow",
             classifier="deterministic_fallback",
         )
     return _classification_payload(
-        intent="read_only_question",
-        confidence=0.4,
-        requested_action="answer",
+        intent="ambiguous",
+        confidence=0.2,
+        requested_action="clarify_analysis_scope",
+        analysis_scope="unknown",
+        requested_workflow="other",
+        needs_clarification=True,
+        clarification_question="Do you want a whole-repository review, or should I inspect specific files?",
         classifier="deterministic_fallback",
     )
 
@@ -2895,16 +3591,24 @@ def _classification_payload(
     requested_action: str,
     needs_tool: str | None = None,
     classifier: str,
+    analysis_scope: str = "unknown",
+    requested_workflow: str = "other",
+    requires_repository_wide_review: bool = False,
+    needs_clarification: bool = False,
+    clarification_question: str | None = None,
 ) -> dict[str, Any]:
     return {
         "intent": intent,
         "confidence": confidence,
+        "analysis_scope": analysis_scope,
+        "requested_workflow": requested_workflow,
+        "requires_repository_wide_review": requires_repository_wide_review,
         "target_files": target_files or [],
         "target_symbols": target_symbols or [],
         "requested_action": requested_action,
         "needs_tool": needs_tool,
-        "needs_clarification": False,
-        "clarification_question": None,
+        "needs_clarification": needs_clarification,
+        "clarification_question": clarification_question,
         "classifier": classifier,
     }
 
