@@ -14,7 +14,8 @@ SRC_DIR = TESTS_DIR.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from repooperator_worker.agent_core.controller_graph import _existing_target_files, _answer_with_model  # noqa: E402
+from repooperator_worker.agent_core.controller_graph import _existing_target_files, _answer_with_model, run_controller_graph, stream_controller_graph  # noqa: E402
+from repooperator_worker.agent_core.state import ClassifierResult  # noqa: E402
 from repooperator_worker.agent_core.repository_review import review_single_file  # noqa: E402
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse  # noqa: E402
 from repooperator_worker.services.agent_orchestration_graph import (  # noqa: E402
@@ -37,6 +38,18 @@ class _StreamingReviewClient:
 
     def generate_text(self, _request):
         raise AssertionError("review_single_file should prefer stream_text")
+
+
+class _LoopClient:
+    @property
+    def model_name(self) -> str:
+        return "test-model"
+
+    def stream_text(self, _request):
+        yield {"type": "assistant_delta", "delta": "README.md evidence reached the final answer."}
+
+    def generate_text(self, _request):
+        return "README.md evidence reached the final answer."
 
 
 class ActivePathMigrationTests(unittest.TestCase):
@@ -250,6 +263,64 @@ class ActivePathMigrationTests(unittest.TestCase):
         )
         self.assertTrue(result["cancelled"])
         self.assertEqual(deltas, ["Purpose: checks the fixture. "])
+
+    def test_controller_loop_reads_target_file_then_answers(self) -> None:
+        request = self._request()
+        classifier = ClassifierResult(
+            intent="read_only_question",
+            confidence=0.9,
+            analysis_scope="single_file",
+            requested_workflow="file_review",
+            target_files=["README.md"],
+        )
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=classifier), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=_LoopClient(),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="loop-target-file")
+        self.assertGreater(result.loop_iteration, 1)
+        self.assertEqual(result.files_read, ["README.md"])
+        self.assertEqual(result.graph_path, "agent_core:read_file_answer")
+        self.assertIn("README.md evidence", result.response)
+
+    def test_stream_final_message_omits_streamed_activity_metadata(self) -> None:
+        request = self._request()
+        classifier = ClassifierResult(
+            intent="read_only_question",
+            confidence=0.9,
+            analysis_scope="single_file",
+            requested_workflow="file_review",
+            target_files=["README.md"],
+        )
+        with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
+            "repooperator_worker.agent_core.controller_graph.classify_intent",
+            return_value=classifier,
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=_LoopClient(),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            events = list(stream_controller_graph(request, run_id="stream-no-duplicate"))
+        final = next(event for event in events if event.get("type") == "final_message")
+        self.assertEqual(final["result"]["activity_events"], [])
+
+    def test_agent_service_error_uses_agent_core_metadata(self) -> None:
+        request = self._request()
+        with patch(
+            "repooperator_worker.agent_core.controller_graph.run_controller_graph",
+            side_effect=RuntimeError("boom"),
+        ), patch(
+            "repooperator_worker.services.agent_service.logger.exception",
+        ):
+            result = run_agent_task(request)
+        self.assertEqual(result.response_type, "agent_error")
+        self.assertEqual(result.agent_flow, "agent_core_controller")
+        self.assertEqual(result.graph_path, "agent_core:error")
 
 
 if __name__ == "__main__":

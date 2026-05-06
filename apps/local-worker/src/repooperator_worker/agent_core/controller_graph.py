@@ -2,17 +2,21 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
 from repooperator_worker.agent_core.action_executor import ActionExecutor
-from repooperator_worker.agent_core.actions import AgentAction
+from repooperator_worker.agent_core.actions import AgentAction, ActionResult
+from repooperator_worker.agent_core.events import append_activity_event
 from repooperator_worker.agent_core.final_response import build_agent_response
 from repooperator_worker.agent_core.repository_review import run_repository_review, should_use_repository_wide_review
 from repooperator_worker.agent_core.state import AgentCoreState, ClassifierResult
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
 from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient, split_visible_reasoning
 from repooperator_worker.services.common import ensure_relative_to_repo, resolve_project_path
+from repooperator_worker.services.event_service import append_run_event, get_run, list_run_events
 from repooperator_worker.services.response_quality_service import clean_user_visible_response
 from repooperator_worker.services.skills_service import enabled_skill_context
 from repooperator_worker.services.active_repository import get_active_repository
@@ -48,97 +52,355 @@ SUPPORTED_INTENTS = {
 }
 
 
-def run_controller_graph(request: AgentRunRequest, *, run_id: str | None = None) -> AgentRunResponse:
+def run_controller_graph(
+    request: AgentRunRequest,
+    *,
+    run_id: str | None = None,
+    stream_final_answer: bool = False,
+) -> AgentRunResponse:
     run_id = run_id or "run_controller"
     _validate_active_repository(request)
     state = _initial_state(request, run_id)
-    classifier = classify_intent(request)
-    state.classifier_result = classifier
     skills_context, skills_used = enabled_skill_context()
     state.skills_used = skills_used
     executor = ActionExecutor(run_id=run_id, request=request)
+    started = time.perf_counter()
+    max_wall_clock_seconds = 300
 
-    if classifier.needs_clarification:
-        return build_agent_response(
-            request,
-            response=classifier.clarification_question or "Could you clarify which files or workflow you want me to inspect?",
-            graph_path="agent_core:clarification",
-            intent_classification=classifier.intent,
-            run_id=run_id,
-            skills_used=skills_used,
-            stop_reason="needs_clarification",
-        )
+    load_context(state, request)
+    classify(state, request)
+    create_initial_plan(state)
+    emit_plan_update(state, request, "Created initial plan")
 
-    if should_use_repository_wide_review(classifier):
-        return run_repository_review(request=request, run_id=run_id, classifier=classifier, skills_used=skills_used)
+    while should_continue(state, started=started, max_wall_clock_seconds=max_wall_clock_seconds):
+        check_cancel(state, request)
+        if state.cancellation_requested:
+            break
+        consume_steering_for_state(state, request)
+        action = controller_choose_next_action(state, request)
+        state.current_step = action.reason_summary
+        if action.type == "final_answer":
+            break
+        if action.type == "ask_clarification":
+            state.stop_reason = "needs_clarification"
+            state.final_response = state.classifier_result.clarification_question or "Could you clarify which files or workflow you want me to inspect?"
+            break
 
-    target_files = _existing_target_files(request, classifier.target_files)
-    if target_files:
-        action = AgentAction(
-            type="read_file",
-            reason_summary="Read structured target files before answering.",
-            target_files=target_files,
-            expected_output="File contents for grounded answer.",
-        )
         state.actions_taken.append(action)
         result = executor.execute(action)
         state.action_results.append(result)
-        state.files_read.extend(result.files_read)
-        if result.status == "failed":
-            return build_agent_response(
-                request,
-                response="I could not read the requested file safely: " + "; ".join(result.errors),
-                graph_path="agent_core:read_file_failed",
-                intent_classification=classifier.intent,
-                run_id=run_id,
-                files_read=state.files_read,
-                skills_used=skills_used,
-                stop_reason="failed",
-            )
-        answer = _answer_with_model(request, result.payload.get("contents") or {}, skills_context=skills_context)
-        return build_agent_response(
-            request,
-            response=answer,
-            files_read=state.files_read,
-            graph_path="agent_core:read_file_answer",
-            intent_classification=classifier.intent,
-            run_id=run_id,
-            skills_used=skills_used,
+        _append_run_event_safe(
+            run_id,
+            {
+                "type": "action_result",
+                "event_type": "action_result",
+                "status": result.status,
+                "action": action.model_dump(),
+                "result": result.model_dump(),
+            },
+        )
+        observe_result(state, action, result, request)
+        update_plan(state, action, result, request)
+        check_cancel(state, request)
+        if state.cancellation_requested:
+            break
+        if result.status == "waiting_approval":
+            state.stop_reason = "waiting_approval"
+            break
+        if result.status in {"failed", "cancelled", "timed_out"}:
+            state.stop_reason = result.status
+            break
+
+    if not state.final_response:
+        on_delta = _stream_final_delta(run_id) if stream_final_answer else None
+        state.final_response = build_final_answer_text(state, request, skills_context=skills_context, on_delta=on_delta)
+    return build_final_response(state, request)
+
+
+def load_context(state: AgentCoreState, request: AgentRunRequest) -> None:
+    state.observations.append("Loaded request context for the active repository.")
+    append_activity_event(
+        run_id=state.run_id,
+        request=request,
+        activity_id="controller-load-context",
+        event_type="activity_completed",
+        phase="Thinking",
+        label="Loaded context",
+        status="completed",
+        observation="Loaded request, repository, branch, thread, and skill context.",
+    )
+
+
+def classify(state: AgentCoreState, request: AgentRunRequest) -> None:
+    state.classifier_result = classify_intent(request)
+    append_activity_event(
+        run_id=state.run_id,
+        request=request,
+        activity_id="controller-classify",
+        event_type="activity_completed",
+        phase="Thinking",
+        label="Classified request",
+        status="completed",
+        observation=f"Intent: {state.classifier_result.intent}; scope: {state.classifier_result.analysis_scope}.",
+    )
+
+
+def create_initial_plan(state: AgentCoreState) -> None:
+    classifier = state.classifier_result
+    plan = ["Classify the request", "Choose the next safe action"]
+    if classifier.needs_clarification:
+        plan.append("Ask a clarification question")
+    elif should_use_repository_wide_review(classifier):
+        plan.extend(["Run repository-wide review", "Summarize completed evidence"])
+    elif classifier.target_files or _file_tokens(state.user_task):
+        plan.extend(["Read target files", "Answer from file evidence"])
+    elif classifier.intent in {"git_workflow_request", "gitlab_mr_request", "local_command_request"}:
+        plan.extend(["Preview command safety", "Run only approved or read-only command", "Report command result"])
+    else:
+        plan.extend(["Inspect repository tree", "Answer from gathered context"])
+    state.plan = plan
+
+
+def should_continue(state: AgentCoreState, *, started: float, max_wall_clock_seconds: int) -> bool:
+    if state.stop_reason or state.cancellation_requested:
+        return False
+    if state.loop_iteration >= state.max_loop_iterations:
+        state.stop_reason = "max_loop_iterations"
+        return False
+    if len(state.files_read) >= state.max_file_reads:
+        state.stop_reason = "max_file_reads"
+        return False
+    if len(state.commands_run) >= state.max_commands:
+        state.stop_reason = "max_commands"
+        return False
+    if time.perf_counter() - started > max_wall_clock_seconds:
+        state.stop_reason = "timed_out"
+        return False
+    state.loop_iteration += 1
+    return True
+
+
+def check_cancel(state: AgentCoreState, request: AgentRunRequest) -> None:
+    try:
+        run = get_run(state.run_id) or {}
+    except OSError:
+        run = {}
+    if run.get("status") not in {"cancelled", "cancelling"}:
+        return
+    state.cancellation_requested = True
+    state.stop_reason = "cancelled"
+    append_activity_event(
+        run_id=state.run_id,
+        request=request,
+        activity_id="controller-cancelled",
+        event_type="activity_completed",
+        phase="Finished",
+        label="Run cancelled",
+        status="cancelled",
+        observation="Cancellation was requested. RepoOperator stopped at the next safe checkpoint.",
+    )
+
+
+def consume_steering_for_state(state: AgentCoreState, request: AgentRunRequest) -> None:
+    try:
+        from repooperator_worker.services.agent_run_coordinator import consume_steering
+
+        items = consume_steering(state.run_id)
+    except Exception:
+        items = []
+    for item in items:
+        content = str(item.get("content") or "").strip()
+        state.steering_instructions.append(item)
+        applied = False
+        target_files = _existing_target_files(request, _file_tokens(content))
+        if target_files:
+            existing = list(state.classifier_result.target_files)
+            for path in target_files:
+                if path not in existing:
+                    existing.append(path)
+            state.classifier_result.target_files = existing
+            applied = True
+        if any(word in content.lower().split() for word in {"stop", "cancel"}):
+            state.cancellation_requested = True
+            state.stop_reason = "cancelled"
+            applied = True
+        event_type = "steering_applied" if applied else "steering_deferred"
+        append_activity_event(
+            run_id=state.run_id,
+            request=request,
+            activity_id=f"controller-steering:{item.get('id') or len(state.steering_instructions)}",
+            event_type="activity_completed",
+            phase="Planning",
+            label="Updated plan from steering" if applied else "Steering deferred",
+            status="completed",
+            observation=(
+                "Steering updated target files or stop state."
+                if applied
+                else "Steering was recorded, but it did not safely map to the current action."
+            ),
+            detail=content[:220],
+            aggregate={"steering_event_type": event_type},
         )
 
+
+def controller_choose_next_action(state: AgentCoreState, request: AgentRunRequest) -> AgentAction:
+    classifier = state.classifier_result
+    if classifier.needs_clarification:
+        return AgentAction(type="ask_clarification", reason_summary="Ask for missing routing information.")
+    if should_use_repository_wide_review(classifier) and not _has_action(state, "analyze_repository"):
+        return AgentAction(
+            type="analyze_repository",
+            reason_summary="Run a bounded repository-wide review.",
+            expected_output="Completed per-file review evidence.",
+            payload={"classifier": classifier},
+        )
+    target_files = _existing_target_files(request, classifier.target_files)
+    unread = [path for path in target_files if path not in state.files_read]
+    if unread:
+        return AgentAction(
+            type="read_file",
+            reason_summary="Read structured target files before answering.",
+            target_files=unread,
+            expected_output="File contents for grounded answer.",
+        )
     if classifier.intent in {"git_workflow_request", "gitlab_mr_request", "local_command_request"}:
         command = _command_for_classifier(classifier)
-        action = AgentAction(
-            type="inspect_git_state" if command[:1] == ["git"] else "preview_command",
-            reason_summary=classifier.requested_action or "Preview requested command through policy.",
-            command=command,
-            expected_output="Command safety classification.",
-        )
-        result = executor.execute(action)
-        return build_agent_response(
-            request,
-            response=_format_command_preview(command, result.command_result or {}),
-            response_type="command_approval" if result.status == "waiting_approval" else "assistant_answer",
-            command_approval=result.command_result if result.status == "waiting_approval" else None,
-            commands_planned=[" ".join(command)],
-            graph_path="agent_core:command_preview",
-            intent_classification=classifier.intent,
-            run_id=run_id,
-            skills_used=skills_used,
-            stop_reason="waiting_approval" if result.status == "waiting_approval" else "completed",
-        )
+        if not _has_command_preview(state, command):
+            return AgentAction(
+                type="inspect_git_state" if command[:1] == ["git"] else "preview_command",
+                reason_summary=classifier.requested_action or "Preview requested command through policy.",
+                command=command,
+                expected_output="Command safety classification.",
+            )
+        preview = _latest_command_preview(state, command)
+        if preview and preview.status == "success" and _preview_read_only(preview.command_result):
+            if not _has_command_run(state, command):
+                return AgentAction(
+                    type="run_approved_command",
+                    reason_summary="Run read-only command after policy preview.",
+                    command=command,
+                    expected_output="Read-only command output.",
+                )
+        return AgentAction(type="final_answer", reason_summary="Answer from command preview or result.")
+    if not _has_action(state, "inspect_repo_tree") and not state.files_read:
+        return AgentAction(type="inspect_repo_tree", reason_summary="Inspect repository inventory for a grounded answer.")
+    return AgentAction(type="final_answer", reason_summary="Enough evidence is available for a final answer.")
 
-    action = AgentAction(type="inspect_repo_tree", reason_summary="Inspect repository inventory for a grounded answer.")
-    result = executor.execute(action)
-    response = _answer_with_model(request, {}, repo_observation=result.observation, skills_context=skills_context)
+
+def observe_result(state: AgentCoreState, action: AgentAction, result: ActionResult, request: AgentRunRequest) -> None:
+    if result.files_read:
+        for path in result.files_read:
+            if path not in state.files_read:
+                state.files_read.append(path)
+    if result.files_changed:
+        for path in result.files_changed:
+            if path not in state.files_changed:
+                state.files_changed.append(path)
+    if result.command_result and result.command_result.get("display_command"):
+        command = str(result.command_result.get("display_command"))
+        if result.status == "success" and result.command_result.get("exit_code") is not None:
+            state.commands_run.append(command)
+    if result.status == "waiting_approval":
+        state.pending_approval = result.command_result
+    observation = _safe_observation(action, result)
+    if observation:
+        state.observations.append(observation)
+        append_activity_event(
+            run_id=state.run_id,
+            request=request,
+            activity_id=f"controller-observe:{action.action_id}",
+            event_type="activity_completed",
+            phase="Observing",
+            label="Recorded observation",
+            status="completed",
+            observation=observation,
+            related_files=result.files_read,
+            related_command=action.command,
+        )
+    if action.type == "analyze_repository":
+        response = result.payload.get("response")
+        if isinstance(response, AgentRunResponse):
+            state.final_response = response.response
+
+
+def update_plan(state: AgentCoreState, action: AgentAction, result: ActionResult, request: AgentRunRequest) -> None:
+    if result.status == "waiting_approval":
+        state.plan.append("Wait for user approval before running the command")
+    elif result.next_recommended_action:
+        state.plan.append(f"Consider next safe action: {result.next_recommended_action}")
+    elif result.status == "success":
+        state.plan.append(f"Completed: {action.type}")
+    emit_plan_update(state, request, "Updated plan")
+
+
+def emit_plan_update(state: AgentCoreState, request: AgentRunRequest, label: str) -> None:
+    append_activity_event(
+        run_id=state.run_id,
+        request=request,
+        activity_id="controller-plan",
+        event_type="activity_updated",
+        phase="Planning",
+        label=label,
+        status="running",
+        observation="; ".join(state.plan[-4:]),
+        aggregate={"plan_steps": list(state.plan), "loop_iteration": state.loop_iteration},
+    )
+
+
+def build_final_answer_text(
+    state: AgentCoreState,
+    request: AgentRunRequest,
+    *,
+    skills_context: str = "",
+    on_delta: Any | None = None,
+) -> str:
+    if state.cancellation_requested or state.stop_reason == "cancelled":
+        completed = "; ".join(state.observations[-4:]) or "No action completed before cancellation."
+        return f"Run cancelled. Completed work before stopping: {completed}"
+    if state.pending_approval:
+        return _format_command_preview(list(state.pending_approval.get("command") or []), state.pending_approval)
+    if state.stop_reason in {"failed", "timed_out", "max_loop_iterations", "max_file_reads", "max_commands"}:
+        suffix = "; ".join(state.observations[-3:])
+        return f"I stopped because {state.stop_reason}. Completed observations: {suffix or 'none'}"
+    repository_review = _repository_review_response(state)
+    if repository_review:
+        return repository_review.response
+    command_result = _latest_command_result(state)
+    if command_result:
+        return _format_command_result(command_result)
+    contents: dict[str, str] = {}
+    for result in state.action_results:
+        contents.update(result.payload.get("contents") or {})
+    repo_observation = "\n".join(state.observations[-6:])
+    return _answer_with_model(request, contents, repo_observation=repo_observation, skills_context=skills_context, on_delta=on_delta)
+
+
+def build_final_response(state: AgentCoreState, request: AgentRunRequest) -> AgentRunResponse:
+    review_response = _repository_review_response(state)
+    if review_response and state.stop_reason not in {"cancelled", "waiting_approval"}:
+        return review_response.model_copy(update={"loop_iteration": state.loop_iteration})
+    response_type = "command_approval" if state.pending_approval else "assistant_answer"
+    graph_path = "agent_core:" + (
+        "cancelled" if state.stop_reason == "cancelled"
+        else "command_preview" if state.pending_approval
+        else "read_file_answer" if state.files_read
+        else "general_answer"
+    )
     return build_agent_response(
         request,
-        response=response,
-        graph_path="agent_core:general_answer",
-        intent_classification=classifier.intent,
-        run_id=run_id,
-        skills_used=skills_used,
-        loop_iteration=max(1, len(state.actions_taken) + 1),
+        response=state.final_response,
+        response_type=response_type,
+        files_read=state.files_read,
+        graph_path=graph_path,
+        intent_classification=state.classifier_result.intent,
+        run_id=state.run_id,
+        skills_used=state.skills_used,
+        stop_reason=state.stop_reason or "completed",
+        loop_iteration=max(1, state.loop_iteration),
+        command_approval=state.pending_approval,
+        commands_planned=[shlex.join(list(state.pending_approval.get("command") or []))] if state.pending_approval else [],
+        commands_run=state.commands_run,
+        activity_events=[],
     )
 
 
@@ -161,12 +423,18 @@ def _validate_active_repository(request: AgentRunRequest) -> None:
 
 
 def stream_controller_graph(request: AgentRunRequest, *, run_id: str | None = None) -> Iterator[dict[str, Any]]:
-    response = run_controller_graph(request, run_id=run_id)
+    before_sequence = _latest_sequence(run_id) if run_id else 0
+    response = run_controller_graph(request, run_id=run_id, stream_final_answer=True)
+    for event in list_run_events(run_id or response.run_id or "", after_sequence=before_sequence):
+        if event.get("type") == "assistant_delta":
+            before_sequence = int(event.get("sequence") or before_sequence)
+            yield event
     if response.reasoning:
         yield {"type": "reasoning_delta", "delta": response.reasoning, "source": "model_provided"}
-    for chunk in _chunk_text(response.response):
-        yield {"type": "assistant_delta", "delta": chunk}
-    yield {"type": "final_message", "result": response.model_dump(mode="json")}
+    if not _streamed_assistant_delta(run_id or ""):
+        for chunk in _chunk_text(response.response):
+            yield {"type": "assistant_delta", "delta": chunk, "streaming_mode": "post_hoc_chunking"}
+    yield {"type": "final_message", "result": response.model_copy(update={"activity_events": []}).model_dump(mode="json")}
 
 
 def classify_intent(request: AgentRunRequest) -> ClassifierResult:
@@ -226,6 +494,7 @@ def _answer_with_model(
     *,
     repo_observation: str = "",
     skills_context: str = "",
+    on_delta: Any | None = None,
 ) -> str:
     try:
         try:
@@ -257,7 +526,10 @@ def _answer_with_model(
             if delta.get("type") == "reasoning_delta":
                 reasoning.append(str(delta.get("delta") or ""))
             elif delta.get("type") == "assistant_delta":
-                pieces.append(str(delta.get("delta") or ""))
+                text = str(delta.get("delta") or "")
+                pieces.append(text)
+                if on_delta and text:
+                    on_delta(text)
         raw = "".join(pieces) or OpenAICompatibleModelClient().generate_text(prompt)
         _reasoning, visible = split_visible_reasoning(raw)
         cleaned, _ = clean_user_visible_response(visible, user_task=request.task)
@@ -294,6 +566,100 @@ def _existing_target_files(request: AgentRunRequest, target_files: list[str]) ->
         if candidate.is_file():
             existing.append(str(candidate.relative_to(repo)))
     return existing[:8]
+
+
+def _has_action(state: AgentCoreState, action_type: str) -> bool:
+    return any(action.type == action_type for action in state.actions_taken)
+
+
+def _has_command_preview(state: AgentCoreState, command: list[str]) -> bool:
+    return any(action.command == command and action.type in {"preview_command", "inspect_git_state"} for action in state.actions_taken)
+
+
+def _latest_command_preview(state: AgentCoreState, command: list[str]) -> ActionResult | None:
+    preview_action_ids = {
+        action.action_id
+        for action in state.actions_taken
+        if action.command == command and action.type in {"preview_command", "inspect_git_state"}
+    }
+    for result in reversed(state.action_results):
+        if result.action_id in preview_action_ids:
+            return result
+    return None
+
+
+def _has_command_run(state: AgentCoreState, command: list[str]) -> bool:
+    return any(action.command == command and action.type == "run_approved_command" for action in state.actions_taken)
+
+
+def _preview_read_only(command_result: dict[str, Any] | None) -> bool:
+    return bool(command_result and command_result.get("read_only") and not command_result.get("needs_approval") and not command_result.get("blocked"))
+
+
+def _repository_review_response(state: AgentCoreState) -> AgentRunResponse | None:
+    for result in reversed(state.action_results):
+        response = result.payload.get("response")
+        if isinstance(response, AgentRunResponse):
+            return response
+    return None
+
+
+def _latest_command_result(state: AgentCoreState) -> dict[str, Any] | None:
+    for result in reversed(state.action_results):
+        if result.command_result and result.command_result.get("exit_code") is not None:
+            return result.command_result
+    return None
+
+
+def _format_command_result(result: dict[str, Any]) -> str:
+    command = str(result.get("display_command") or shlex.join(list(result.get("command") or [])))
+    stdout = str(result.get("stdout") or "").strip()
+    stderr = str(result.get("stderr") or "").strip()
+    status = result.get("status") or "ok"
+    body = stdout or stderr or "No output."
+    return f"Ran `{command}` and finished with status `{status}`.\n\n```text\n{body[:4000]}\n```"
+
+
+def _safe_observation(action: AgentAction, result: ActionResult) -> str:
+    if result.status == "waiting_approval":
+        return "Command preview requires approval before execution."
+    if result.files_read:
+        files = ", ".join(result.files_read)
+        return f"Read {files}."
+    if action.type == "analyze_repository" and result.status == "success":
+        return "Completed repository-wide review and collected per-file evidence."
+    if result.command_result and result.command_result.get("exit_code") is not None:
+        return f"Ran `{result.command_result.get('display_command')}` with exit code {result.command_result.get('exit_code')}."
+    if result.observation:
+        return " ".join(str(result.observation).split())[:500]
+    return ""
+
+
+def _stream_final_delta(run_id: str):
+    def emit(delta: str) -> None:
+        _append_run_event_safe(run_id, {"type": "assistant_delta", "delta": delta, "streaming_mode": "model_stream"})
+
+    return emit
+
+
+def _streamed_assistant_delta(run_id: str) -> bool:
+    if not run_id:
+        return False
+    return any(event.get("type") == "assistant_delta" for event in list_run_events(run_id))
+
+
+def _latest_sequence(run_id: str | None) -> int:
+    if not run_id:
+        return 0
+    events = list_run_events(run_id)
+    return max((int(event.get("sequence") or 0) for event in events), default=0)
+
+
+def _append_run_event_safe(run_id: str, event: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return append_run_event(run_id, event)
+    except OSError:
+        return event
 
 
 def _command_for_classifier(classifier: ClassifierResult) -> list[str]:

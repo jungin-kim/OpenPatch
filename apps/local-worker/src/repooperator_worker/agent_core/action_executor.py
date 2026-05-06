@@ -39,6 +39,10 @@ class ActionExecutor:
                 result = self._preview_command(action)
             elif action.type == "run_approved_command":
                 result = self._run_approved_command(action)
+            elif action.type == "ask_clarification":
+                result = ActionResult(action_id=action.action_id, status="success", observation=action.reason_summary)
+            elif action.type == "final_answer":
+                result = ActionResult(action_id=action.action_id, status="success", observation="Ready to prepare the final answer.")
             else:
                 result = ActionResult(action_id=action.action_id, status="skipped", observation=f"Action {action.type} is not implemented yet.")
         except Exception as exc:  # noqa: BLE001

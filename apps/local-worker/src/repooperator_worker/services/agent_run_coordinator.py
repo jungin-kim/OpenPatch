@@ -50,12 +50,14 @@ def start_run(request: AgentRunRequest, *, stream: bool = False) -> AgentRunResp
         _record_response_events(run_id, request, response)
         maybe_record_from_agent_run(request, response)
         update_thread_context(request, response)
+        terminal_status = "cancelled" if response.stop_reason == "cancelled" else "completed"
         complete_active_run(
             run_id=run_id,
-            status="completed",
+            status=terminal_status,
             final_result=response.model_dump(mode="json"),
         )
-        _drain_queue_after_run(request)
+        if terminal_status == "completed":
+            _drain_queue_after_run(request)
         record_agent_run(
             run_id=run_id,
             request=request,
@@ -122,8 +124,10 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
                     )
                 except Exception:
                     pass
-            complete_active_run(run_id=run_id, status="completed", final_result=final_result)
-            _drain_queue_after_run(request)
+            terminal_status = "cancelled" if isinstance(final_result, dict) and final_result.get("stop_reason") == "cancelled" else "completed"
+            complete_active_run(run_id=run_id, status=terminal_status, final_result=final_result)
+            if terminal_status == "completed":
+                _drain_queue_after_run(request)
         except Exception as exc:  # noqa: BLE001
             append_run_event(run_id, {"type": "error", "message": str(exc), "status": "failed"})
             complete_active_run(run_id=run_id, status="failed", error=str(exc))
@@ -365,6 +369,17 @@ def complete_run(run_id: str, *, status: str, final_result: dict[str, Any] | Non
 
 
 def _record_response_events(run_id: str, request: AgentRunRequest, response: AgentRunResponse) -> None:
+    if response.agent_flow == "agent_core_controller":
+        append_activity(
+            run_id,
+            request=request,
+            phase="Finished",
+            label="Completed task",
+            detail=response.stop_reason or response.response_type,
+            status="completed" if response.stop_reason != "cancelled" else "failed",
+            event_type="run_completed" if response.stop_reason != "cancelled" else "run_cancelled",
+        )
+        return
     append_activity(
         run_id,
         request=request,
