@@ -135,6 +135,7 @@ class ToolOrchestratorTests(unittest.TestCase):
         self.assertTrue(result.payload["_artifact"]["payload_truncated"])
         self.assertEqual(result.payload["_artifact"]["artifact_store"], "local")
         self.assertTrue(result.payload["_artifact"]["artifact_id"])
+        self.assertNotIn("path", json.dumps(result.payload["_artifact"], ensure_ascii=False))
 
 
 @dataclass

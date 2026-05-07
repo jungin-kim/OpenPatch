@@ -15,6 +15,7 @@ from repooperator_worker.agent_core.tools.builtin import (
     ReadFileTool,
     RunApprovedCommandTool,
     SearchFilesTool,
+    SearchTextTool,
 )
 from repooperator_worker.services.json_safe import json_safe
 
@@ -67,6 +68,7 @@ def get_default_tool_registry() -> ToolRegistry:
         [
             InspectRepoTreeTool(),
             SearchFilesTool(),
+            SearchTextTool(),
             ReadFileTool(),
             AnalyzeRepositoryTool(),
             PreviewCommandTool(),

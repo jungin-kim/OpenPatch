@@ -94,6 +94,7 @@ class PermissionAuditRecord:
     tool_name: str
     decision: PermissionDecisionValue
     matched_rules: list[dict[str, Any]]
+    base_decision: dict[str, Any] | None = None
     command_preview: dict[str, Any] | None = None
     timestamp: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     reason: str = ""
@@ -104,6 +105,7 @@ class PermissionAuditRecord:
             "tool_name": self.tool_name,
             "decision": self.decision,
             "matched_rules": self.matched_rules,
+            "base_decision": self.base_decision,
             "command_preview": self.command_preview,
             "timestamp": self.timestamp,
             "reason": self.reason,
@@ -150,6 +152,7 @@ class PermissionPolicy:
             ),
             reverse=True,
         )[0]
+        selected = self._enforce_base_safety(base_rule, selected, base_decision)
         decision = PermissionDecision(
             decision=selected.decision,
             reason=selected.reason,
@@ -161,10 +164,30 @@ class PermissionPolicy:
             tool_name=tool_name,
             decision=decision.decision,
             matched_rules=[rule.model_dump() for rule in matched],
+            base_decision=base_rule.model_dump(),
             command_preview=base_decision.metadata.get("command_preview"),
             reason=decision.reason,
         )
         return decision, audit
+
+    def _enforce_base_safety(
+        self,
+        base_rule: PermissionRule,
+        selected: PermissionRule,
+        base_decision: PermissionDecision,
+    ) -> PermissionRule:
+        if selected.source == PermissionRuleSource.SYSTEM and selected.decision == "deny":
+            return selected
+        command_preview = base_decision.metadata.get("command_preview")
+        if command_preview and base_decision.decision in {"ask", "deny"}:
+            return base_rule
+        if base_decision.decision == "deny":
+            if selected.source == PermissionRuleSource.SYSTEM and selected.decision == "allow":
+                return selected
+            return base_rule
+        if base_decision.decision == "ask" and selected.decision == "allow" and selected.source != PermissionRuleSource.SYSTEM:
+            return base_rule
+        return selected
 
 
 def permission_mode_from_value(value: str | PermissionMode | None) -> PermissionMode:

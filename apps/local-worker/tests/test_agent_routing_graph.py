@@ -1185,18 +1185,19 @@ class ActivePathMigrationTests(unittest.TestCase):
         self.assertEqual([event.get("aggregate", {}).get("steering_event_type") for event in steering_events], ["steering_applied", "steering_deferred"])
 
     def test_frontend_progress_merge_does_not_autocomplete_unrelated_running_activity(self) -> None:
-        source = (TESTS_DIR.parents[2] / "apps" / "web" / "src" / "components" / "chat" / "ChatApp.tsx").read_text(encoding="utf-8")
-        merge_body = source.split("function mergeProgressStep(", 1)[1].split("function mergeProgressStepFields", 1)[0]
+        source = (TESTS_DIR.parents[2] / "apps" / "web" / "src" / "components" / "chat" / "run-event-state.ts").read_text(encoding="utf-8")
+        merge_body = source.split("export function mergeProgressStep(", 1)[1].split("export function maxEventSequence", 1)[0]
         self.assertNotIn("completedPrev", merge_body)
         self.assertNotIn("index === current.length - 1 && step.status === \"running\"", merge_body)
 
     def test_frontend_rehydrate_uses_stored_events_before_final_activity_events(self) -> None:
-        source = (TESTS_DIR.parents[2] / "apps" / "web" / "src" / "components" / "chat" / "ChatApp.tsx").read_text(encoding="utf-8")
-        helper_body = source.split("function progressStepsForCompletedRun(", 1)[1].split("function isRunActive", 1)[0]
-        self.assertIn("normalizeActivityEvents(events", helper_body)
-        self.assertIn("if (fromEvents.length > 0) return fromEvents", helper_body)
-        self.assertIn("progressStepsForCompletedRun(eventPayload.events", source)
-        self.assertIn("progressStepsForCompletedRun(completedEvents", source)
+        helper_source = (TESTS_DIR.parents[2] / "apps" / "web" / "src" / "components" / "chat" / "run-event-state.ts").read_text(encoding="utf-8")
+        app_source = (TESTS_DIR.parents[2] / "apps" / "web" / "src" / "components" / "chat" / "ChatApp.tsx").read_text(encoding="utf-8")
+        helper_body = helper_source.split("export function progressStepsForCompletedRun(", 1)[1].split("export function assistantTextFromRunEvents", 1)[0]
+        self.assertIn("mergeRunEventsIntoProgressSteps(events", helper_body)
+        self.assertIn("finalResult?.activity_events", helper_source)
+        self.assertIn("progressStepsForCompletedRun(events", app_source)
+        self.assertIn("progressStepsForCompletedRun(completedEvents", app_source)
 
     def test_repository_review_final_response_json_safe(self) -> None:
         request = self._request()

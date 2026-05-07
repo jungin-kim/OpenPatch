@@ -222,7 +222,12 @@ export type AgentActivityEvent = {
   id?: string;
   activity_id?: string | null;
   run_id?: string;
+  thread_id?: string | null;
+  repo?: string | null;
+  branch?: string | null;
   sequence?: number | null;
+  timestamp?: string | null;
+  persisted?: boolean;
   event_type?: string | null;
   phase?: string;
   label?: string;
@@ -268,7 +273,7 @@ export type AgentRunRecord = {
   repo?: string | null;
   branch?: string | null;
   task_summary?: string;
-  status: "running" | "completed" | "failed" | string;
+  status: "pending" | "running" | "waiting_approval" | "cancelling" | "completed" | "failed" | "cancelled" | "timed_out" | string;
   started_at?: string;
   completed_at?: string | null;
   final_result?: AgentRunPayload | null;

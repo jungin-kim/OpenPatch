@@ -29,6 +29,24 @@ class ArtifactRecord:
     blocked: bool = False
 
     def record_dump(self) -> dict[str, Any]:
+        return self.public_record_dump()
+
+    def public_record_dump(self) -> dict[str, Any]:
+        return json_safe(
+            {
+                "artifact_id": self.artifact_id,
+                "run_id": self.run_id,
+                "kind": self.kind,
+                "byte_size": self.byte_size,
+                "sha256": self.sha256,
+                "preview": self.preview,
+                "created_at": self.created_at,
+                "redacted": self.redacted,
+                "blocked": self.blocked,
+            }
+        )
+
+    def internal_record_dump(self) -> dict[str, Any]:
         return json_safe(self)
 
 

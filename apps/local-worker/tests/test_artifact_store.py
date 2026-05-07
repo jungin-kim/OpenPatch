@@ -22,6 +22,9 @@ class ArtifactStoreTests(unittest.TestCase):
             self.assertTrue(record.artifact_id)
             self.assertGreater(record.byte_size, 100)
             json.dumps(record.record_dump(), ensure_ascii=False)
+            self.assertTrue(record.path)
+            self.assertNotIn("path", record.record_dump())
+            self.assertIn("path", record.internal_record_dump())
             self.assertEqual(store.read(record.artifact_id), payload)
 
     def test_secret_payload_is_redacted_before_storage(self) -> None:

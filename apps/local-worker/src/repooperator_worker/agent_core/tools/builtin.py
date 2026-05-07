@@ -11,6 +11,7 @@ from repooperator_worker.agent_core.command_security import validate_argv_shape
 from repooperator_worker.agent_core.events import append_activity_event
 from repooperator_worker.agent_core.policies import command_policy_preview, validate_repo_file
 from repooperator_worker.agent_core.repository_review import run_repository_review as _run_repository_review
+from repooperator_worker.agent_core.secret_scanner import redact_secrets
 from repooperator_worker.agent_core.tools.base import BaseTool, ToolExecutionContext, ToolResult, ToolSpec
 from repooperator_worker.agent_core.permissions import PermissionDecision, ToolPermissionContext
 from repooperator_worker.services.command_service import run_command_with_policy
@@ -216,6 +217,82 @@ class SearchFilesTool(BaseTool):
             status="success",
             observation=f"Found {len(candidates)} candidate file(s).",
             payload={"queries": queries, "text_queries": text_queries, "candidates": candidates, "candidate_details": candidate_details},
+        )
+
+
+class SearchTextTool(BaseTool):
+    spec = ToolSpec(
+        name="search_text",
+        description="Search text content inside supported repo files without invoking shell grep or rg.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "path_globs": {"type": "array", "items": {"type": "string"}},
+                "max_results": {"type": "integer", "minimum": 1, "maximum": 200},
+                "case_sensitive": {"type": "boolean"},
+                "regex": {"type": "boolean"},
+                "context_lines": {"type": "integer", "minimum": 0, "maximum": 3},
+            },
+            "required": ["query"],
+            "additionalProperties": True,
+        },
+        read_only=True,
+        concurrency_safe=True,
+        max_result_chars=200_000,
+    )
+
+    def validate_input(self, payload: dict[str, Any], request) -> dict[str, Any]:
+        query = str(payload.get("query") or "").strip()
+        globs = [str(item).strip().lstrip("/") for item in payload.get("path_globs") or [] if str(item).strip()]
+        return {
+            **dict(payload),
+            "query": query[:500],
+            "path_globs": globs[:20],
+            "max_results": max(1, min(int(payload.get("max_results") or 50), 200)),
+            "case_sensitive": bool(payload.get("case_sensitive")),
+            "regex": bool(payload.get("regex")),
+            "context_lines": max(0, min(int(payload.get("context_lines") or 0), 3)),
+        }
+
+    def call(self, payload: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
+        query = str(payload.get("query") or "")
+        if not query:
+            return ToolResult(tool_name=self.spec.name, status="skipped", observation="No search query was provided.")
+        repo = resolve_project_path(context.request.project_path).resolve()
+        matches, files_searched, truncated = search_text_matches(
+            repo,
+            query=query,
+            path_globs=list(payload.get("path_globs") or []),
+            max_results=int(payload.get("max_results") or 50),
+            case_sensitive=bool(payload.get("case_sensitive")),
+            regex=bool(payload.get("regex")),
+            context_lines=int(payload.get("context_lines") or 0),
+        )
+        files_with_matches = sorted({str(item["path"]) for item in matches})
+        append_activity_event(
+            run_id=context.run_id,
+            request=context.request,
+            activity_id="search-text:" + query[:80],
+            event_type="activity_completed",
+            phase="Searching",
+            label="Searched text",
+            status="completed",
+            observation=f"Found {len(matches)} text match(es) in {len(files_with_matches)} file(s).",
+            related_files=files_with_matches[:20],
+            aggregate={"query": query, "files_searched": files_searched, "files_with_matches": files_with_matches, "truncated": truncated},
+        )
+        return ToolResult(
+            tool_name=self.spec.name,
+            status="success",
+            observation=f"Found {len(matches)} text match(es).",
+            payload={
+                "query": query,
+                "matches": matches,
+                "files_searched": files_searched,
+                "files_with_matches": files_with_matches,
+                "truncated": truncated,
+            },
         )
 
 
@@ -555,6 +632,81 @@ def find_file_candidates(repo: Path, queries: list[str], *, text_queries: list[s
                 "matched_queries": _dedupe_strings(matched),
             }
     return sorted(scored.values(), key=lambda item: (-float(item["score"]), item["path"]))[:max_results]
+
+
+def search_text_matches(
+    repo: Path,
+    *,
+    query: str,
+    path_globs: list[str],
+    max_results: int,
+    case_sensitive: bool,
+    regex: bool,
+    context_lines: int,
+) -> tuple[list[dict[str, Any]], int, bool]:
+    skip_dirs = {".git", ".claude", "node_modules", "runtime", ".next", "dist", "build", "out", "coverage", ".venv", "venv", "__pycache__"}
+    patterns = path_globs or ["**/*"]
+    matches: list[dict[str, Any]] = []
+    files_searched = 0
+    truncated = False
+    flags = 0 if case_sensitive else re.IGNORECASE
+    compiled: re.Pattern[str] | None = None
+    if regex:
+        try:
+            compiled = re.compile(query, flags=flags)
+        except re.error as exc:
+            return ([{"path": "", "line": 0, "column": 0, "preview": f"Invalid regex: {exc}"}], 0, False)
+    needle = query if case_sensitive else query.lower()
+    for path in repo.rglob("*"):
+        if len(matches) >= max_results:
+            truncated = True
+            break
+        if not path.is_file():
+            continue
+        rel = path.relative_to(repo)
+        rel_text = str(rel)
+        if any(part.lower() in skip_dirs for part in rel.parts):
+            continue
+        if not any(Path(rel_text).match(pattern) for pattern in patterns):
+            continue
+        if is_stale_duplicate_copy(rel) or not is_supported_text_file(path):
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace")[:240_000]
+        except OSError:
+            continue
+        files_searched += 1
+        lines = raw.splitlines()
+        for line_number, line in enumerate(lines, start=1):
+            if len(matches) >= max_results:
+                truncated = True
+                break
+            if compiled:
+                found = next(compiled.finditer(line), None)
+                if not found:
+                    continue
+                column = found.start() + 1
+            else:
+                haystack = line if case_sensitive else line.lower()
+                index = haystack.find(needle)
+                if index < 0:
+                    continue
+                column = index + 1
+            start_context = max(0, line_number - 1 - context_lines)
+            end_context = min(len(lines), line_number + context_lines)
+            before = [_redact_preview(item) for item in lines[start_context : line_number - 1]]
+            after = [_redact_preview(item) for item in lines[line_number:end_context]]
+            matches.append(
+                {
+                    "path": rel_text,
+                    "line": line_number,
+                    "column": column,
+                    "preview": _redact_preview(line),
+                    "before": before,
+                    "after": after,
+                }
+            )
+    return matches, files_searched, truncated
 
 
 def candidate_priority(relative_path: Path) -> tuple[int, int, str]:
@@ -989,6 +1141,11 @@ def _dedupe_strings(items: list[str]) -> list[str]:
         if item not in result:
             result.append(item)
     return result
+
+
+def _redact_preview(text: str, *, limit: int = 240) -> str:
+    redacted, _findings = redact_secrets(str(text or "")[:limit])
+    return redacted
 
 
 def _command_from_payload(payload: dict[str, Any], default: list[str] | None = None) -> list[str] | str:

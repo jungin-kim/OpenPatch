@@ -44,6 +44,18 @@ import { ChatSidebar } from "./ChatSidebar";
 import { ChatHeader } from "./ChatHeader";
 import { ChatMessages, type ChatMessage } from "./ChatMessages";
 import { ChatComposer } from "./ChatComposer";
+import {
+  assistantTextFromRunEvents,
+  finalResultFromRunEvents,
+  isActiveRunStatus,
+  maxEventSequence,
+  mergeProgressStep,
+  mergeRunEventsIntoProgressSteps,
+  progressStepFromEvent,
+  progressStepsForCompletedRun,
+  upsertAssistantMessageForRun,
+  type AgentRunEvent,
+} from "./run-event-state";
 
 type ConnectionState = "checking" | "connected" | "unavailable";
 type ThreadStoreState = "loading" | "connected" | "saving" | "unavailable";
@@ -128,104 +140,24 @@ export function ChatApp() {
   const queuedMessagesRef = useRef<QueuedMessage[]>([]);
   const activeThreadIdRef = useRef<string | null>(null);
   const activeRunLastSequenceRef = useRef<Record<string, number>>({});
+  const threadsRef = useRef<ChatThread[]>([]);
 
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
   }, [activeThreadId]);
 
-  function normalizeActivityEvents(
-    events?: AgentRunPayload["activity_events"],
-    options: { finalizeRunning?: boolean } = {},
-  ): ProgressStep[] {
-    let steps: ProgressStep[] = [];
-    for (const event of events || []) {
-      if (event.type !== "progress_delta" || !(event.label || event.message)) continue;
-      const step = progressStepFromEvent(event, options);
-      steps = mergeProgressStep(steps, step);
-    }
-    return steps;
-  }
-
-  function progressStepFromEvent(
-    event: NonNullable<AgentRunPayload["activity_events"]>[number],
-    options: { finalizeRunning?: boolean } = {},
-  ): ProgressStep {
-    const status =
-      options.finalizeRunning && event.status === "running" ? "completed" : event.status;
-    return {
-      id: event.id,
-      activityId: event.activity_id,
-      runId: event.run_id,
-      sequence: event.sequence,
-      eventType: event.event_type,
-      phase: event.phase,
-      label: event.label ?? event.message,
-      detail: event.detail,
-      detailDelta: event.detail_delta,
-      message: event.message,
-      safeReasoningSummary: event.safe_reasoning_summary,
-      summaryDelta: event.summary_delta,
-      currentAction: event.current_action,
-      observation: event.observation,
-      observationDelta: event.observation_delta,
-      nextAction: event.next_action,
-      nextActionDelta: event.next_action_delta,
-      relatedSearchQuery: event.related_search_query,
-      aggregate: event.aggregate,
-      status,
-      startedAt: event.started_at,
-      endedAt: event.ended_at,
-      durationMs: event.duration_ms,
-      elapsedMs: event.elapsed_ms,
-      files: event.files,
-      command: event.command,
-      proposalId: event.proposal_id,
-    };
-  }
-
-  function progressStepIdentity(step: ProgressStep, fallbackIndex: number): string {
-    if (step.runId && step.activityId) return `${step.runId}:${step.activityId}`;
-    if (step.runId && step.sequence !== undefined && step.sequence !== null) return `${step.runId}:${step.sequence}`;
-    if (step.runId && step.id) return `${step.runId}:${step.id}`;
-    if (step.id) return step.id;
-    return `${step.runId || "local"}:${step.startedAt || fallbackIndex}:${step.phase || ""}:${step.label || step.message || ""}`;
-  }
-
-  function mergeProgressStep(current: ProgressStep[], incoming: ProgressStep): ProgressStep[] {
-    const incomingKey = progressStepIdentity(incoming, current.length);
-    const existingIndex = current.findIndex((step, index) => progressStepIdentity(step, index) === incomingKey);
-    if (existingIndex >= 0) {
-      return current.map((step, index) => (index === existingIndex ? mergeProgressStepFields(step, incoming) : step));
-    }
-    return [...current, incoming];
-  }
-
-  function mergeProgressStepFields(existing: ProgressStep, incoming: ProgressStep): ProgressStep {
-    const merged: ProgressStep = {
-      ...existing,
-      ...incoming,
-      startedAt: existing.startedAt || incoming.startedAt,
-      detail: incoming.detail ?? appendDelta(existing.detail, incoming.detailDelta),
-      observation: incoming.observation ?? appendDelta(existing.observation, incoming.observationDelta),
-      nextAction: incoming.nextAction ?? appendDelta(existing.nextAction, incoming.nextActionDelta),
-      safeReasoningSummary: incoming.safeReasoningSummary ?? appendDelta(existing.safeReasoningSummary, incoming.summaryDelta),
-    };
-    return merged;
-  }
-
-  function appendDelta(base?: string | null, delta?: string | null): string | undefined {
-    const current = base || "";
-    if (!delta) return current || undefined;
-    return `${current}${delta}`;
-  }
+  useEffect(() => {
+    threadsRef.current = threads;
+  }, [threads]);
 
   function mergeProgressEvents(
     current: ProgressStep[],
-    events: AgentRunPayload["activity_events"] | undefined,
+    events: AgentRunEvent[] | undefined,
     options: { finalizeRunning?: boolean } = {},
   ): ProgressStep[] {
     let next = current;
     for (const event of events || []) {
+      if (event.type !== "progress_delta" || !(event.label || event.message)) continue;
       const step = progressStepFromEvent(event, options);
       next = mergeProgressStep(next, step);
     }
@@ -234,25 +166,12 @@ export function ChatApp() {
       : next;
   }
 
-  function progressStepsForCompletedRun(
-    events?: AgentRunPayload["activity_events"],
-    finalResult?: AgentRunPayload | null,
-  ): ProgressStep[] {
-    const fromEvents = normalizeActivityEvents(events, { finalizeRunning: true });
-    if (fromEvents.length > 0) return fromEvents;
-    return normalizeActivityEvents(finalResult?.activity_events, { finalizeRunning: true });
-  }
-
-  function isRunActive(status?: string | null): boolean {
-    return status === "running" || status === "cancelling" || status === "waiting_approval";
-  }
-
-  function maxEventSequence(events?: AgentRunPayload["activity_events"]): number {
-    return Math.max(0, ...(events || []).map((event) => Number(event.sequence || 0)));
-  }
-
   function activeRunStorageKey(threadId: string) {
     return `repooperator-active-run-id:${threadId}`;
+  }
+
+  function activeThreadStorageKey() {
+    return "repooperator-active-thread-id";
   }
 
   function rememberActiveRun(runId: string | null, threadId = activeThreadId) {
@@ -268,6 +187,15 @@ export function ChatApp() {
       window.localStorage.setItem(activeRunStorageKey(threadId), runId);
     } else {
       window.localStorage.removeItem(activeRunStorageKey(threadId));
+    }
+  }
+
+  function rememberActiveThread(threadId: string | null) {
+    setActiveThreadId(threadId);
+    if (threadId) {
+      window.localStorage.setItem(activeThreadStorageKey(), threadId);
+    } else {
+      window.localStorage.removeItem(activeThreadStorageKey());
     }
   }
 
@@ -377,45 +305,42 @@ export function ChatApp() {
 
   useEffect(() => {
     if (!activeThreadId) return;
-    const savedRunId = window.localStorage.getItem(activeRunStorageKey(activeThreadId));
-    if (!savedRunId) return;
-    const runId = savedRunId;
     const threadId = activeThreadId;
     let cancelled = false;
     async function rehydrateRun() {
       try {
+        const activeRuns = await getActiveAgentRuns(threadId).catch(() => ({ runs: [] }));
+        const savedRunId = window.localStorage.getItem(activeRunStorageKey(threadId));
+        const runId = activeRunByThread[threadId] || savedRunId || activeRuns.runs[0]?.id;
+        if (!runId) return;
         const [run, eventPayload] = await Promise.all([
           getAgentRun(runId),
           getAgentRunEvents(runId),
         ]);
         if (cancelled) return;
-        activeRunLastSequenceRef.current[runId] = maxEventSequence(eventPayload.events as AgentRunPayload["activity_events"]);
-        if (isRunActive(run.status)) {
-          setProgressSteps(normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"]));
+        const events = eventPayload.events as AgentRunEvent[];
+        const finalResult = finalResultFromRunEvents(events, run.final_result);
+        activeRunLastSequenceRef.current[runId] = maxEventSequence(events);
+        if (isActiveRunStatus(run.status)) {
+          setProgressSteps(mergeRunEventsIntoProgressSteps(events, finalResult));
+          setStreamedAnswer(assistantTextFromRunEvents(events, null));
           setQuestionPending(true);
           rememberActiveRun(runId, threadId);
           return;
         }
-        setProgressSteps(
-          normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"], {
-            finalizeRunning: true,
-          }),
-        );
+        const completedSteps = progressStepsForCompletedRun(events, finalResult);
+        setProgressSteps(completedSteps);
         rememberActiveRun(null, threadId);
         setQuestionPending(false);
-        if (run.final_result) {
-          const assistantMessage: ChatMessage = {
-            id: `${Date.now()}-rehydrated-run`,
-            role: "assistant",
-            content: run.final_result.response,
-            timestamp: new Date(),
-            metadata: run.final_result,
-            progressSteps: progressStepsForCompletedRun(eventPayload.events as AgentRunPayload["activity_events"], run.final_result),
-          };
+        if (finalResult) {
           setMessages((current) => {
-            if (current.some((message) => message.metadata?.run_id === run.final_result?.run_id)) return current;
-            const next = [...current, assistantMessage];
-            updateActiveThread(next);
+            const next = upsertAssistantMessageForRun(current, finalResult.run_id || runId, {
+              content: finalResult.response,
+              timestamp: new Date(),
+              metadata: finalResult,
+              progressSteps: completedSteps.length > 0 ? completedSteps : undefined,
+            });
+            updateThreadMessages(threadId, next);
             return next;
           });
         }
@@ -427,7 +352,7 @@ export function ChatApp() {
     return () => {
       cancelled = true;
     };
-  }, [activeThreadId]);
+  }, [activeThreadId, activeRunByThread]);
 
   function handleSidebarCollapsedChange() {
     setSidebarCollapsed((current) => {
@@ -449,30 +374,28 @@ export function ChatApp() {
             getAgentRunEvents(activeRunId, afterSequence),
           ]);
           if (cancelled) return;
-          const events = eventPayload.events as AgentRunPayload["activity_events"];
+          const events = eventPayload.events as AgentRunEvent[];
           activeRunLastSequenceRef.current[activeRunId] = Math.max(afterSequence, maxEventSequence(events));
-          if (!isRunActive(run.status)) {
+          if (!isActiveRunStatus(run.status)) {
             const completedEventPayload = run.final_result
               ? await getAgentRunEvents(activeRunId, 0)
               : eventPayload;
-            const completedEvents = completedEventPayload.events as AgentRunPayload["activity_events"];
+            const completedEvents = completedEventPayload.events as AgentRunEvent[];
+            const finalResult = finalResultFromRunEvents(completedEvents, run.final_result);
+            const completedSteps = progressStepsForCompletedRun(completedEvents, finalResult);
             setProgressSteps((current) => mergeProgressEvents(current, events, { finalizeRunning: true }));
             rememberActiveRun(null);
             setQuestionPending(false);
             delete activeRunLastSequenceRef.current[activeRunId];
-            if (run.final_result) {
-              const assistantMessage: ChatMessage = {
-                id: `${Date.now()}-poll-run`,
-                role: "assistant",
-                content: run.final_result.response,
-                timestamp: new Date(),
-                metadata: run.final_result,
-                progressSteps: progressStepsForCompletedRun(completedEvents, run.final_result),
-              };
+            if (finalResult) {
               setMessages((current) => {
-                if (current.some((message) => message.metadata?.run_id === run.final_result?.run_id)) return current;
-                const next = [...current, assistantMessage];
-                updateActiveThread(next);
+                const next = upsertAssistantMessageForRun(current, finalResult.run_id || activeRunId, {
+                  content: finalResult.response,
+                  timestamp: new Date(),
+                  metadata: finalResult,
+                  progressSteps: completedSteps.length > 0 ? completedSteps : undefined,
+                });
+                if (activeThreadIdRef.current) updateThreadMessages(activeThreadIdRef.current, next);
                 return next;
               });
             }
@@ -499,7 +422,16 @@ export function ChatApp() {
       try {
         const payload = await listThreads();
         if (cancelled) return;
-        setThreads(payload.threads.map(threadFromRecord));
+        const loadedThreads = payload.threads.map(threadFromRecord);
+        threadsRef.current = loadedThreads;
+        setThreads(loadedThreads);
+        if (!activeThreadIdRef.current && loadedThreads.length > 0) {
+          const savedThreadId = window.localStorage.getItem(activeThreadStorageKey());
+          const restored =
+            loadedThreads.find((thread) => thread.id === savedThreadId) ||
+            loadedThreads[0];
+          restoreThreadSnapshot(restored);
+        }
         setThreadStoreState("connected");
       } catch {
         if (!cancelled) setThreadStoreState("unavailable");
@@ -718,7 +650,28 @@ export function ChatApp() {
     };
   }
 
+  function restoreThreadSnapshot(thread: ChatThread) {
+    setGitProvider(thread.repoResult.git_provider);
+    setUseAdvanced(thread.repoResult.git_provider === "local");
+    setSelectedProjectPath(thread.repoResult.project_path);
+    setManualProjectPath(thread.repoResult.project_path);
+    setSelectedBranch(thread.repoResult.branch || "");
+    setManualBranch(thread.repoResult.branch || "");
+    setRepoResult(thread.repoResult);
+    setMessages(thread.messages);
+    rememberActiveThread(thread.id);
+    const threadRunId = activeRunByThread[thread.id] || window.localStorage.getItem(activeRunStorageKey(thread.id));
+    setActiveRunId(threadRunId || null);
+    setQuestionPending(Boolean(threadRunId));
+    if (!threadRunId) {
+      setProgressSteps([]);
+      setStreamedAnswer("");
+      setStreamedReasoning("");
+    }
+  }
+
   function rememberThread(thread: ChatThread) {
+    threadsRef.current = [thread, ...threadsRef.current.filter((item) => item.id !== thread.id)];
     setThreads((prev) => [thread, ...prev.filter((item) => item.id !== thread.id)]);
   }
 
@@ -734,22 +687,11 @@ export function ChatApp() {
 
   function updateActiveThread(nextMessages: ChatMessage[], nextRepoResult = repoResult) {
     if (!activeThreadId || !nextRepoResult) return;
-    const existingThread = threads.find((thread) => thread.id === activeThreadId);
-    if (!existingThread) return;
-    const updatedThread: ChatThread = {
-      ...existingThread,
-      repoResult: nextRepoResult,
-      messages: nextMessages,
-      updatedAt: new Date(),
-    };
-    setThreads((prev) =>
-      prev.map((thread) => (thread.id === activeThreadId ? updatedThread : thread)),
-    );
-    void persistThread(updatedThread);
+    updateThreadMessages(activeThreadId, nextMessages, nextRepoResult);
   }
 
   function updateThreadMessages(threadId: string, nextMessages: ChatMessage[], nextRepoResult?: RepoOpenPayload | null) {
-    const existingThread = threads.find((thread) => thread.id === threadId);
+    const existingThread = threadsRef.current.find((thread) => thread.id === threadId);
     if (!existingThread) return;
     const updatedThread: ChatThread = {
       ...existingThread,
@@ -757,6 +699,7 @@ export function ChatApp() {
       messages: nextMessages,
       updatedAt: new Date(),
     };
+    threadsRef.current = threadsRef.current.map((thread) => (thread.id === threadId ? updatedThread : thread));
     setThreads((prev) =>
       prev.map((thread) => (thread.id === threadId ? updatedThread : thread)),
     );
@@ -964,7 +907,7 @@ export function ChatApp() {
       };
       setRepoResult(payload);
       setMessages(nextMessages);
-      setActiveThreadId(nextThread.id);
+      rememberActiveThread(nextThread.id);
       rememberThread(nextThread);
       void persistThread(nextThread);
       setRecentProjectHistory((prev) => mergeRecentProject(prev, payload));
@@ -1030,15 +973,14 @@ export function ChatApp() {
       for await (const event of streamAgentTask(streamInput)) {
         if (event.type === "progress") {
           if (activeThreadIdRef.current !== runThreadId) continue;
+          if (!event.message) continue;
           setProgressSteps((prev) => {
-            const next = [
-              ...prev,
-              {
-                phase: "Thinking",
-                label: event.message || "Working",
-                status: "running",
-              },
-            ];
+            const next = mergeProgressStep(prev, {
+              id: `legacy-progress:${runThreadId}`,
+              phase: "Thinking",
+              label: event.message,
+              status: "running",
+            });
             capturedProgressSteps = next;
             return next;
           });
@@ -1073,7 +1015,7 @@ export function ChatApp() {
       if (!payload) throw new Error("No result received from agent.");
 
       let assistantMessage: ChatMessage;
-      const finalProgressSteps = normalizeActivityEvents(payload.activity_events, {
+      const finalProgressSteps = mergeRunEventsIntoProgressSteps(payload.activity_events as AgentRunEvent[], payload, {
         finalizeRunning: true,
       });
       capturedProgressSteps = finalProgressSteps.length > 0 ? finalProgressSteps : capturedProgressSteps;
@@ -1115,7 +1057,10 @@ export function ChatApp() {
         };
       }
 
-      const nextMessages = [...messagesWithUser, assistantMessage];
+      const responseRunId = payload.run_id || activeRunId || null;
+      const nextMessages = responseRunId
+        ? upsertAssistantMessageForRun(messagesWithUser, responseRunId, assistantMessage)
+        : [...messagesWithUser, assistantMessage];
       if (activeThreadIdRef.current === runThreadId) setMessages(nextMessages);
       updateThreadMessages(runThreadId, nextMessages, repoResult);
       return nextMessages;
@@ -1249,7 +1194,7 @@ export function ChatApp() {
     setQuestion("");
     if (!repoResult) {
       setMessages([]);
-      setActiveThreadId(null);
+      rememberActiveThread(null);
       return;
     }
     const nextMessages: ChatMessage[] = [
@@ -1271,7 +1216,7 @@ export function ChatApp() {
       updatedAt: new Date(),
     };
     setMessages(nextMessages);
-    setActiveThreadId(nextThread.id);
+    rememberActiveThread(nextThread.id);
     rememberThread(nextThread);
     void persistThread(nextThread);
   }
@@ -1302,7 +1247,7 @@ export function ChatApp() {
         repoResult: reopened,
         updatedAt: new Date(),
       };
-      setActiveThreadId(thread.id);
+      rememberActiveThread(thread.id);
       setRepoResult(reopened);
       setMessages(thread.messages);
       const threadRunId = activeRunByThread[thread.id] || window.localStorage.getItem(activeRunStorageKey(thread.id));

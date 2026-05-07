@@ -22,6 +22,7 @@ class ToolRegistryTests(unittest.TestCase):
             [
                 "inspect_repo_tree",
                 "search_files",
+                "search_text",
                 "read_file",
                 "analyze_repository",
                 "preview_command",
@@ -40,6 +41,7 @@ class ToolRegistryTests(unittest.TestCase):
         by_name = {item["name"]: item for item in specs}
         self.assertTrue(by_name["read_file"]["read_only"])
         self.assertTrue(by_name["search_files"]["concurrency_safe"])
+        self.assertTrue(by_name["search_text"]["read_only"])
         self.assertTrue(by_name["run_approved_command"]["requires_approval_by_default"])
         self.assertIn("input_schema", by_name["generate_edit"])
 

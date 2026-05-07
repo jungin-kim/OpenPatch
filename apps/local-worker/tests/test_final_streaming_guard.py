@@ -57,13 +57,15 @@ class FinalStreamingGuardTests(unittest.TestCase):
                 return_value=None,
             ):
                 events = list(stream_controller_graph(request, run_id="run-final-guard"))
-                stored_text = json.dumps(list_run_events("run-final-guard"), ensure_ascii=False)
+                stored_events = list_run_events("run-final-guard")
+                stored_text = json.dumps(stored_events, ensure_ascii=False)
         assistant_text = "".join(str(event.get("delta") or "") for event in events if event.get("type") == "assistant_delta")
         final = next(event for event in events if event.get("type") == "final_message")
         self.assertNotIn("cannot read", assistant_text.lower())
         self.assertNotIn("files object is empty", assistant_text.lower())
         self.assertNotIn("hidden", assistant_text)
         self.assertNotIn("cannot read", stored_text.lower())
+        self.assertTrue(any(event.get("type") == "assistant_delta" for event in stored_events))
         self.assertIn("README.md", final["result"]["response"])
         self.assertEqual(assistant_text, final["result"]["response"])
 

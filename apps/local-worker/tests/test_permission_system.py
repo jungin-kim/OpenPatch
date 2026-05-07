@@ -83,6 +83,7 @@ class PermissionSystemTests(unittest.TestCase):
         self.assertEqual(decision.decision, "deny")
         self.assertEqual(audit.decision, "deny")
         self.assertEqual(audit.matched_rules[0]["id"], "user-allow")
+        self.assertEqual(audit.base_decision["id"], "tool_default:read_file")
 
     def test_ask_overrides_allow_at_equal_priority(self) -> None:
         policy = PermissionPolicy(
@@ -96,6 +97,50 @@ class PermissionSystemTests(unittest.TestCase):
             payload={},
             context=self._context(),
             base_decision=PermissionDecision.allow("tool default"),
+        )
+        self.assertEqual(decision.decision, "ask")
+
+    def test_base_deny_cannot_be_upgraded_by_user_allow(self) -> None:
+        policy = PermissionPolicy(
+            [
+                PermissionRule(id="user-allow", source=PermissionRuleSource.USER, tool_name="run_approved_command", decision="allow", reason="allow", priority=100),
+            ]
+        )
+        decision, audit = policy.evaluate(
+            tool_name="run_approved_command",
+            payload={"command": ["bash", "-lc", "cat README.md"]},
+            context=self._context(),
+            base_decision=PermissionDecision.deny("command security denied"),
+        )
+        self.assertEqual(decision.decision, "deny")
+        self.assertEqual(audit.base_decision["decision"], "deny")
+
+    def test_base_ask_cannot_be_upgraded_by_user_allow_without_approval(self) -> None:
+        policy = PermissionPolicy(
+            [
+                PermissionRule(id="user-allow", source=PermissionRuleSource.USER, tool_name="run_approved_command", decision="allow", reason="allow", priority=100),
+            ]
+        )
+        decision, _audit = policy.evaluate(
+            tool_name="run_approved_command",
+            payload={"command": ["git", "commit", "-m", "test"]},
+            context=self._context(),
+            base_decision=PermissionDecision.ask("command policy asks", command_preview={"needs_approval": True}),
+        )
+        self.assertEqual(decision.decision, "ask")
+
+    def test_mutating_command_user_allow_still_asks(self) -> None:
+        policy = PermissionPolicy(
+            [
+                PermissionRule(id="user-allow", source=PermissionRuleSource.USER, tool_name="run_approved_command", decision="allow", reason="allow", priority=100),
+            ]
+        )
+        base = RunApprovedCommandTool().check_permission({"command": ["git", "commit", "-m", "test"]}, self._context())
+        decision, _audit = policy.evaluate(
+            tool_name="run_approved_command",
+            payload={"command": ["git", "commit", "-m", "test"]},
+            context=self._context(),
+            base_decision=base,
         )
         self.assertEqual(decision.decision, "ask")
 
