@@ -48,6 +48,7 @@ FILE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_./\\-])([A-Za-z0-9_./\\-]+\.[A-Za-z0
 SOURCE_SUFFIXES = {".cs", ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".kt", ".swift", ".go", ".rs", ".rb", ".php", ".c", ".cpp", ".h", ".hpp"}
 TEXT_SUFFIXES = SOURCE_SUFFIXES | {".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".ini", ".cfg", ".gradle"}
 SEARCH_SKIP_DIRS = {".git", ".claude", "node_modules", "runtime", ".next", "dist", "build", "out", "coverage", ".venv", "venv", "__pycache__"}
+EDIT_DISCOVERY_TEXT_SIGNALS = ["Save", "Load", "BinaryFormatter", "JsonUtility", "persistentDataPath", "PlayerData"]
 SUPPORTED_INTENTS = {
     "read_only_question", "repo_analysis", "recommend_change_targets", "review_recommendation",
     "write_request", "write_confirmation", "file_clarification_answer", "local_command_request",
@@ -62,6 +63,17 @@ SUPPORTED_STEERING_TYPES = {
     "defer",
     "unknown",
 }
+PLANNER_ACTION_TYPES = {
+    "inspect_repo_tree",
+    "search_files",
+    "read_file",
+    "generate_edit",
+    "preview_command",
+    "inspect_git_state",
+    "run_approved_command",
+    "ask_clarification",
+    "final_answer",
+}
 
 STEERING_PROMPT = """\
 You are RepoOperator's steering parser. Return JSON only.
@@ -74,6 +86,28 @@ Schema:
   "reason": "short explanation"
 }
 Extract only a structured steering decision for an already-running agent. Do not route by language keywords.
+"""
+
+NEXT_ACTION_PROMPT = """\
+You are RepoOperator's bounded next-action planner. Return JSON only.
+Choose one safe primitive action from the available actions. Do not use hidden reasoning.
+Schema:
+{
+  "action_type": "inspect_repo_tree|search_files|read_file|generate_edit|preview_command|inspect_git_state|run_approved_command|ask_clarification|final_answer",
+  "reason_summary": "short user-visible reason",
+  "target_files": [],
+  "target_symbols": [],
+  "search_queries": [],
+  "text_queries": [],
+  "symbol_queries": [],
+  "file_globs": [],
+  "command": [],
+  "expected_output": "short description",
+  "requires_approval": false,
+  "confidence": 0.0,
+  "enough_evidence": false
+}
+Prefer gathering missing evidence before answering. Commands are policy-previewed later; never request direct shell execution.
 """
 
 
@@ -338,32 +372,6 @@ def controller_choose_next_action(state: AgentCoreState, request: AgentRunReques
     frame = build_task_frame(request, state)
     state.recommendation_context = json_safe({"task_frame": frame})
 
-    command = command_needed_for_task(frame, state)
-    if command:
-        if not _has_command_preview(state, command):
-            return AgentAction(
-                type="inspect_git_state" if command[:1] == ["git"] else "preview_command",
-                reason_summary="Preview the safe command needed for missing evidence.",
-                command=command,
-                expected_output="Command safety classification.",
-            )
-        preview = _latest_command_preview(state, command)
-        if preview and preview.status == "success" and _preview_read_only(preview.command_result) and not _has_command_run(state, command):
-            return AgentAction(
-                type="run_approved_command",
-                reason_summary="Run read-only command after policy preview.",
-                command=command,
-                expected_output="Command output for the user request.",
-            )
-        if pending_commit_context(frame) and _has_command_run(state, ["git", "log", "--oneline", "-n", "5"]) and not _has_command_preview(state, ["git", "status", "--short"]):
-            return AgentAction(
-                type="inspect_git_state",
-                reason_summary="Inspect git status before discussing a possible commit.",
-                command=["git", "status", "--short"],
-                expected_output="Working tree status.",
-            )
-        return AgentAction(type="final_answer", reason_summary="Answer from command evidence.")
-
     resolved = resolve_target_files(request, frame.mentioned_files, preferred=known_context_files(request, state))
     unread = [path for path in resolved if path not in state.files_read]
     if unread:
@@ -393,13 +401,25 @@ def controller_choose_next_action(state: AgentCoreState, request: AgentRunReques
             payload={"queries": frame.mentioned_symbols},
         )
 
+    if edit_requested(frame) and state.files_read:
+        if not _has_action(state, "generate_edit"):
+            return AgentAction(
+                type="generate_edit",
+                reason_summary="Prepare a minimal proposed patch from the files already read.",
+                target_files=list(state.files_read[-4:]),
+                expected_output="Proposed diff and before/after summary.",
+                payload={"task_frame": json_safe(frame)},
+            )
+        return AgentAction(type="final_answer", reason_summary="Report the proposed edit without claiming it was applied.")
+
     searched_candidates = candidate_files_from_results(state)
     candidate_unread = [path for path in searched_candidates if path not in state.files_read]
     if candidate_unread:
+        read_limit = 1 if edit_requested(frame) else 4
         return AgentAction(
             type="read_file",
             reason_summary="Read best candidate files found by repository search.",
-            target_files=candidate_unread[:4],
+            target_files=candidate_unread[:read_limit],
             expected_output="Candidate file contents.",
         )
 
@@ -410,17 +430,46 @@ def controller_choose_next_action(state: AgentCoreState, request: AgentRunReques
             payload={"missing_files": unresolved},
         )
 
+    planned = propose_next_action_with_model(request, state, frame)
+    if planned:
+        return planned
+
+    unrun_preview = _latest_unrun_read_only_preview(state)
+    if unrun_preview:
+        return AgentAction(
+            type="run_approved_command",
+            reason_summary="Run read-only command after policy preview.",
+            command=list(unrun_preview.command_result.get("command") or []),
+            expected_output="Command output for the user request.",
+        )
+
+    command = command_needed_for_task(frame, state)
+    if command:
+        if not _has_command_preview(state, command):
+            return AgentAction(
+                type="inspect_git_state" if command[:1] == ["git"] else "preview_command",
+                reason_summary="Preview the safe command needed for missing evidence.",
+                command=command,
+                expected_output="Command safety classification.",
+            )
+        preview = _latest_command_preview(state, command)
+        if preview and preview.status == "success" and _preview_read_only(preview.command_result) and not _has_command_run(state, command):
+            return AgentAction(
+                type="run_approved_command",
+                reason_summary="Run read-only command after policy preview.",
+                command=command,
+                expected_output="Command output for the user request.",
+            )
+        if pending_commit_context(frame) and _has_command_run(state, ["git", "log", "--oneline", "-n", "5"]) and not _has_command_preview(state, ["git", "status", "--short"]):
+            return AgentAction(
+                type="inspect_git_state",
+                reason_summary="Inspect git status before discussing a possible commit.",
+                command=["git", "status", "--short"],
+                expected_output="Working tree status.",
+            )
+        return AgentAction(type="final_answer", reason_summary="Answer from command evidence.")
+
     if edit_requested(frame):
-        if state.files_read:
-            if not _has_action(state, "generate_edit"):
-                return AgentAction(
-                    type="generate_edit",
-                    reason_summary="Prepare a minimal proposed patch from the files already read.",
-                    target_files=list(state.files_read[-4:]),
-                    expected_output="Proposed diff and before/after summary.",
-                    payload={"task_frame": json_safe(frame)},
-                )
-            return AgentAction(type="final_answer", reason_summary="Report the proposed edit without claiming it was applied.")
         if not _has_action(state, "inspect_repo_tree"):
             return AgentAction(type="inspect_repo_tree", reason_summary="Inspect repository before locating edit targets.")
         edit_queries = likely_edit_file_queries(frame)
@@ -429,7 +478,7 @@ def controller_choose_next_action(state: AgentCoreState, request: AgentRunReques
                 type="search_files",
                 reason_summary="Search repository for likely edit targets.",
                 expected_output="Repo-relative candidate paths.",
-                payload={"queries": edit_queries},
+                payload={"queries": edit_queries, "text_queries": EDIT_DISCOVERY_TEXT_SIGNALS},
             )
         return AgentAction(type="ask_clarification", reason_summary="Ask which file to edit after search did not find a safe target.")
 
@@ -680,6 +729,149 @@ def _validate_steering_payload(payload: dict[str, Any]) -> SteeringDecision:
     )
 
 
+def propose_next_action_with_model(request: AgentRunRequest, state: AgentCoreState, task_frame: TaskFrame) -> AgentAction | None:
+    try:
+        raw = OpenAICompatibleModelClient().generate_text(
+            ModelGenerationRequest(
+                system_prompt=NEXT_ACTION_PROMPT,
+                user_prompt=json.dumps(
+                    {
+                        "task": request.task,
+                        "task_frame": json_safe(task_frame),
+                        "available_actions": sorted(PLANNER_ACTION_TYPES),
+                        "state": {
+                            "observations": state.observations[-8:],
+                            "files_read": state.files_read,
+                            "files_changed": state.files_changed,
+                            "commands_run": state.commands_run,
+                            "actions_taken": [action.model_dump() for action in state.actions_taken[-8:]],
+                            "action_results": [_summarize_action_result(result) for result in state.action_results[-8:]],
+                            "plan": state.plan[-6:],
+                            "loop_iteration": state.loop_iteration,
+                            "budgets": {
+                                "max_file_reads": state.max_file_reads,
+                                "max_commands": state.max_commands,
+                            },
+                        },
+                        "safety_constraints": [
+                            "All target files must stay inside the repository.",
+                            "Commands must be previewed through command policy before running.",
+                            "Mutating commands require approval and must not run automatically.",
+                            "Final answers need gathered evidence unless the user only needs a simple clarification.",
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        payload = _parse_json(raw)
+    except Exception:
+        return None
+    return validate_model_next_action(payload, request, state, task_frame)
+
+
+def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest, state: AgentCoreState, task_frame: TaskFrame) -> AgentAction | None:
+    action_type = str(payload.get("action_type") or "")
+    if action_type not in PLANNER_ACTION_TYPES:
+        return None
+    try:
+        confidence = float(payload.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < 0.55:
+        return None
+    reason = _safe_reason_summary(payload.get("reason_summary") or f"Use {action_type} for the next safe step.")
+    target_files = [str(item).strip().lstrip("/") for item in payload.get("target_files") or [] if str(item).strip()]
+    target_symbols = [str(item).strip() for item in payload.get("target_symbols") or payload.get("symbol_queries") or [] if str(item).strip()]
+    search_queries = [str(item).strip() for item in payload.get("search_queries") or [] if str(item).strip()]
+    text_queries = [str(item).strip() for item in payload.get("text_queries") or [] if str(item).strip()]
+    file_globs = [str(item).strip() for item in payload.get("file_globs") or [] if str(item).strip()]
+    command = [str(item) for item in payload.get("command") or [] if str(item)]
+    expected = str(payload.get("expected_output") or "")
+
+    if action_type in {"read_file", "generate_edit"}:
+        resolved = resolve_target_files(request, target_files, preferred=known_context_files(request, state))
+        if not resolved:
+            queries = _dedupe([*target_files, *target_symbols, *search_queries, *file_globs])
+            if queries or text_queries:
+                return AgentAction(
+                    type="search_files",
+                    reason_summary="Resolve model-proposed targets before reading or proposing edits.",
+                    target_symbols=target_symbols,
+                    expected_output="Ranked repo-contained candidate files.",
+                    payload={"queries": queries, "text_queries": text_queries, "file_globs": file_globs, "source": "model_planner"},
+                )
+            return None
+        unread = [path for path in resolved if path not in state.files_read]
+        if action_type == "read_file":
+            if not unread:
+                return None
+            return AgentAction(type="read_file", reason_summary=reason, target_files=unread, expected_output=expected)
+        if not state.files_read and unread:
+            return AgentAction(type="read_file", reason_summary="Read target files before preparing an edit proposal.", target_files=unread, expected_output="File contents for edit proposal.")
+        return AgentAction(type="generate_edit", reason_summary=reason, target_files=resolved, expected_output=expected, payload={"source": "model_planner"})
+
+    if action_type == "search_files":
+        queries = _dedupe([*search_queries, *target_files, *file_globs, *target_symbols])
+        if not queries and not text_queries:
+            return None
+        if _has_search_for(state, queries or text_queries):
+            return None
+        return AgentAction(
+            type="search_files",
+            reason_summary=reason,
+            target_symbols=target_symbols,
+            expected_output=expected or "Ranked repo-contained candidate files.",
+            payload={"queries": queries, "text_queries": text_queries, "file_globs": file_globs, "source": "model_planner"},
+        )
+
+    if action_type in {"preview_command", "inspect_git_state", "run_approved_command"}:
+        if not command:
+            return None
+        preview_action = "inspect_git_state" if command[:1] == ["git"] else "preview_command"
+        if not _has_command_preview(state, command):
+            return AgentAction(type=preview_action, reason_summary=reason, command=command, expected_output="Command safety classification.")
+        preview = _latest_command_preview(state, command)
+        if preview and preview.status == "success" and _preview_read_only(preview.command_result) and not _has_command_run(state, command):
+            return AgentAction(type="run_approved_command", reason_summary=reason, command=command, expected_output=expected or "Command output.")
+        return None
+
+    if action_type == "ask_clarification":
+        attempted_search = any(action.type in {"search_files", "inspect_repo_tree"} for action in state.actions_taken)
+        if not attempted_search and not payload.get("requires_approval"):
+            return None
+        return AgentAction(type="ask_clarification", reason_summary=reason, payload={"question": str(payload.get("question") or reason)})
+
+    if action_type == "final_answer":
+        enough = bool(payload.get("enough_evidence")) or bool(state.files_read or state.commands_run or state.observations)
+        if not enough:
+            return None
+        return AgentAction(type="final_answer", reason_summary=reason)
+
+    if action_type == "inspect_repo_tree" and not _has_action(state, "inspect_repo_tree"):
+        return AgentAction(type="inspect_repo_tree", reason_summary=reason, expected_output=expected)
+    return None
+
+
+def _safe_reason_summary(value: Any) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:180] or "Choose the next safe primitive action."
+
+
+def _summarize_action_result(result: ActionResult) -> dict[str, Any]:
+    return json_safe(
+        {
+            "status": result.status,
+            "observation": result.observation[:240],
+            "files_read": result.files_read,
+            "files_changed": result.files_changed,
+            "command": result.command_result.get("display_command") if result.command_result else None,
+            "payload_keys": sorted(result.payload.keys()),
+            "candidates": result.payload.get("candidates") or [],
+        }
+    )
+
+
 def _answer_with_model(
     request: AgentRunRequest,
     file_contents: dict[str, str],
@@ -697,7 +889,9 @@ def _answer_with_model(
             system_prompt=(
                 "You are RepoOperator, a local-first coding agent proxy. Answer with visible, evidence-backed "
                 "work summaries only. Do not include hidden reasoning. Keep the response grounded in the supplied "
-                "repository context.\n"
+                "repository context. Answer the user's actual request first, synthesize across evidence, and avoid "
+                "file-by-file dumps unless the user explicitly asks for one. Never say files were unavailable when "
+                "file contents are supplied.\n"
                 + (f"\nEnabled skills with provenance:\n{skills_context}\n" if skills_context else "")
             ),
             user_prompt=json.dumps(
@@ -725,9 +919,21 @@ def _answer_with_model(
         raw = "".join(pieces) or OpenAICompatibleModelClient().generate_text(prompt)
         _reasoning, visible = split_visible_reasoning(raw)
         cleaned, _ = clean_user_visible_response(visible, user_task=request.task)
-        return cleaned.strip() or _fallback_answer(request, file_contents, repo_observation)
+        guarded = _quality_guard_answer(cleaned.strip(), file_contents=file_contents)
+        return guarded or _fallback_answer(request, file_contents, repo_observation)
     except Exception:
         return _fallback_answer(request, file_contents, repo_observation)
+
+
+def _quality_guard_answer(answer: str, *, file_contents: dict[str, str]) -> str | None:
+    if not answer:
+        return None
+    lowered = answer.lower()
+    if file_contents and any(bad in lowered for bad in ("cannot read", "can't read", "files object is empty", "no file contents")):
+        return None
+    if re.search(r"[�]{2,}|[A-Za-z]{2,}[가-힣]{2,}[A-Za-z]{2,}", answer):
+        return None
+    return answer
 
 
 def _fallback_answer(request: AgentRunRequest, file_contents: dict[str, str], repo_observation: str) -> str:
@@ -985,6 +1191,14 @@ def _latest_command_preview(state: AgentCoreState, command: list[str]) -> Action
     return None
 
 
+def _latest_unrun_read_only_preview(state: AgentCoreState) -> ActionResult | None:
+    for result in reversed(state.action_results):
+        command = list((result.command_result or {}).get("command") or [])
+        if command and _preview_read_only(result.command_result) and not _has_command_run(state, command):
+            return result
+    return None
+
+
 def _has_command_run(state: AgentCoreState, command: list[str]) -> bool:
     return any(action.command == command and action.type == "run_approved_command" for action in state.actions_taken)
 
@@ -1031,8 +1245,10 @@ def _format_edit_proposal(payload: dict[str, Any]) -> str:
         before = str(item.get("before_summary") or "before state recorded")
         after = str(item.get("after_summary") or "after state recorded")
         diff = str(item.get("diff_summary") or "").strip()
+        notes = [str(note) for note in item.get("risk_notes") or [] if str(note)]
+        notes_text = ("\nRisk notes: " + "; ".join(notes)) if notes else ""
         sections.append(
-            f"\n`{file_path}`\nBefore: {before}\nAfter: {after}\n\n```diff\n{diff[:3000]}\n```"
+            f"\n`{file_path}`\nBefore: {before}\nAfter: {after}{notes_text}\n\n```diff\n{diff[:3000]}\n```"
         )
     return "\n".join(sections)
 

@@ -58,6 +58,64 @@ class _LoopClient:
         return "README.md evidence reached the final answer."
 
 
+class _PlannerClient:
+    def __init__(self, *responses: dict):
+        self.responses = list(responses)
+
+    @property
+    def model_name(self) -> str:
+        return "test-model"
+
+    def generate_text(self, request):
+        if "bounded next-action planner" in request.system_prompt and self.responses:
+            return json.dumps(self.responses.pop(0), ensure_ascii=False)
+        return "{}"
+
+    def stream_text(self, _request):
+        yield {"type": "assistant_delta", "delta": "Grounded final answer."}
+
+
+class _SynthesisClient:
+    def __init__(self, answer: str):
+        self.answer = answer
+
+    @property
+    def model_name(self) -> str:
+        return "test-model"
+
+    def generate_text(self, request):
+        if "bounded next-action planner" in request.system_prompt:
+            return "{}"
+        return self.answer
+
+    def stream_text(self, request):
+        if "bounded next-action planner" in request.system_prompt:
+            return iter(())
+        yield {"type": "assistant_delta", "delta": self.answer}
+
+
+class _EditProposalClient:
+    @property
+    def model_name(self) -> str:
+        return "test-model"
+
+    def generate_text(self, request):
+        if "edit proposal generator" not in request.system_prompt:
+            return "{}"
+        payload = json.loads(request.user_prompt)
+        content = payload["content"]
+        proposed = content.replace("&", "&&")
+        return json.dumps(
+            {
+                "file": payload["file"],
+                "summary": "Use short-circuit boolean checks.",
+                "proposed_content": proposed,
+                "risk_notes": [],
+                "preserves_existing_behavior": True,
+            }
+        )
+
+
 class _JsonSafeEnum(Enum):
     SAMPLE = "sample"
 
@@ -478,6 +536,177 @@ class ActivePathMigrationTests(unittest.TestCase):
         self.assertEqual(result.stop_reason, "needs_clarification")
         self.assertIn("MissingManager.cs", result.response)
         self.assertEqual(result.files_read, [])
+
+    def test_llm_planner_can_choose_git_log_without_phrase_fallback(self) -> None:
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=self.repo, check=True)
+        subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial fixture"], cwd=self.repo, check=True, capture_output=True)
+        request = self._request()
+        request.task = "지난 작업 이력 보여줘."
+        planner = _PlannerClient(
+            {
+                "action_type": "inspect_git_state",
+                "reason_summary": "Inspect recent git history.",
+                "command": ["git", "log", "--oneline", "-n", "5"],
+                "confidence": 0.9,
+            }
+        )
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(intent="repo_analysis")), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=planner,
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="planner-git-history")
+        self.assertIn("git log --oneline -n 5", result.response)
+        self.assertIn("Initial fixture", result.response)
+        action_types = [event["action"]["type"] for event in list_run_events("planner-git-history") if event.get("type") == "action_result"]
+        self.assertNotIn("analyze_repository", action_types)
+
+    def test_llm_planner_searches_persistence_file_for_non_explicit_edit(self) -> None:
+        self._write_unity_fixture()
+        for index in range(8):
+            (self.repo / "Assets" / "Scripts" / f"Unrelated{index}.cs").write_text(f"public class Unrelated{index} {{}}\n", encoding="utf-8")
+        request = self._request()
+        request.task = "세이브 파일 깨졌을 때 복구 가능하게 해줘."
+        planner = _PlannerClient(
+            {
+                "action_type": "search_files",
+                "reason_summary": "Find persistence code by implementation evidence.",
+                "search_queries": ["*.cs"],
+                "text_queries": ["Save", "Load", "BinaryFormatter", "persistentDataPath", "PlayerData"],
+                "confidence": 0.9,
+            }
+        )
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=planner,
+        ), patch(
+            "repooperator_worker.agent_core.action_executor.OpenAICompatibleModelClient",
+            side_effect=RuntimeError("force deterministic validated fallback"),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="planner-persistence-search")
+        self.assertIn("Assets/Scripts/DataHandler.cs", result.files_read)
+        self.assertIn("DataHandler.cs", result.response)
+        self.assertIn("No files were modified", result.response)
+        self.assertNotIn("Assets/Scripts/Unrelated0.cs", result.files_read[:1])
+
+    def test_search_files_ranking_prefers_code_evidence(self) -> None:
+        self._write_unity_fixture()
+        for index in range(12):
+            (self.repo / "Assets" / "Scripts" / f"Noise{index}.cs").write_text(f"public class Noise{index} {{ public void Move() {{}} }}\n", encoding="utf-8")
+        executor = ActionExecutor(run_id="ranking-search", request=self._request())
+        result = executor.execute(
+            AgentAction(
+                type="search_files",
+                reason_summary="Find persistence implementation.",
+                payload={"queries": ["*.cs"], "text_queries": ["Save", "Load", "BinaryFormatter", "PlayerData"], "max_results": 6},
+            )
+        )
+        self.assertEqual(result.payload["candidates"][0], "Assets/Scripts/DataHandler.cs")
+        detail = result.payload["candidate_details"][0]
+        self.assertGreater(detail["score"], 20)
+        self.assertIn("BinaryFormatter", " ".join(detail["matched_queries"]))
+
+    def test_border_proposal_avoids_bitwise_flag_replacement(self) -> None:
+        scripts = self.repo / "Assets" / "Scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / "Border.cs").write_text(
+            "public class Border {\n"
+            "  void Update() {}\n"
+            "  int Mask(int left, int right) { return left & right; }\n"
+            "  bool Ready(bool isLeft, bool isReady) { return isLeft & isReady; }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        request = self._request()
+        request.task = "Border.cs에서 &를 &&로 바꾸고 빈 Update 제거해줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+            "repooperator_worker.agent_core.action_executor.OpenAICompatibleModelClient",
+            side_effect=RuntimeError("force deterministic validated fallback"),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="border-bitwise-safe")
+        self.assertIn("return isLeft && isReady", result.response)
+        self.assertIn("return left & right", result.response)
+        self.assertNotIn("return left && right", result.response)
+
+    def test_datahandler_proposal_preserves_class_structure(self) -> None:
+        scripts = self.repo / "Assets" / "Scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / "DataHandler.cs").write_text(
+            "using System.IO;\n"
+            "using System.Runtime.Serialization.Formatters.Binary;\n"
+            "using UnityEngine;\n"
+            "public class DataHandler : MonoBehaviour {\n"
+            "  public static DataHandler Instance;\n"
+            "  public PlayerData currentData;\n"
+            "  void Awake() { Instance = this; }\n"
+            "  void Start() { currentData = Load(); }\n"
+            "  public void Save(PlayerData data) { var formatter = new BinaryFormatter(); }\n"
+            "  public PlayerData Load() { return new PlayerData(); }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        request = self._request()
+        request.task = "DataHandler.cs 저장 쪽 위험한 코드 찾아서 개선안 줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+            "repooperator_worker.agent_core.action_executor.OpenAICompatibleModelClient",
+            side_effect=RuntimeError("force deterministic validated fallback"),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="datahandler-preserve")
+        self.assertIn("JsonUtility", result.response)
+        self.assertIn("Awake()", result.response)
+        self.assertIn("Start()", result.response)
+        self.assertIn("Existing binary save files will not be migrated", result.response)
+
+    def test_project_summary_answer_is_synthesized_not_file_dump(self) -> None:
+        self._write_unity_fixture()
+        (self.repo / "manifest.json").write_text('{"unity": true}', encoding="utf-8")
+        request = self._request()
+        request.task = "이 프로젝트가 뭐 하는 프로젝트인지 알아내줘."
+        answer = "This project is a Unity turn-based ball-striking game.\n\nPurpose: players ready up and score through timed strike phases.\nTech stack: Unity/C#.\nKey modules: GameManager coordinates flow; DataHandler persists player data."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=_SynthesisClient(answer),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="project-synthesis")
+        self.assertTrue(result.response.startswith("This project is"))
+        self.assertIn("Purpose:", result.response)
+        self.assertIn("Tech stack:", result.response)
+        self.assertLess(result.response.count("Reviewed "), 2)
+        self.assertNotRegex(result.response, r"[�]{2,}")
+
+    def test_no_cannot_read_file_after_successful_read(self) -> None:
+        self._write_unity_fixture()
+        request = self._request()
+        request.task = "README.md랑 GameManager.cs만 읽고 플레이 흐름 설명해줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=_SynthesisClient("I cannot read the files because the files object is empty."),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="no-cannot-read")
+        self.assertIn("README.md", result.files_read)
+        self.assertIn("Assets/Scripts/GameManager.cs", result.files_read)
+        self.assertNotIn("cannot read", result.response.lower())
+        self.assertNotIn("files object is empty", result.response.lower())
 
     def test_stream_final_message_omits_streamed_activity_metadata(self) -> None:
         request = self._request()
