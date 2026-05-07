@@ -59,8 +59,9 @@ class _LoopClient:
 
 
 class _PlannerClient:
-    def __init__(self, *responses: dict):
+    def __init__(self, *responses: dict, answer: str = "Grounded final answer."):
         self.responses = list(responses)
+        self.answer = answer
 
     @property
     def model_name(self) -> str:
@@ -69,10 +70,10 @@ class _PlannerClient:
     def generate_text(self, request):
         if "bounded next-action planner" in request.system_prompt and self.responses:
             return json.dumps(self.responses.pop(0), ensure_ascii=False)
-        return "{}"
+        return self.answer
 
     def stream_text(self, _request):
-        yield {"type": "assistant_delta", "delta": "Grounded final answer."}
+        yield {"type": "assistant_delta", "delta": self.answer}
 
 
 class _SynthesisClient:
@@ -224,6 +225,47 @@ class ActivePathMigrationTests(unittest.TestCase):
             "}\n",
             encoding="utf-8",
         )
+
+    def _write_satellite_fixture(self) -> None:
+        (self.repo / "README.md").write_text(
+            "# Satellite Simulation\n\n"
+            "A Python satellite orbit simulation project for modelling satellites, orbital motion, and propagation algorithms.\n\n"
+            "Run `python main.py` to configure satellites and simulate orbital movement.\n",
+            encoding="utf-8",
+        )
+        (self.repo / "main.py").write_text(
+            "from satellite import Satellite\n"
+            "from orbit import Orbit\n"
+            "from algorithms import propagate_orbit\n\n"
+            "def main():\n"
+            "    orbit = Orbit(altitude=500)\n"
+            "    satellite = Satellite('demo', orbit)\n"
+            "    propagate_orbit(satellite)\n\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n",
+            encoding="utf-8",
+        )
+        (self.repo / "algorithms.py").write_text(
+            "def propagate_orbit(satellite):\n"
+            "    return satellite.step()\n",
+            encoding="utf-8",
+        )
+        (self.repo / "orbit.py").write_text(
+            "class Orbit:\n"
+            "    def __init__(self, altitude):\n"
+            "        self.altitude = altitude\n",
+            encoding="utf-8",
+        )
+        (self.repo / "satellite.py").write_text(
+            "class Satellite:\n"
+            "    def __init__(self, name, orbit):\n"
+            "        self.name = name\n"
+            "        self.orbit = orbit\n"
+            "    def step(self):\n"
+            "        return self.orbit\n",
+            encoding="utf-8",
+        )
+        (self.repo / "http_cache.sqlite").write_bytes(b"SQLite format 3\x00binary-cache")
 
     def _classifier(
         self,
@@ -851,6 +893,122 @@ class ActivePathMigrationTests(unittest.TestCase):
         repaired = validate_or_repair_final_answer("abc한글xyz ��", state, self._request())
         self.assertNotIn("��", repaired)
         self.assertIn("README.md", repaired)
+
+    def test_satellite_project_summary_fallback_produces_actual_answer(self) -> None:
+        self._write_satellite_fixture()
+        request = self._request()
+        request.task = "이 레포가 뭐 하는 프로젝트인지 알아내줘."
+        bad = "Purpose and architecture should be synthesized from those files..."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=_SynthesisClient(bad),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="satellite-project-summary")
+        self.assertNotIn("should be synthesized", result.response)
+        self.assertNotIn("I inspected the gathered project evidence", result.response)
+        self.assertIn("satellite", result.response.lower())
+        self.assertIn("orbit", result.response.lower())
+        self.assertIn("README.md", result.response)
+
+    def test_satellite_execution_flow_fallback_from_readme_and_main(self) -> None:
+        self._write_satellite_fixture()
+        request = self._request()
+        request.task = "README.md랑 main.py만 읽고, 실행 흐름을 설명해줘."
+        bad = "I can answer from those files, but the model answer needed repair..."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=_SynthesisClient(bad),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="satellite-flow")
+        self.assertNotIn("model answer needed repair", result.response)
+        self.assertNotIn("I can answer from those files", result.response)
+        self.assertIn("main.py", result.response)
+        self.assertIn("satellite", result.response.lower())
+        self.assertTrue("propagate_orbit" in result.response or "algorithms" in result.response)
+
+    def test_satellite_architecture_followup_excludes_sqlite(self) -> None:
+        self._write_satellite_fixture()
+        request = self._request()
+        request.task = "방금 읽은 파일들 기준으로, 이 프로젝트의 아키텍처를 짧게 정리해줘."
+        request.conversation_history = [
+            ConversationMessage(
+                role="assistant",
+                content="Previously read README.md and main.py.",
+                metadata={"files_read": ["README.md", "main.py"]},
+            )
+        ]
+        planner = _PlannerClient(
+            {
+                "action_type": "read_file",
+                "reason_summary": "Read core modules for architecture evidence.",
+                "target_files": ["README.md", "main.py", "algorithms.py", "orbit.py", "satellite.py", "http_cache.sqlite"],
+                "confidence": 0.9,
+            },
+            answer="Ask for a narrower change or review focus and I can continue from those files.",
+        )
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=planner,
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="satellite-architecture")
+        self.assertIn("아키텍처", result.response)
+        self.assertIn("main.py", result.response)
+        self.assertIn("algorithms.py", result.response)
+        self.assertNotIn("Ask for a narrower change", result.response)
+        self.assertNotIn("http_cache.sqlite", result.files_read)
+        self.assertNotIn("http_cache.sqlite", result.response)
+
+    def test_read_file_rejects_sqlite_cache_file(self) -> None:
+        self._write_satellite_fixture()
+        executor = ActionExecutor(run_id="sqlite-read", request=self._request())
+        result = executor.execute(AgentAction(type="read_file", reason_summary="Read cache", target_files=["http_cache.sqlite"]))
+        self.assertEqual(result.status, "skipped")
+        self.assertNotIn("http_cache.sqlite", result.files_read)
+        self.assertEqual(result.payload["contents"], {})
+        self.assertIn("http_cache.sqlite", result.payload["skipped_files"])
+
+    def test_final_answer_validation_ignores_generic_observations(self) -> None:
+        self._write_satellite_fixture()
+        request = self._request()
+        request.task = "이 레포가 뭐 하는 프로젝트인지 알아내줘."
+        planner = _PlannerClient(
+            {"action_type": "final_answer", "reason_summary": "Answer now.", "confidence": 0.9, "enough_evidence": True}
+        )
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=planner,
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="generic-observation-not-enough")
+        actions = [event["action"]["type"] for event in list_run_events("generic-observation-not-enough") if event.get("type") == "action_result"]
+        self.assertNotEqual(actions[:1], ["final_answer"])
+        self.assertIn("README.md", result.files_read)
+
+    def test_no_generic_activity_worked_progress(self) -> None:
+        self._write_satellite_fixture()
+        request = self._request()
+        request.task = "이 레포가 뭐 하는 프로젝트인지 알아내줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=_SynthesisClient("This is a satellite orbit simulation project."),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            run_controller_graph(request, run_id="no-worked-progress")
+        events = list_run_events("no-worked-progress")
+        self.assertFalse(any(event.get("phase") == "Activity" and event.get("label") == "Worked" for event in events))
 
     def test_stream_final_message_omits_streamed_activity_metadata(self) -> None:
         request = self._request()

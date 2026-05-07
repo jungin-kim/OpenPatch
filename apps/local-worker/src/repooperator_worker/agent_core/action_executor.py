@@ -18,6 +18,17 @@ from repooperator_worker.services.common import resolve_project_path
 from repooperator_worker.services.json_safe import json_safe, safe_agent_response_payload
 from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient
 
+TEXT_FILE_SUFFIXES = {
+    ".py", ".js", ".ts", ".tsx", ".jsx", ".cs", ".java", ".kt", ".go", ".rs", ".rb", ".php",
+    ".c", ".cpp", ".h", ".hpp", ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml",
+    ".ini", ".cfg", ".gradle", ".xml", ".html", ".css", ".sh",
+}
+TEXT_FILE_BASENAMES = {"readme", "makefile", "dockerfile", "license"}
+BINARY_OR_CACHE_SUFFIXES = {
+    ".sqlite", ".sqlite3", ".db", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".zip",
+    ".tar", ".gz", ".7z", ".dll", ".exe", ".so", ".dylib", ".class", ".jar", ".bin",
+}
+
 
 class ActionExecutor:
     def __init__(self, *, run_id: str, request: AgentRunRequest) -> None:
@@ -96,9 +107,27 @@ class ActionExecutor:
             return ActionResult(action_id=action.action_id, status="skipped", observation="No target file was provided.")
         files_read: list[str] = []
         contents: dict[str, str] = {}
+        skipped: list[str] = []
         for relative_path in action.target_files[:8]:
             validate_repo_file(self.request.project_path, relative_path)
             activity_id = f"read-file:{relative_path}"
+            target = validate_repo_file(self.request.project_path, relative_path)
+            if not is_supported_text_file(target):
+                skipped.append(relative_path)
+                append_activity_event(
+                    run_id=self.run_id,
+                    request=self.request,
+                    activity_id=activity_id,
+                    event_type="activity_completed",
+                    phase="Reading files",
+                    label=Path(relative_path).name,
+                    status="completed",
+                    observation=f"Skipped unsupported or binary file `{relative_path}`.",
+                    next_action="Use supported source, config, or documentation files as evidence.",
+                    related_files=[relative_path],
+                    aggregate={"skip_reason": "unsupported_or_binary"},
+                )
+                continue
             append_activity_event(
                 run_id=self.run_id,
                 request=self.request,
@@ -110,7 +139,6 @@ class ActionExecutor:
                 current_action=f"Reading `{relative_path}`.",
                 related_files=[relative_path],
             )
-            target = validate_repo_file(self.request.project_path, relative_path)
             raw = target.read_text(encoding="utf-8", errors="replace")
             files_read.append(relative_path)
             contents[relative_path] = raw[:100_000]
@@ -126,7 +154,15 @@ class ActionExecutor:
                 next_action="Use the file content as evidence.",
                 related_files=[relative_path],
             )
-        return ActionResult(action_id=action.action_id, status="success", files_read=files_read, observation=f"Read {len(files_read)} file(s).", payload={"contents": contents})
+        status = "success" if files_read else "skipped"
+        observation = f"Read {len(files_read)} file(s)." if files_read else "No supported text files were read."
+        return ActionResult(
+            action_id=action.action_id,
+            status=status,
+            files_read=files_read,
+            observation=observation,
+            payload={"contents": contents, "skipped_files": skipped},
+        )
 
     def _search_files(self, action: AgentAction) -> ActionResult:
         repo = resolve_project_path(self.request.project_path).resolve()
@@ -174,7 +210,6 @@ class ActionExecutor:
 
     def _find_file_candidates(self, repo: Path, queries: list[str], *, text_queries: list[str] | None = None, max_results: int = 8) -> list[dict[str, Any]]:
         skip_dirs = {".git", ".claude", "node_modules", "runtime", ".next", "dist", "build", "out", "coverage", ".venv", "venv", "__pycache__"}
-        text_suffixes = {".cs", ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".kt", ".swift", ".go", ".rs", ".md", ".json", ".toml", ".yaml", ".yml"}
         files: list[Path] = []
         for path in repo.rglob("*"):
             if not path.is_file():
@@ -184,7 +219,7 @@ class ActionExecutor:
                 continue
             if is_stale_duplicate_copy(rel):
                 continue
-            if path.suffix.lower() not in text_suffixes and path.name.lower() not in {"readme", "makefile", "dockerfile"}:
+            if not is_supported_text_file(path):
                 continue
             files.append(path)
         text_queries = text_queries or []
@@ -273,6 +308,8 @@ class ActionExecutor:
         proposals: list[dict[str, str]] = []
         for relative_path in action.target_files[:4]:
             target = validate_repo_file(self.request.project_path, relative_path)
+            if not is_supported_text_file(target):
+                continue
             content = target.read_text(encoding="utf-8", errors="replace")
             proposal = model_generate_edit_proposal(relative_path, content, self.request.task, action.payload)
             if proposal is None:
@@ -756,6 +793,24 @@ def fallback_risk_notes(original: str, proposed: str) -> list[str]:
 
 def is_stale_duplicate_copy(relative_path: Path) -> bool:
     return bool(re.search(r" 2\.(py|tsx|js|json|cs)$", str(relative_path), flags=re.IGNORECASE))
+
+
+def is_supported_text_file(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    if suffix in BINARY_OR_CACHE_SUFFIXES:
+        return False
+    if suffix not in TEXT_FILE_SUFFIXES and path.name.lower() not in TEXT_FILE_BASENAMES:
+        return False
+    try:
+        sample = path.read_bytes()[:4096]
+    except OSError:
+        return False
+    if b"\x00" in sample:
+        return False
+    if not sample:
+        return True
+    controlish = sum(1 for byte in sample if byte < 9 or (13 < byte < 32))
+    return (controlish / max(1, len(sample))) < 0.05
 
 
 def _dedupe_strings(items: list[str]) -> list[str]:
