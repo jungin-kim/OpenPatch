@@ -20,6 +20,7 @@ if str(SRC_DIR) not in sys.path:
 from repooperator_worker.agent_core.action_executor import ActionExecutor, validate_edit_proposal  # noqa: E402
 from repooperator_worker.agent_core.actions import AgentAction, ActionResult  # noqa: E402
 from repooperator_worker.agent_core.controller_graph import SteeringDecision, _existing_target_files, _answer_with_model, consume_steering_for_state, parse_steering_instruction, run_controller_graph, stream_controller_graph, validate_or_repair_final_answer  # noqa: E402
+from repooperator_worker.agent_core.request_understanding import RequestUnderstanding  # noqa: E402
 from repooperator_worker.agent_core.state import AgentCoreState, ClassifierResult  # noqa: E402
 from repooperator_worker.agent_core.repository_review import review_single_file  # noqa: E402
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse, ConversationMessage  # noqa: E402
@@ -119,6 +120,23 @@ class _EditProposalClient:
 
 class _JsonSafeEnum(Enum):
     SAMPLE = "sample"
+
+
+def _edit_understanding(
+    request: AgentRunRequest,
+    *,
+    files: list[str] | None = None,
+    outputs: list[str] | None = None,
+    tools: list[str] | None = None,
+) -> RequestUnderstanding:
+    return RequestUnderstanding(
+        user_goal=request.task,
+        mentioned_files=files or [],
+        requested_outputs=outputs or ["code_change_proposal"],
+        likely_needed_tools=tools or ["search_files", "read_file", "generate_edit"],
+        safety_notes=["Do not write files unless explicitly approved."],
+        uncertainties=[] if files else ["Need to locate the implementation file first."],
+    )
 
 
 class ActivePathMigrationTests(unittest.TestCase):
@@ -467,6 +485,8 @@ class ActivePathMigrationTests(unittest.TestCase):
         self.assertIn("Assets/Scripts/GameManager.cs", result.files_read)
         action_events = [event for event in list_run_events("explicit-target-files") if event.get("type") == "action_result"]
         self.assertNotIn("analyze_repository", [event["action"]["type"] for event in action_events])
+        trace_events = [event for event in list_run_events("explicit-target-files") if event.get("event_type") == "work_trace"]
+        self.assertTrue(any(event.get("display") == "primary" and "Read" in str(event.get("current_action")) for event in trace_events))
 
     def test_follow_up_file_role_uses_prior_context_and_reads_target(self) -> None:
         self._write_unity_fixture()
@@ -493,7 +513,10 @@ class ActivePathMigrationTests(unittest.TestCase):
         self._write_unity_fixture()
         request = self._request()
         request.task = "Border.cs에서 &를 &&로 바꾸고 빈 Update 제거해줘. 변경 전후 설명도 해줘."
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+        with patch("repooperator_worker.agent_core.request_understanding.understand_request", return_value=_edit_understanding(request, files=["Border.cs"])), patch(
+            "repooperator_worker.agent_core.controller_graph.classify_intent",
+            return_value=self._classifier(),
+        ), patch(
             "repooperator_worker.agent_core.controller_graph.get_active_repository",
             return_value=None,
         ):
@@ -508,7 +531,10 @@ class ActivePathMigrationTests(unittest.TestCase):
         self._write_unity_fixture()
         request = self._request()
         request.task = "저장 로직을 안전하게 고쳐줘."
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+        with patch("repooperator_worker.agent_core.request_understanding.understand_request", return_value=_edit_understanding(request)), patch(
+            "repooperator_worker.agent_core.controller_graph.classify_intent",
+            return_value=self._classifier(),
+        ), patch(
             "repooperator_worker.agent_core.controller_graph.get_active_repository",
             return_value=None,
         ):
@@ -600,6 +626,48 @@ class ActivePathMigrationTests(unittest.TestCase):
         action_types = [event["action"]["type"] for event in list_run_events("planner-git-history") if event.get("type") == "action_result"]
         self.assertNotIn("analyze_repository", action_types)
 
+    def test_planner_visible_work_note_becomes_work_trace_event(self) -> None:
+        request = self._request()
+        request.task = "find risky serialization usage."
+        planner = _PlannerClient(
+            {
+                "action_type": "search_text",
+                "reason_summary": "Search for risky serialization usage.",
+                "query": "BinaryFormatter",
+                "confidence": 0.9,
+                "visible_work_note": {
+                    "goal": "Locate risky serialization evidence.",
+                    "why_this_action": "A text search is the fastest safe way to confirm whether BinaryFormatter appears before reading files.",
+                    "evidence_needed": ["Text matches for BinaryFormatter"],
+                    "uncertainty": ["The relevant file is not named."],
+                    "safety_note": None,
+                },
+            }
+        )
+        with patch("repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient", return_value=planner), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            run_controller_graph(request, run_id="planner-work-note")
+        trace_events = [event for event in list_run_events("planner-work-note") if event.get("event_type") == "work_trace"]
+        decision = next(event for event in trace_events if event.get("display") == "primary" and event.get("aggregate", {}).get("action_type") == "search_text")
+        self.assertIn("fastest safe way", str(decision.get("safe_reasoning_summary")))
+        self.assertEqual(decision.get("evidence_needed"), ["Text matches for BinaryFormatter"])
+        self.assertEqual(decision.get("visibility"), "user")
+        json.dumps(decision, ensure_ascii=False)
+
+    def test_low_level_activity_events_are_not_primary_work_trace(self) -> None:
+        request = self._request()
+        with patch("repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient", return_value=_LoopClient()), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            run_controller_graph(request, run_id="low-level-visibility")
+        low_labels = {"Loaded context", "Framed request", "Recorded observation", "Updated plan", "Created initial plan"}
+        low_events = [event for event in list_run_events("low-level-visibility") if event.get("label") in low_labels]
+        self.assertTrue(low_events)
+        self.assertTrue(all(event.get("display") != "primary" and event.get("visibility") != "user" for event in low_events))
+
     def test_llm_planner_searches_persistence_file_for_non_explicit_edit(self) -> None:
         self._write_unity_fixture()
         for index in range(8):
@@ -615,7 +683,15 @@ class ActivePathMigrationTests(unittest.TestCase):
                 "confidence": 0.9,
             }
         )
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+        understanding = _edit_understanding(
+            request,
+            outputs=["code_change_proposal"],
+            tools=["search_text", "read_file", "generate_edit"],
+        )
+        with patch("repooperator_worker.agent_core.request_understanding.understand_request", return_value=understanding), patch(
+            "repooperator_worker.agent_core.controller_graph.classify_intent",
+            return_value=self._classifier(),
+        ), patch(
             "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
             return_value=planner,
         ), patch(
@@ -661,7 +737,10 @@ class ActivePathMigrationTests(unittest.TestCase):
         )
         request = self._request()
         request.task = "Border.cs에서 &를 &&로 바꾸고 빈 Update 제거해줘."
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+        with patch("repooperator_worker.agent_core.request_understanding.understand_request", return_value=_edit_understanding(request, files=["Border.cs"])), patch(
+            "repooperator_worker.agent_core.controller_graph.classify_intent",
+            return_value=self._classifier(),
+        ), patch(
             "repooperator_worker.agent_core.action_executor.OpenAICompatibleModelClient",
             side_effect=RuntimeError("force deterministic validated fallback"),
         ), patch(
@@ -692,7 +771,10 @@ class ActivePathMigrationTests(unittest.TestCase):
         )
         request = self._request()
         request.task = "DataHandler.cs 저장 쪽 위험한 코드 찾아서 개선안 줘."
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+        with patch("repooperator_worker.agent_core.request_understanding.understand_request", return_value=_edit_understanding(request, files=["DataHandler.cs"], outputs=["code_review", "edit_proposal"])), patch(
+            "repooperator_worker.agent_core.controller_graph.classify_intent",
+            return_value=self._classifier(),
+        ), patch(
             "repooperator_worker.agent_core.action_executor.OpenAICompatibleModelClient",
             side_effect=RuntimeError("force deterministic validated fallback"),
         ), patch(
@@ -762,7 +844,10 @@ class ActivePathMigrationTests(unittest.TestCase):
                 "confidence": 0.9,
             }
         )
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+        with patch("repooperator_worker.agent_core.request_understanding.understand_request", return_value=_edit_understanding(request)), patch(
+            "repooperator_worker.agent_core.controller_graph.classify_intent",
+            return_value=self._classifier(),
+        ), patch(
             "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
             return_value=planner,
         ), patch(
@@ -826,6 +911,8 @@ class ActivePathMigrationTests(unittest.TestCase):
         self.assertIn("inspect_git_state", action_types)
         self.assertNotIn("run_approved_command", action_types)
         self.assertEqual(result.stop_reason, "waiting_approval")
+        trace_events = [event for event in list_run_events("planner-mutating-preview") if event.get("event_type") == "work_trace"]
+        self.assertTrue(any(event.get("phase") == "Safety" and event.get("safety_note") for event in trace_events))
 
     def test_edit_validation_rejects_unjustified_awake_removal(self) -> None:
         original = (

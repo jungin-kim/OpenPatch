@@ -25,6 +25,8 @@ def activity_event(
     phase: str,
     label: str,
     status: str = "running",
+    visibility: str | None = None,
+    display: str | None = None,
     current_action: str | None = None,
     observation: str | None = None,
     next_action: str | None = None,
@@ -32,15 +34,22 @@ def activity_event(
     detail_delta: str | None = None,
     observation_delta: str | None = None,
     next_action_delta: str | None = None,
+    safe_reasoning_summary: str | None = None,
     safe_reasoning_summary_delta: str | None = None,
+    evidence_needed: list[str] | None = None,
+    uncertainty: list[str] | None = None,
+    safety_note: str | None = None,
     started_at: str | None = None,
     ended_at: str | None = None,
     duration_ms: int | None = None,
     related_files: list[str] | None = None,
     related_command: list[str] | str | None = None,
+    command: list[str] | str | None = None,
     aggregate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
+    resolved_visibility = visibility or ("user" if event_type == "work_trace" else "debug")
+    resolved_display = display or ("primary" if event_type == "work_trace" else "secondary")
     event = {
         "id": f"{run_id}-event-{uuid.uuid4().hex[:10]}",
         "type": "progress_delta",
@@ -52,6 +61,8 @@ def activity_event(
         "branch": request.branch,
         "phase": phase,
         "label": label,
+        "visibility": resolved_visibility,
+        "display": resolved_display,
         "status": status,
         "current_action": current_action,
         "observation": observation,
@@ -60,7 +71,12 @@ def activity_event(
         "detail_delta": detail_delta,
         "observation_delta": observation_delta,
         "next_action_delta": next_action_delta,
+        "safe_reasoning_summary": safe_reasoning_summary,
         "safe_reasoning_summary_delta": safe_reasoning_summary_delta,
+        "summary_delta": safe_reasoning_summary_delta,
+        "evidence_needed": evidence_needed or [],
+        "uncertainty": uncertainty or [],
+        "safety_note": safety_note,
         "started_at": started_at or now,
         "updated_at": now,
         "ended_at": ended_at or (now if status in TERMINAL_ACTIVITY_STATUSES else None),
@@ -68,6 +84,7 @@ def activity_event(
         "related_files": related_files or [],
         "files": related_files or [],
         "related_command": related_command,
+        "command": command if command is not None else related_command,
         "aggregate": aggregate,
     }
     return {key: value for key, value in event.items() if value is not None}
@@ -81,6 +98,57 @@ def append_activity_event(**kwargs: Any) -> dict[str, Any]:
         return event
     except PermissionError:
         return event
+
+
+def append_work_trace(
+    *,
+    run_id: str,
+    request: AgentRunRequest,
+    activity_id: str,
+    phase: str,
+    label: str,
+    status: str = "running",
+    safe_reasoning_summary: str | None = None,
+    current_action: str | None = None,
+    observation: str | None = None,
+    next_action: str | None = None,
+    evidence_needed: list[str] | None = None,
+    uncertainty: list[str] | None = None,
+    safety_note: str | None = None,
+    related_files: list[str] | None = None,
+    command: list[str] | str | None = None,
+    aggregate: dict[str, Any] | None = None,
+    visibility: str = "user",
+    display: str = "primary",
+) -> dict[str, Any]:
+    """Persist a concise user-visible work trace event.
+
+    Work traces are progress_delta-compatible so existing clients can merge and
+    rehydrate them by activity_id. They must contain only safe summaries of
+    what was checked, observed, or chosen.
+    """
+    return append_activity_event(
+        run_id=run_id,
+        request=request,
+        activity_id=activity_id,
+        event_type="work_trace",
+        phase=phase,
+        label=label,
+        status=status,
+        visibility=visibility,
+        display=display,
+        safe_reasoning_summary=_truncate_text(safe_reasoning_summary, 360),
+        current_action=_truncate_text(current_action, 260),
+        observation=_truncate_text(observation, 360),
+        next_action=_truncate_text(next_action, 260),
+        evidence_needed=_truncate_list(evidence_needed, item_limit=120, max_items=6),
+        uncertainty=_truncate_list(uncertainty, item_limit=140, max_items=6),
+        safety_note=_truncate_text(safety_note, 260),
+        related_files=_truncate_list(related_files, item_limit=200, max_items=12),
+        command=command,
+        related_command=command,
+        aggregate=aggregate,
+    )
 
 
 def merge_activity_states(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -103,6 +171,40 @@ def merge_activity_states(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                         merged[key] = value
             states[activity_id] = merged
     return [states[item] for item in order]
+
+
+def _truncate_text(value: str | None, limit: int) -> str | None:
+    if value is None:
+        return None
+    text = " ".join(str(value).split())
+    if not text:
+        return None
+    if _contains_nonpublic_reasoning_marker(text):
+        return "A safe work summary was unavailable."
+    return text if len(text) <= limit else text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _truncate_list(values: list[str] | None, *, item_limit: int, max_items: int) -> list[str]:
+    out: list[str] = []
+    for value in values or []:
+        text = _truncate_text(str(value), item_limit)
+        if text:
+            out.append(text)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _contains_nonpublic_reasoning_marker(text: str) -> bool:
+    lowered = text.lower()
+    markers = (
+        "<think>",
+        "chain-" + "of-thought",
+        "chain " + "of thought",
+        "private " + "reasoning",
+        "hidden " + "reasoning",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def duration_ms(started_at: str | None, ended_at: str | None) -> int | None:

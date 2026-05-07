@@ -66,6 +66,9 @@ class FinalStreamingGuardTests(unittest.TestCase):
         self.assertNotIn("hidden", assistant_text)
         self.assertNotIn("cannot read", stored_text.lower())
         self.assertTrue(any(event.get("type") == "assistant_delta" for event in stored_events))
+        repair_events = [event for event in stored_events if event.get("activity_id") == "final-synthesis-repair"]
+        self.assertTrue(repair_events)
+        self.assertNotIn("files object is empty", json.dumps(repair_events, ensure_ascii=False).lower())
         self.assertIn("README.md", final["result"]["response"])
         self.assertEqual(assistant_text, final["result"]["response"])
 

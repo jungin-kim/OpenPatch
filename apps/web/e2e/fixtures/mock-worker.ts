@@ -21,10 +21,21 @@ export type MockRunOpts = {
 export type MockProgressEvent = {
   id?: string;
   activity_id?: string;
+  event_type?: string;
+  visibility?: "user" | "debug" | "internal" | string;
+  display?: "primary" | "secondary" | "hidden" | string;
   phase: string;
   label: string;
   status: "running" | "completed";
   sequence: number;
+  safe_reasoning_summary?: string;
+  current_action?: string;
+  observation?: string;
+  next_action?: string;
+  evidence_needed?: string[];
+  uncertainty?: string[];
+  safety_note?: string;
+  command?: string | string[];
 };
 
 // ── Default fixtures ──────────────────────────────────────────────────────────
@@ -67,7 +78,7 @@ export function buildFinalResult(runId: string, threadId: string, response: stri
       activity_id: ev.activity_id ?? `act-${ev.sequence}`,
       run_id: runId,
       thread_id: threadId,
-      event_type: "progress_delta",
+      event_type: ev.event_type ?? "progress_delta",
       type: "progress_delta",
       status: "completed",
       timestamp: new Date().toISOString(),
@@ -81,12 +92,22 @@ export function buildProgressEvents(runId: string, threadId: string, events: Moc
     activity_id: ev.activity_id ?? `act-${ev.sequence}`,
     run_id: runId,
     thread_id: threadId,
-    event_type: "progress_delta",
+    event_type: ev.event_type ?? "progress_delta",
     type: "progress_delta",
+    visibility: ev.visibility,
+    display: ev.display,
     phase: ev.phase,
     label: ev.label,
     status: ev.status,
     sequence: ev.sequence,
+    safe_reasoning_summary: ev.safe_reasoning_summary,
+    current_action: ev.current_action,
+    observation: ev.observation,
+    next_action: ev.next_action,
+    evidence_needed: ev.evidence_needed,
+    uncertainty: ev.uncertainty,
+    safety_note: ev.safety_note,
+    command: ev.command,
     timestamp: new Date().toISOString(),
   }));
 }
@@ -114,7 +135,10 @@ export async function mockHealthConnected(page: Page) {
 
 export async function mockListThreads(page: Page, threads: { id: string; title: string; repo: MockRepo; messages: unknown[] }[]) {
   await page.route("/api/worker/threads", async (route: Route) => {
-    if (route.request().method() !== "GET") return route.continue();
+    if (route.request().method() !== "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -139,8 +163,8 @@ export async function mockListThreads(page: Page, threads: { id: string; title: 
 }
 
 export async function mockSaveThread(page: Page) {
-  await page.route("/api/worker/threads/**", async (route: Route) => {
-    if (route.request().method() === "PUT" || route.request().method() === "POST") {
+  await page.route("/api/worker/threads", async (route: Route) => {
+    if (route.request().method() === "POST") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
     } else {
       await route.continue();
@@ -149,7 +173,7 @@ export async function mockSaveThread(page: Page) {
 }
 
 export async function mockOpenRepository(page: Page, repo: MockRepo) {
-  await page.route("/api/worker/repository/open", async (route: Route) => {
+  await page.route("/api/worker/repo-open", async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -162,7 +186,7 @@ export async function mockOpenRepository(page: Page, repo: MockRepo) {
       }),
     });
   });
-  await page.route("/api/worker/repository/open/plan", async (route: Route) => {
+  await page.route("/api/worker/repo-open-plan", async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -172,7 +196,7 @@ export async function mockOpenRepository(page: Page, repo: MockRepo) {
 }
 
 export async function mockGetAgentRun(page: Page, runRecord: ReturnType<typeof buildMockRunRecord>) {
-  await page.route(`/api/worker/runs/${runRecord.id}`, async (route: Route) => {
+  await page.route(`/api/worker/agent/runs/${runRecord.id}`, async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -182,7 +206,7 @@ export async function mockGetAgentRun(page: Page, runRecord: ReturnType<typeof b
 }
 
 export async function mockGetAgentRunEvents(page: Page, runId: string, events: unknown[]) {
-  await page.route(`/api/worker/runs/${runId}/events*`, async (route: Route) => {
+  await page.route(`/api/worker/agent/runs/${runId}/events*`, async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -192,7 +216,7 @@ export async function mockGetAgentRunEvents(page: Page, runId: string, events: u
 }
 
 export async function mockGetActiveRuns(page: Page, runs: ReturnType<typeof buildMockRunRecord>[]) {
-  await page.route("/api/worker/runs/active*", async (route: Route) => {
+  await page.route("/api/worker/agent/runs/active*", async (route: Route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",

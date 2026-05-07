@@ -1,6 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  aggregateEntries,
+  compactWorkTraceSteps,
+  hasTechnicalDetails,
+  isLowValuePrimaryLabel,
+  workTraceSummary,
+} from "./work-trace-display";
 
 export type ProgressStep = {
   id?: string;
@@ -8,6 +15,8 @@ export type ProgressStep = {
   runId?: string;
   sequence?: number | null;
   eventType?: string | null;
+  visibility?: "user" | "debug" | "internal" | string | null;
+  display?: "primary" | "secondary" | "hidden" | string | null;
   phase?: string;
   label?: string;
   detail?: string;
@@ -15,6 +24,9 @@ export type ProgressStep = {
   message?: string;
   safeReasoningSummary?: string | null;
   summaryDelta?: string | null;
+  evidenceNeeded?: string[];
+  uncertainty?: string[];
+  safetyNote?: string | null;
   currentAction?: string | null;
   observation?: string | null;
   observationDelta?: string | null;
@@ -28,7 +40,7 @@ export type ProgressStep = {
   durationMs?: number | null;
   elapsedMs?: number | null;
   files?: string[];
-  command?: string | null;
+  command?: string | string[] | null;
   proposalId?: string | null;
 };
 
@@ -55,6 +67,7 @@ function statusLabel(status?: string): string {
 
 export function ProgressTimeline({ steps, done }: Props) {
   const [collapsed, setCollapsed] = useState(false);
+  const [showTechnicalLog, setShowTechnicalLog] = useState(false);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -73,7 +86,11 @@ export function ProgressTimeline({ steps, done }: Props) {
 
   if (steps.length === 0) return null;
 
-  const totalMs = runDurationMs(steps, done, now);
+  const primarySteps = compactWorkTraceSteps(steps);
+  if (primarySteps.length === 0) return null;
+
+  const totalMs = runDurationMs(primarySteps, done, now);
+  const hasHiddenTechnicalSteps = steps.length > primarySteps.length;
 
   if (done && collapsed) {
     return (
@@ -102,9 +119,11 @@ export function ProgressTimeline({ steps, done }: Props) {
         {done ? <span className="progress-timeline-collapse">hide</span> : null}
       </button>
       <div className="progress-steps">
-        {steps.map((step, index) => {
-          const isCurrent = index === steps.length - 1 && !done && step.status === "running";
+        {primarySteps.map((step, index) => {
+          const isCurrent = index === primarySteps.length - 1 && !done && step.status === "running";
           const duration = stepDurationMs(step, now);
+          const summary = workTraceSummary(step);
+          const showLabelAsMetadata = Boolean(step.safeReasoningSummary || step.safetyNote || step.observation);
           return (
             <div
               key={progressStepKey(step, index)}
@@ -113,31 +132,47 @@ export function ProgressTimeline({ steps, done }: Props) {
               <span className="progress-step-marker" aria-hidden="true" />
               <span className="progress-step-content">
                 <span className="progress-step-mainline">
-                  <span className="progress-step-label">{step.label || step.message || "Working"}</span>
-                  <span className="progress-step-phase">{step.phase || "Activity"}</span>
+                  <span className="progress-step-label">{summary}</span>
+                  <span className="progress-step-phase">{step.phase || "Step"}</span>
                 </span>
-                {step.detail ? <span className="progress-step-detail">{step.detail}</span> : null}
-                {step.currentAction ? (
-                  <span className="progress-step-detail"><strong>Current:</strong> {step.currentAction}</span>
+                {showLabelAsMetadata && step.label && !isLowValuePrimaryLabel(step.label) ? (
+                  <span className="progress-step-reason">{step.label}</span>
                 ) : null}
-                {step.observation ? (
-                  <span className="progress-step-detail"><strong>Observation:</strong> {step.observation}</span>
-                ) : null}
-                {step.nextAction && step.status === "running" ? (
-                  <span className="progress-step-detail"><strong>Next:</strong> {step.nextAction}</span>
-                ) : null}
-                {step.safeReasoningSummary ? (
-                  <span className="progress-step-detail">{step.safeReasoningSummary}</span>
-                ) : null}
-                {step.relatedSearchQuery ? (
-                  <span className="progress-step-related">Searched: <code>{step.relatedSearchQuery}</code></span>
-                ) : null}
-                {step.aggregate ? <AggregateProgressDetails aggregate={step.aggregate} /> : null}
-                {step.files?.length ? (
-                  <span className="progress-step-related">{step.files.join(", ")}</span>
-                ) : null}
-                {step.command ? (
-                  <span className="progress-step-related"><code>{step.command}</code></span>
+                {hasTechnicalDetails(step) ? (
+                  <details className="progress-step-details">
+                    <summary>Technical details</summary>
+                    {step.detail ? <span className="progress-step-detail">{step.detail}</span> : null}
+                    {step.currentAction ? (
+                      <span className="progress-step-detail"><strong>Current:</strong> {step.currentAction}</span>
+                    ) : null}
+                    {step.observation ? (
+                      <span className="progress-step-detail"><strong>Observation:</strong> {step.observation}</span>
+                    ) : null}
+                    {step.nextAction ? (
+                      <span className="progress-step-detail"><strong>Next:</strong> {step.nextAction}</span>
+                    ) : null}
+                    {step.evidenceNeeded?.length ? (
+                      <span className="progress-step-detail"><strong>Evidence:</strong> {step.evidenceNeeded.join("; ")}</span>
+                    ) : null}
+                    {step.uncertainty?.length ? (
+                      <span className="progress-step-detail"><strong>Uncertain:</strong> {step.uncertainty.join("; ")}</span>
+                    ) : null}
+                    {step.safetyNote ? (
+                      <span className="progress-step-detail"><strong>Safety:</strong> {step.safetyNote}</span>
+                    ) : null}
+                    {step.relatedSearchQuery ? (
+                      <span className="progress-step-detail"><strong>Search:</strong> <code>{step.relatedSearchQuery}</code></span>
+                    ) : null}
+                    {step.files?.length ? (
+                      <span className="progress-step-detail"><strong>Files:</strong> {step.files.join(", ")}</span>
+                    ) : null}
+                    {step.command ? (
+                      <span className="progress-step-detail"><strong>Command:</strong> <code>{formatCommand(step.command)}</code></span>
+                    ) : null}
+                    {aggregateEntries(step).map(([key, value]) => (
+                      <span className="progress-step-detail" key={key}><strong>{key}:</strong> {value}</span>
+                    ))}
+                  </details>
                 ) : null}
               </span>
               <span className="progress-step-status">{statusLabel(step.status)}</span>
@@ -146,28 +181,34 @@ export function ProgressTimeline({ steps, done }: Props) {
           );
         })}
       </div>
+      {hasHiddenTechnicalSteps ? (
+        <div className="progress-technical-log">
+          <button
+            type="button"
+            className="progress-technical-toggle"
+            onClick={() => setShowTechnicalLog((value) => !value)}
+          >
+            {showTechnicalLog ? "Hide technical log" : "Show technical log"}
+          </button>
+          {showTechnicalLog ? (
+            <div className="progress-technical-events">
+              {steps.map((step, index) => (
+                <div className="progress-technical-event" key={`technical-${progressStepKey(step, index)}`}>
+                  <span>{step.phase || "Step"}</span>
+                  <strong>{step.label || step.message || step.eventType || "Event"}</strong>
+                  <small>{statusLabel(step.status)}</small>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }
 
-function AggregateProgressDetails({ aggregate }: { aggregate: Record<string, unknown> }) {
-  const entries = Object.entries(aggregate).filter(([, value]) =>
-    typeof value === "string" || typeof value === "number" || typeof value === "boolean",
-  );
-  if (!entries.length) return null;
-  return (
-    <details className="progress-step-aggregate">
-      <summary>Details</summary>
-      <dl>
-        {entries.map(([key, value]) => (
-          <div key={key}>
-            <dt>{key.replaceAll("_", " ")}</dt>
-            <dd>{String(value)}</dd>
-          </div>
-        ))}
-      </dl>
-    </details>
-  );
+function formatCommand(command: string | string[]): string {
+  return Array.isArray(command) ? command.join(" ") : command;
 }
 
 function progressStepKey(step: ProgressStep, index: number): string {

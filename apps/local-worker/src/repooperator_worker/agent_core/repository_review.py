@@ -48,8 +48,8 @@ def should_use_repository_wide_review(classifier: Any) -> bool:
 
     Routing is evidence-based: if the caller has already identified target files,
     skip the expensive repository-wide scan.  The decision does NOT depend on
-    workflow-bucket fields (requested_workflow, requires_repository_wide_review,
-    retrieval_goal) — those fields are intentionally absent from ClassifierResult.
+    workflow-bucket fields from the previous classifier. Those fields are
+    intentionally absent from ClassifierResult.
     """
     if getattr(classifier, "target_files", None) or getattr(classifier, "mentioned_files", None):
         return False

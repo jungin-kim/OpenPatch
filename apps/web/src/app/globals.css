@@ -1626,6 +1626,7 @@ select {
   color: var(--foreground);
   font-weight: 700;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 
 .progress-step-mainline {
@@ -1658,6 +1659,25 @@ select {
 .progress-step-related {
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+.progress-step-reason {
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+.progress-step-details {
+  color: var(--muted);
+}
+
+.progress-step-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.progress-step-details[open] {
+  display: grid;
+  gap: 2px;
 }
 
 .progress-step-related code {
@@ -1762,6 +1782,48 @@ select {
   opacity: 0.6;
   font-size: 0.65rem;
   margin-left: 2px;
+}
+
+.progress-technical-log {
+  display: grid;
+  gap: 6px;
+}
+
+.progress-technical-toggle {
+  justify-self: start;
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 0 2px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.progress-technical-toggle:hover {
+  color: var(--foreground);
+}
+
+.progress-technical-events {
+  display: grid;
+  gap: 4px;
+  padding: 7px 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.progress-technical-event {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.progress-technical-event strong {
+  color: var(--foreground);
+  overflow-wrap: anywhere;
 }
 
 .changed-files-archive {

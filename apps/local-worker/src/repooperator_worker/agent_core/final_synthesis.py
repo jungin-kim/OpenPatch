@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from repooperator_worker.agent_core.context_budget import ContextBudget, compact_file_contents
+from repooperator_worker.agent_core.events import append_work_trace
 from repooperator_worker.agent_core.state import AgentCoreState
 from repooperator_worker.schemas import AgentRunRequest
 from repooperator_worker.services.common import resolve_project_path
@@ -68,11 +69,10 @@ def _answer_with_model(
             ),
         )
         pieces: list[str] = []
-        reasoning: list[str] = []
         client = _compat_model_client()()
         for delta in client.stream_text(prompt):
             if delta.get("type") == "reasoning_delta":
-                reasoning.append(str(delta.get("delta") or ""))
+                continue
             elif delta.get("type") == "assistant_delta":
                 text = str(delta.get("delta") or "")
                 pieces.append(text)
@@ -80,9 +80,34 @@ def _answer_with_model(
         _reasoning, visible = split_visible_reasoning(raw)
         cleaned, _ = clean_user_visible_response(visible, user_task=request.task)
         guarded = _quality_guard_answer(cleaned.strip(), file_contents=file_contents)
+        if guarded is None and cleaned.strip() and state is not None:
+            append_work_trace(
+                run_id=state.run_id,
+                request=request,
+                activity_id="final-synthesis-repair",
+                phase="Finished",
+                label="Rebuilt final answer",
+                status="completed",
+                safe_reasoning_summary="The draft answer did not match gathered evidence, so I rebuilt it from collected files.",
+                observation="Final answer repaired without storing the rejected draft text.",
+                safety_note="Rejected draft text is not exposed in events.",
+            )
         accepted = guarded or synthesize_answer_from_evidence(request, state, file_contents, repo_observation)
         if state is not None:
+            before_validation = accepted
             accepted = validate_or_repair_final_answer(accepted, state, request)
+            if accepted != before_validation:
+                append_work_trace(
+                    run_id=state.run_id,
+                    request=request,
+                    activity_id="final-synthesis-repair",
+                    phase="Finished",
+                    label="Rebuilt final answer",
+                    status="completed",
+                    safe_reasoning_summary="The draft answer did not match gathered evidence, so I rebuilt it from collected files.",
+                    observation="Final answer repaired without storing the rejected draft text.",
+                    safety_note="Rejected draft text is not exposed in events.",
+                )
         if on_delta and accepted:
             for chunk in _chunk_text(accepted):
                 on_delta(chunk)

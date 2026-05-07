@@ -162,9 +162,9 @@ def _parse_json(text: str) -> dict[str, Any]:
 
 
 def _file_tokens(text: str) -> list[str]:
-    from repooperator_worker.agent_core.controller_graph import _file_tokens as _impl
+    from repooperator_worker.agent_core.request_parsing import extract_file_tokens
 
-    return _impl(text)
+    return extract_file_tokens(text)
 
 
 def _existing_target_files(request: AgentRunRequest, target_files: list[str]) -> list[str]:

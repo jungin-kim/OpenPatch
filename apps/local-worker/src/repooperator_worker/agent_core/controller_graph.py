@@ -9,7 +9,7 @@ from typing import Any, Iterator
 from repooperator_worker.agent_core.agent_loop import AgentLoop, AgentLoopDeps
 from repooperator_worker.agent_core.actions import AgentAction, ActionResult
 from repooperator_worker.agent_core.context_service import get_default_context_service
-from repooperator_worker.agent_core.events import append_activity_event
+from repooperator_worker.agent_core.events import append_activity_event, append_work_trace
 from repooperator_worker.agent_core.final_synthesis import (
     _answer_with_model,
     collect_file_contents,
@@ -24,7 +24,6 @@ from repooperator_worker.agent_core.planner import (
     PLANNER_ACTION_TYPES,
     TaskFrame,
     _existing_target_files,
-    _file_tokens,
     _format_command_result,
     _format_edit_proposal,
     _has_action,
@@ -52,6 +51,7 @@ from repooperator_worker.agent_core.planner import (
     resolve_target_files,
     validate_model_next_action,
 )
+from repooperator_worker.agent_core.request_parsing import extract_file_tokens as _file_tokens
 from repooperator_worker.agent_core.classifier import (
     classify_intent,
     validate_classifier_payload as _validate_classifier_payload,
@@ -481,6 +481,17 @@ def build_final_answer_text(
     for result in state.action_results:
         contents.update(result.payload.get("contents") or {})
     repo_observation = "\n".join(state.observations[-6:])
+    append_work_trace(
+        run_id=state.run_id,
+        request=request,
+        activity_id="final-synthesis-preparing",
+        phase="Finished",
+        label="Preparing final answer",
+        status="running",
+        safe_reasoning_summary="Preparing an evidence-based answer from the gathered files and observations.",
+        current_action="Synthesize the final response from collected evidence.",
+        related_files=list(contents.keys()),
+    )
     answer = _answer_with_model(request, contents, state=state, repo_observation=repo_observation, skills_context=skills_context, on_delta=on_delta)
     append_activity_event(
         run_id=state.run_id,
@@ -490,6 +501,7 @@ def build_final_answer_text(
         phase="Finished",
         label="Prepared evidence-based answer",
         status="completed",
+        safe_reasoning_summary="Prepared an evidence-based answer from gathered files and observations.",
         observation="Prepared the final answer from gathered evidence.",
     )
     return answer
@@ -549,8 +561,6 @@ def stream_controller_graph(request: AgentRunRequest, *, run_id: str | None = No
         if event.get("type") == "assistant_delta":
             before_sequence = int(event.get("sequence") or before_sequence)
             yield event
-    if response.reasoning:
-        yield {"type": "reasoning_delta", "delta": response.reasoning, "source": "model_provided"}
     if not _streamed_assistant_delta(run_id or ""):
         for chunk in _chunk_text(response.response):
             yield {"type": "assistant_delta", "delta": chunk, "streaming_mode": "post_hoc_chunking"}

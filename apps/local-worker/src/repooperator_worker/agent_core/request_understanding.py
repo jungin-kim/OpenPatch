@@ -1,8 +1,8 @@
 """
 Request understanding — extracts facts and constraints from the user's task.
 
-This replaces the old intent-classifier approach. Instead of assigning a workflow
-bucket (requested_workflow, retrieval_goal, SUPPORTED_INTENTS), we extract:
+This replaces the old intent-classifier approach. Instead of assigning workflow
+buckets, we extract:
   - what the user is actually asking for (user_goal)
   - which files / symbols they mentioned (mentioned_files, mentioned_symbols)
   - constraints the user stated explicitly (constraints)
@@ -11,10 +11,11 @@ bucket (requested_workflow, retrieval_goal, SUPPORTED_INTENTS), we extract:
   - safety notes from the task text (safety_notes)
   - things that are unclear (uncertainties)
   - a clarification question if the task is genuinely ambiguous (clarification_question)
+  - legacy_intent only when supplied by an old caller; it is compatibility data
 
 IMPORTANT: This module must NOT assign authoritative workflow buckets.
-  - Do not add SUPPORTED_INTENTS.
-  - Do not populate requested_workflow / retrieval_goal / requires_repository_wide_review.
+  - Do not add legacy intent constants.
+  - Do not populate old workflow-routing fields.
   - Do not branch planner behavior on any field here.
   - likely_needed_tools is a *weak hint* to the planner, never an authoritative route.
   - The planner must choose safe primitive actions based on evidence needs and tool specs.
@@ -25,7 +26,7 @@ import dataclasses
 import json
 from typing import Any
 
-from repooperator_worker.agent_core.planner import _file_tokens
+from repooperator_worker.agent_core.request_parsing import extract_file_tokens
 from repooperator_worker.schemas import AgentRunRequest
 from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient
 
@@ -45,7 +46,8 @@ Return ONLY a JSON object matching this schema:
   "safety_notes": ["<any safety or scope constraints implicit in the task>"],
   "uncertainties": ["<things that are unclear or ambiguous>"],
   "needs_clarification": false,
-  "clarification_question": null
+  "clarification_question": null,
+  "legacy_intent": null
 }
 
 Rules:
@@ -74,6 +76,7 @@ class RequestUnderstanding:
     uncertainties: list[str] = dataclasses.field(default_factory=list)
     needs_clarification: bool = False
     clarification_question: str | None = None
+    legacy_intent: str | None = None
 
     def model_dump(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -111,7 +114,7 @@ def request_understanding_to_classifier_result(ru: RequestUnderstanding, request
 
     This exists only for backward compatibility with code that still reads
     ClassifierResult fields.  The adapter DOES NOT populate routing fields
-    (requested_workflow, retrieval_goal, requires_repository_wide_review).
+    from the previous workflow-bucket classifier.
     Those fields are absent from ClassifierResult entirely.
     """
     from repooperator_worker.agent_core.state import ClassifierResult  # local import avoids cycle
@@ -133,26 +136,27 @@ def request_understanding_to_classifier_result(ru: RequestUnderstanding, request
 def _build_understanding(payload: dict[str, Any], request: AgentRunRequest) -> RequestUnderstanding:
     # Always extract file tokens deterministically so a malformed model response
     # does not lose explicit file mentions.
-    deterministic_files = _file_tokens(request.task)
-    model_files = [str(f).strip().lstrip("/") for f in payload.get("mentioned_files") or [] if str(f).strip()]
+    deterministic_files = extract_file_tokens(request.task)
+    model_files = [_safe_public_text(f, limit=240).lstrip("/") for f in payload.get("mentioned_files") or [] if _safe_public_text(f, limit=240)]
     mentioned_files = _dedupe([*model_files, *deterministic_files])
 
-    model_symbols = [str(s).strip() for s in payload.get("mentioned_symbols") or [] if str(s).strip()]
+    model_symbols = _safe_public_list(payload.get("mentioned_symbols"), limit=120)
     tool_hints = [
         str(t).strip() for t in payload.get("likely_needed_tools") or []
         if str(t).strip() in _ALLOWED_TOOL_HINTS
     ]
     return RequestUnderstanding(
-        user_goal=str(payload.get("user_goal") or request.task)[:200],
+        user_goal=_safe_public_text(payload.get("user_goal") or request.task, limit=200) or request.task[:200],
         mentioned_files=mentioned_files,
         mentioned_symbols=model_symbols,
-        constraints=[str(c) for c in payload.get("constraints") or []],
-        requested_outputs=[str(o) for o in payload.get("requested_outputs") or []],
+        constraints=_safe_public_list(payload.get("constraints"), limit=180),
+        requested_outputs=_safe_public_list(payload.get("requested_outputs"), limit=80),
         likely_needed_tools=tool_hints,
-        safety_notes=[str(n) for n in payload.get("safety_notes") or []],
-        uncertainties=[str(u) for u in payload.get("uncertainties") or []],
+        safety_notes=_safe_public_list(payload.get("safety_notes"), limit=220),
+        uncertainties=_safe_public_list(payload.get("uncertainties"), limit=220),
         needs_clarification=bool(payload.get("needs_clarification")),
-        clarification_question=payload.get("clarification_question") or None,
+        clarification_question=_safe_public_text(payload.get("clarification_question"), limit=240),
+        legacy_intent=_safe_public_text(payload.get("legacy_intent"), limit=80) or None,
     )
 
 
@@ -180,3 +184,33 @@ def _parse_json(text: str) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def _safe_public_list(value: Any, *, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = _safe_public_text(item, limit=limit)
+        if text:
+            result.append(text)
+    return result
+
+
+def _safe_public_text(value: Any, *, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if not text or _contains_nonpublic_reasoning_marker(text):
+        return ""
+    return text if len(text) <= limit else text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _contains_nonpublic_reasoning_marker(text: str) -> bool:
+    lowered = text.lower()
+    markers = (
+        "<think>",
+        "chain-" + "of-thought",
+        "chain " + "of thought",
+        "private " + "reasoning",
+        "hidden " + "reasoning",
+    )
+    return any(marker in lowered for marker in markers)

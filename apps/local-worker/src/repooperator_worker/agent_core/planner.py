@@ -11,6 +11,7 @@ from repooperator_worker.agent_core.actions import AgentAction, ActionResult
 from repooperator_worker.agent_core.context_budget import ContextBudget, estimate_chars
 from repooperator_worker.agent_core.events import append_activity_event
 from repooperator_worker.agent_core.final_synthesis import collect_file_contents
+from repooperator_worker.agent_core.request_parsing import extract_file_tokens
 from repooperator_worker.agent_core.state import AgentCoreState
 from repooperator_worker.agent_core.tools.builtin import is_supported_text_file
 from repooperator_worker.agent_core.tools.registry import get_default_tool_registry
@@ -20,7 +21,6 @@ from repooperator_worker.services.json_safe import json_safe
 from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient
 
 
-FILE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_./\\-])([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,8})(?![A-Za-z0-9_./\\-])")
 SOURCE_SUFFIXES = {".cs", ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".kt", ".swift", ".go", ".rs", ".rb", ".php", ".c", ".cpp", ".h", ".hpp"}
 TEXT_SUFFIXES = SOURCE_SUFFIXES | {".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".ini", ".cfg", ".gradle"}
 SEARCH_SKIP_DIRS = {".git", ".claude", "node_modules", "runtime", ".next", "dist", "build", "out", "coverage", ".venv", "venv", "__pycache__"}
@@ -47,10 +47,18 @@ Schema:
   "expected_output": "short description",
   "requires_approval": false,
   "confidence": 0.0,
-  "enough_evidence": false
+  "enough_evidence": false,
+  "visible_work_note": {
+    "goal": "short user-visible goal for this step",
+    "why_this_action": "1-2 sentence user-visible reason for choosing this action",
+    "evidence_needed": [],
+    "uncertainty": [],
+    "safety_note": null
+  }
 }
 Prefer gathering missing evidence before answering. Commands are policy-previewed later; never request direct shell execution.
 Use search_text for content/regex grep-like searches instead of shell commands.
+visible_work_note is for the user-facing work trace only. Do not include chain-of-thought or private reasoning. Summarize the decision for the user in 1-2 sentences.
 """
 
 
@@ -60,6 +68,8 @@ class TaskFrame:
     mentioned_files: list[str] = field(default_factory=list)
     mentioned_symbols: list[str] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
+    requested_outputs: list[str] = field(default_factory=list)
+    likely_needed_tools: list[str] = field(default_factory=list)
     likely_capabilities: list[str] = field(default_factory=list)
     answer_style: str | None = None
     safety_notes: list[str] = field(default_factory=list)
@@ -138,6 +148,7 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
     file_globs = [str(item).strip() for item in payload.get("file_globs") or [] if str(item).strip()]
     command = [str(item) for item in payload.get("command") or [] if str(item)]
     expected = str(payload.get("expected_output") or "")
+    visible_work_note = validate_visible_work_note(payload.get("visible_work_note"))
 
     if action_type in {"read_file", "generate_edit"}:
         resolved = resolve_target_files(request, target_files, preferred=known_context_files(request, state))
@@ -149,14 +160,14 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
                     reason_summary="Resolve model-proposed targets before reading or proposing edits.",
                     target_symbols=target_symbols,
                     expected_output="Ranked repo-contained candidate files.",
-                    payload={"queries": queries, "text_queries": text_queries, "file_globs": file_globs, "source": "model_planner"},
+                    payload=_action_payload_with_note({"queries": queries, "text_queries": text_queries, "file_globs": file_globs, "source": "model_planner"}, visible_work_note),
                 )
             return None
         unread = [path for path in resolved if path not in state.files_read]
         if action_type == "read_file":
             if not unread:
                 return None
-            return AgentAction(type="read_file", reason_summary=reason, target_files=unread, expected_output=expected)
+            return AgentAction(type="read_file", reason_summary=reason, target_files=unread, expected_output=expected, payload=_action_payload_with_note({}, visible_work_note))
         valid_edit_targets = set(current_edit_target_files(state, task_frame, request, model_targets=resolved))
         if not valid_edit_targets:
             queries = _dedupe([*target_files, *target_symbols, *search_queries, *file_globs])
@@ -166,15 +177,15 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
                     reason_summary="Find validated edit targets before preparing a patch.",
                     target_symbols=target_symbols,
                     expected_output="Ranked repo-contained candidate files.",
-                    payload={"queries": queries, "text_queries": text_queries or EDIT_DISCOVERY_TEXT_SIGNALS, "file_globs": file_globs, "source": "model_planner"},
+                    payload=_action_payload_with_note({"queries": queries, "text_queries": text_queries or EDIT_DISCOVERY_TEXT_SIGNALS, "file_globs": file_globs, "source": "model_planner"}, visible_work_note),
                 )
             return None
         if not state.files_read and unread:
-            return AgentAction(type="read_file", reason_summary="Read target files before preparing an edit proposal.", target_files=unread, expected_output="File contents for edit proposal.")
+            return AgentAction(type="read_file", reason_summary="Read target files before preparing an edit proposal.", target_files=unread, expected_output="File contents for edit proposal.", payload=_action_payload_with_note({}, visible_work_note))
         unread_valid = [path for path in valid_edit_targets if path not in state.files_read]
         if unread_valid:
-            return AgentAction(type="read_file", reason_summary="Read target files before preparing an edit proposal.", target_files=unread_valid, expected_output="File contents for edit proposal.")
-        return AgentAction(type="generate_edit", reason_summary=reason, target_files=list(valid_edit_targets), expected_output=expected, payload={"source": "model_planner", "current_edit_targets": list(valid_edit_targets)})
+            return AgentAction(type="read_file", reason_summary="Read target files before preparing an edit proposal.", target_files=unread_valid, expected_output="File contents for edit proposal.", payload=_action_payload_with_note({}, visible_work_note))
+        return AgentAction(type="generate_edit", reason_summary=reason, target_files=list(valid_edit_targets), expected_output=expected, payload=_action_payload_with_note({"source": "model_planner", "current_edit_targets": list(valid_edit_targets)}, visible_work_note))
 
     if action_type == "search_files":
         queries = _dedupe([*search_queries, *target_files, *file_globs, *target_symbols])
@@ -187,7 +198,7 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
             reason_summary=reason,
             target_symbols=target_symbols,
             expected_output=expected or "Ranked repo-contained candidate files.",
-            payload={"queries": queries, "text_queries": text_queries, "file_globs": file_globs, "source": "model_planner"},
+            payload=_action_payload_with_note({"queries": queries, "text_queries": text_queries, "file_globs": file_globs, "source": "model_planner"}, visible_work_note),
         )
 
     if action_type == "search_text":
@@ -198,7 +209,7 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
             type="search_text",
             reason_summary=reason,
             expected_output=expected or "Repo-contained text matches.",
-            payload={
+            payload=_action_payload_with_note({
                 "query": query,
                 "path_globs": [str(item).strip() for item in payload.get("path_globs") or file_globs if str(item).strip()],
                 "max_results": int(payload.get("max_results") or 50),
@@ -206,7 +217,7 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
                 "regex": bool(payload.get("regex")),
                 "context_lines": int(payload.get("context_lines") or 0),
                 "source": "model_planner",
-            },
+            }, visible_work_note),
         )
 
     if action_type in {"preview_command", "inspect_git_state", "run_approved_command"}:
@@ -218,34 +229,35 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
                 reason_summary=reason,
                 command=command,
                 expected_output="Command safety classification.",
+                payload=_action_payload_with_note({}, visible_work_note),
             )
         preview_action = "inspect_git_state" if command[:1] == ["git"] else "preview_command"
         if not _has_command_preview(state, command):
-            return AgentAction(type=preview_action, reason_summary=reason, command=command, expected_output="Command safety classification.")
+            return AgentAction(type=preview_action, reason_summary=reason, command=command, expected_output="Command safety classification.", payload=_action_payload_with_note({}, visible_work_note))
         preview = _latest_command_preview(state, command)
         if preview and preview.status == "success" and _preview_read_only(preview.command_result) and not _has_command_run(state, command):
-            return AgentAction(type="run_approved_command", reason_summary=reason, command=command, expected_output=expected or "Command output.")
+            return AgentAction(type="run_approved_command", reason_summary=reason, command=command, expected_output=expected or "Command output.", payload=_action_payload_with_note({}, visible_work_note))
         return None
 
     if action_type == "ask_clarification":
         attempted_search = any(action.type in {"search_files", "search_text", "inspect_repo_tree"} for action in state.actions_taken)
         if not attempted_search and not payload.get("requires_approval"):
             return None
-        return AgentAction(type="ask_clarification", reason_summary=reason, payload={"question": str(payload.get("question") or reason)})
+        return AgentAction(type="ask_clarification", reason_summary=reason, payload=_action_payload_with_note({"question": str(payload.get("question") or reason)}, visible_work_note))
 
     if action_type == "final_answer":
         enough = bool(payload.get("enough_evidence")) and has_substantive_evidence(state)
         if not enough:
             return None
-        return AgentAction(type="final_answer", reason_summary=reason)
+        return AgentAction(type="final_answer", reason_summary=reason, payload=_action_payload_with_note({}, visible_work_note))
 
     if action_type == "analyze_repository":
         if _has_action(state, "analyze_repository"):
             return None
-        return AgentAction(type="analyze_repository", reason_summary=reason, expected_output=expected, payload={"classifier": state.classifier_result})
+        return AgentAction(type="analyze_repository", reason_summary=reason, expected_output=expected, payload=_action_payload_with_note({"classifier": state.classifier_result}, visible_work_note))
 
     if action_type == "inspect_repo_tree" and not _has_action(state, "inspect_repo_tree"):
-        return AgentAction(type="inspect_repo_tree", reason_summary=reason, expected_output=expected)
+        return AgentAction(type="inspect_repo_tree", reason_summary=reason, expected_output=expected, payload=_action_payload_with_note({}, visible_work_note))
     return None
 
 
@@ -264,7 +276,7 @@ def build_task_frame(request: AgentRunRequest, state: AgentCoreState) -> TaskFra
     symbols = _dedupe([*ru_symbols, *cl_symbols, *symbol_tokens(request.task)])
 
     # Capability hints come from RequestUnderstanding.likely_needed_tools only.
-    # Do NOT route by retrieval_goal / requested_workflow — those fields are gone.
+    # Do NOT route by old workflow-bucket fields.
     capabilities: list[str] = []
     if ru:
         for tool_hint in (getattr(ru, "likely_needed_tools", None) or []):
@@ -277,6 +289,8 @@ def build_task_frame(request: AgentRunRequest, state: AgentCoreState) -> TaskFra
         capabilities.append("open_planning")
 
     constraints = list(getattr(ru, "constraints", None) or []) if ru else []
+    requested_outputs = list(getattr(ru, "requested_outputs", None) or []) if ru else []
+    likely_needed_tools = list(getattr(ru, "likely_needed_tools", None) or []) if ru else []
     if mentioned_files and not constraints:
         constraints.append("Use explicitly mentioned files before broader context.")
 
@@ -293,13 +307,15 @@ def build_task_frame(request: AgentRunRequest, state: AgentCoreState) -> TaskFra
         mentioned_files=mentioned_files,
         mentioned_symbols=symbols,
         constraints=constraints,
+        requested_outputs=_dedupe(requested_outputs),
+        likely_needed_tools=_dedupe(likely_needed_tools),
         likely_capabilities=_dedupe(capabilities),
         answer_style="concise_synthesis",
         safety_notes=list(getattr(ru, "safety_notes", None) or []) if ru else [],
         uncertainty=list(getattr(ru, "uncertainties", None) or []) if ru else [],
         should_ask_clarification=needs_clarification,
         clarification_question=clarification_question,
-        legacy_intent=getattr(classifier, "intent", "ambiguous"),
+        legacy_intent=getattr(ru, "legacy_intent", None) or getattr(classifier, "intent", "ambiguous"),
     )
 
 
@@ -445,15 +461,89 @@ def pending_commit_context(frame: TaskFrame) -> bool:
 
 
 def edit_requested(frame: TaskFrame) -> bool:
-    weak_edit = "weak_edit" in frame.likely_capabilities or any(
-        cap in ("weak_tool:generate_edit", "weak_tool:run_command") for cap in frame.likely_capabilities
+    tool_hints = {str(item).strip() for item in frame.likely_needed_tools}
+    caps = {str(item).strip() for item in frame.likely_capabilities}
+    requested_outputs = {_normalise_marker(item) for item in frame.requested_outputs}
+    structured_edit_outputs = {
+        "edit_proposal",
+        "code_change_proposal",
+        "patch_proposal",
+        "implementation_" + "im" + "provement",
+    }
+    structured_edit = (
+        "generate_edit" in tool_hints
+        or "weak_tool:generate_edit" in caps
+        or "weak_edit" in caps
+        or bool(requested_outputs & structured_edit_outputs)
     )
-    return weak_edit or edit_requested_text(frame.user_goal)
+    return structured_edit or edit_requested_text(frame.user_goal)
 
 
 def edit_requested_text(text: str) -> bool:
+    # Fallback only for older callers that have not provided structured
+    # RequestUnderstanding facts. Do not expand this into language-specific
+    # request routing; prefer likely_needed_tools/requested_outputs instead.
     lowered = (text or "").lower()
-    return any(token in lowered for token in ("fix", "change", "replace", "remove", "edit", "patch", "safe", "improve", "recover")) or any(token in text for token in ("고쳐", "바꿔", "변경", "제거", "수정", "안전", "복구", "개선"))
+    return bool(re.search(r"\b(edit|patch)\b", lowered))
+
+
+def validate_visible_work_note(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    note = {
+        "goal": _safe_note_text(value.get("goal"), limit=160),
+        "why_this_action": _safe_note_text(value.get("why_this_action"), limit=260),
+        "evidence_needed": _safe_note_list(value.get("evidence_needed"), item_limit=120, max_items=6),
+        "uncertainty": _safe_note_list(value.get("uncertainty"), item_limit=140, max_items=6),
+        "safety_note": _safe_note_text(value.get("safety_note"), limit=220),
+    }
+    if not note["goal"] and not note["why_this_action"] and not note["evidence_needed"] and not note["uncertainty"] and not note["safety_note"]:
+        return None
+    return json_safe({key: item for key, item in note.items() if item not in (None, "", [], {})})
+
+
+def _action_payload_with_note(payload: dict[str, Any], visible_work_note: dict[str, Any] | None) -> dict[str, Any]:
+    if not visible_work_note:
+        return payload
+    return {**payload, "visible_work_note": visible_work_note}
+
+
+def _safe_note_text(value: Any, *, limit: int) -> str | None:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return None
+    if _contains_nonpublic_reasoning_marker(text):
+        return None
+    return text if len(text) <= limit else text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _safe_note_list(value: Any, *, item_limit: int, max_items: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = _safe_note_text(item, limit=item_limit)
+        if text:
+            out.append(text)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _normalise_marker(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _contains_nonpublic_reasoning_marker(text: str) -> bool:
+    lowered = text.lower()
+    markers = (
+        "<think>",
+        "chain-" + "of-thought",
+        "chain " + "of thought",
+        "private " + "reasoning",
+        "hidden " + "reasoning",
+    )
+    return any(marker in lowered for marker in markers)
 
 
 def likely_edit_file_queries(frame: TaskFrame) -> list[str]:
@@ -551,6 +641,8 @@ def _existing_target_files(request: AgentRunRequest, target_files: list[str]) ->
 
 def _safe_reason_summary(value: Any) -> str:
     text = " ".join(str(value or "").split())
+    if _contains_nonpublic_reasoning_marker(text):
+        return "Choose the next safe primitive action."
     return text[:180] or "Choose the next safe primitive action."
 
 
@@ -684,14 +776,7 @@ def _format_command_result(result: dict[str, Any], *, pending_commit: bool = Fal
 
 
 def _file_tokens(task: str) -> list[str]:
-    files: list[str] = []
-    for match in FILE_TOKEN_RE.finditer(task):
-        candidate = match.group(1).strip("`'\".,)")
-        if candidate.lower().startswith(("http://", "https://")):
-            continue
-        if candidate not in files:
-            files.append(candidate)
-    return files
+    return extract_file_tokens(task)
 
 
 def _dedupe(items: list[str]) -> list[str]:

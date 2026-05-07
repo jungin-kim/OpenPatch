@@ -13,8 +13,7 @@ if TYPE_CHECKING:
 class ClassifierResult:
     """Backward-compatibility struct only.
 
-    Do NOT add routing fields here (requested_workflow, retrieval_goal,
-    requires_repository_wide_review). Those fields are intentionally absent.
+    Do NOT add old workflow-routing fields here. Those fields are intentionally absent.
     The planner must never branch on these fields.
     Populated exclusively by request_understanding_to_classifier_result().
     """

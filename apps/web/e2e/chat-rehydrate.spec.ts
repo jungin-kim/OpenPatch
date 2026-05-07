@@ -23,7 +23,6 @@ import {
   mockGetAgentRun,
   mockGetAgentRunEvents,
   mockGetActiveRuns,
-  sseEvent,
 } from "./fixtures/mock-worker";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -32,12 +31,34 @@ const RUN_ID = "run_test_001";
 const THREAD_ID = "thread_test_001";
 const USER_MSG = "이 레포가 뭐 하는 프로젝트인지 알아내줘.";
 const FINAL_RESPONSE = "This repository is a local-first coding agent proxy.";
+const WORK_NOTE = "I’m inspecting the repository structure to find the best entry evidence.";
 
 const PROGRESS_EVENTS = [
-  { phase: "Thinking", label: "Loaded context", status: "completed" as const, sequence: 1 },
-  { phase: "Planning", label: "Framed request", status: "completed" as const, sequence: 2 },
-  { phase: "Searching", label: "Searching repository", status: "running" as const, sequence: 3 },
+  { phase: "Thinking", label: "Loaded context", status: "completed" as const, sequence: 1, visibility: "debug", display: "secondary" },
+  { phase: "Planning", label: "Framed request", status: "completed" as const, sequence: 2, visibility: "debug", display: "secondary" },
+  {
+    phase: "Searching",
+    label: "Inspecting repository structure",
+    status: "running" as const,
+    sequence: 3,
+    activity_id: "summary-stage-1",
+    event_type: "work_trace",
+    visibility: "user",
+    display: "primary",
+    safe_reasoning_summary: WORK_NOTE,
+  },
 ];
+
+function repoIdentityKey(repo = DEFAULT_REPO) {
+  const provider = encodeURIComponent(repo.git_provider || "local");
+  const path = encodeURIComponent((repo.project_path || "unknown").replace(/\\/g, "/").replace(/\/+$/, ""));
+  const branch = encodeURIComponent(repo.branch || "default");
+  return `${provider}:${path}:${branch}`;
+}
+
+function activeThreadKey(repo = DEFAULT_REPO) {
+  return `repooperator-active-thread:${repoIdentityKey(repo)}`;
+}
 
 function buildThread(overrides: { messages?: unknown[] } = {}) {
   return {
@@ -60,17 +81,17 @@ async function setupBaseRoutes(page: Page) {
   await mockSaveThread(page);
 
   // Provider / branch endpoints — return empty lists for local provider
-  await page.route("/api/worker/projects*", (route) =>
+  await page.route("/api/worker/provider/projects*", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [], recent_projects: [] }) }),
   );
-  await page.route("/api/worker/branches*", (route) =>
+  await page.route("/api/worker/provider/branches*", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ branches: [] }) }),
   );
-  await page.route("/api/worker/recent-projects*", (route) =>
+  await page.route("/api/worker/provider/recent-projects*", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ projects: [] }) }),
   );
   // Local branches
-  await page.route("/api/worker/local-branches*", (route) =>
+  await page.route("/api/worker/git-branches*", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -80,19 +101,17 @@ async function setupBaseRoutes(page: Page) {
 }
 
 async function setStorageForThread(page: Page, threadId: string, runId?: string, repoKey?: string) {
-  await page.evaluate(
+  await page.addInitScript(
     ({ threadId, runId, repoKey }) => {
-      // repo-scoped key (Part 2 contract)
-      if (repoKey) {
-        localStorage.setItem(repoKey, threadId);
-      } else {
-        localStorage.setItem("repooperator-active-thread-id", threadId);
-      }
+      const key = repoKey || "repooperator-active-thread:local:%2Fmock%2Frepo:main";
+      const identity = key.replace("repooperator-active-thread:", "");
+      localStorage.setItem(key, threadId);
+      localStorage.setItem("repooperator-active-repo-identity", identity);
       if (runId) {
         localStorage.setItem(`repooperator-active-run-id:${threadId}`, runId);
       }
     },
-    { threadId, runId, repoKey },
+    { threadId, runId, repoKey: repoKey || activeThreadKey() },
   );
 }
 
@@ -116,25 +135,23 @@ test("A: active thread survives navigation away and back during active run", asy
   await mockGetAgentRun(page, runRecord);
   await mockGetAgentRunEvents(page, RUN_ID, events);
 
-  await page.goto("/");
   await setStorageForThread(page, THREAD_ID, RUN_ID);
+  await page.goto("/app");
 
   // Wait for the app to load
   await page.waitForTimeout(600);
 
   // Navigate away then back (simulate page navigation)
-  await page.goto("/?tab=settings");
   await page.goto("/");
+  await page.goto("/app");
   await page.waitForTimeout(600);
 
   // The thread must still be selected (user message visible)
   await expect(page.getByText(USER_MSG)).toBeVisible({ timeout: 5000 });
 
-  // At least one progress label should appear
-  const progressVisible = await page.getByText("Loaded context").isVisible().catch(() => false)
-    || await page.getByText("Framed request").isVisible().catch(() => false)
-    || await page.getByText("Searching repository").isVisible().catch(() => false);
-  expect(progressVisible, "At least one progress label should be visible after nav-back").toBe(true);
+  await expect(page.getByText(WORK_NOTE)).toBeVisible({ timeout: 5000 });
+  await expect(page.getByText("Loaded context")).toHaveCount(0);
+  await expect(page.getByText("Framed request")).toHaveCount(0);
 
   // No duplicate assistant messages for this run
   const assistantMessages = page.locator('[data-testid="assistant-message"]');
@@ -183,8 +200,8 @@ test("B: completed run rehydrates final answer and progress from backend events"
   await mockGetAgentRun(page, completedRun);
   await mockGetAgentRunEvents(page, RUN_ID, events);
 
-  await page.goto("/");
   await setStorageForThread(page, THREAD_ID, RUN_ID);
+  await page.goto("/app");
   await page.waitForTimeout(800);
 
   // After rehydrating a completed run, the final answer should appear
@@ -221,14 +238,11 @@ test("C: progress_delta events keep run alive when assistant_delta is delayed", 
   await mockGetAgentRun(page, runRecord);
   await mockGetAgentRunEvents(page, RUN_ID, events);
 
-  await page.goto("/");
   await setStorageForThread(page, THREAD_ID, RUN_ID);
+  await page.goto("/app");
   await page.waitForTimeout(600);
 
-  // Progress labels should appear while no assistant_delta has arrived
-  const progressVisible = await page.getByText("Loaded context").isVisible().catch(() => false)
-    || await page.getByText("Framed request").isVisible().catch(() => false);
-  expect(progressVisible, "Progress card must be visible while assistant_delta is delayed").toBe(true);
+  await expect(page.getByText(WORK_NOTE)).toBeVisible({ timeout: 5000 });
 
   // No empty/blank assistant message should have been created
   const emptyAssistant = page.locator('[data-testid="assistant-message"]:has-text("")');
@@ -272,8 +286,8 @@ test("D: final_message without assistant_delta still creates assistant message",
   await mockGetAgentRun(page, completedRun);
   await mockGetAgentRunEvents(page, RUN_ID, events);
 
-  await page.goto("/");
   await setStorageForThread(page, THREAD_ID, RUN_ID);
+  await page.goto("/app");
   await page.waitForTimeout(800);
 
   await expect(page.getByText(FINAL_RESPONSE, { exact: false })).toBeVisible({ timeout: 8000 });
@@ -324,15 +338,12 @@ test("E: assistant_delta plus final_message does not duplicate the answer", asyn
   await mockGetAgentRun(page, completedRun);
   await mockGetAgentRunEvents(page, RUN_ID, events);
 
-  await page.goto("/");
   await setStorageForThread(page, THREAD_ID, RUN_ID);
+  await page.goto("/app");
   await page.waitForTimeout(800);
 
   await expect(page.getByText(FINAL_RESPONSE, { exact: false })).toBeVisible({ timeout: 8000 });
 
-  // Count occurrences of the final response string to detect duplication
-  const all = await page.getByText(FINAL_RESPONSE, { exact: false }).all();
-  // The response should appear once (or at most in the streamed + final merged bubble).
   // Detect obvious doubling: two separate assistant message containers each showing it.
   const assistantMsgs = page.locator('[data-testid="assistant-message"]');
   const count = await assistantMsgs.count();
@@ -359,12 +370,115 @@ test("F: waiting_approval and cancelling statuses keep active run visible", asyn
     await mockGetAgentRun(page, runRecord);
     await mockGetAgentRunEvents(page, RUN_ID, events);
 
-    await page.goto("/");
     await setStorageForThread(page, THREAD_ID, RUN_ID);
+    await page.goto("/app");
     await page.waitForTimeout(600);
 
     // For non-terminal statuses the run should remain active — no final answer yet
     const finalText = await page.getByText(FINAL_RESPONSE, { exact: false }).isVisible().catch(() => false);
     expect(finalText, `status=${status}: final answer must not appear for non-terminal run`).toBe(false);
   }
+});
+
+// ── Scenario G: work trace fields rehydrate and merge ────────────────────────
+
+test("G: work trace rehydrates safe summaries and merges by activity_id", async ({ page }) => {
+  const workTraceEvents = [
+    {
+      phase: "Decision",
+      label: "Chose next action",
+      status: "running" as const,
+      sequence: 1,
+      activity_id: "decision-1",
+      event_type: "work_trace",
+      visibility: "user",
+      display: "primary",
+      safe_reasoning_summary: "The user named README.md, so I will read that file before answering.",
+      current_action: "Read README.md.",
+      evidence_needed: ["README.md contents"],
+    },
+    {
+      phase: "Decision",
+      label: "Chose next action",
+      status: "completed" as const,
+      sequence: 2,
+      activity_id: "decision-1",
+      event_type: "work_trace",
+      visibility: "user",
+      display: "primary",
+      observation: "Read 12 lines.",
+      next_action: "Prepare answer from README.md.",
+      safety_note: "Read-only file access.",
+    },
+  ];
+  const finalResult = buildFinalResult(RUN_ID, THREAD_ID, FINAL_RESPONSE, workTraceEvents);
+  const completedRun = buildMockRunRecord({
+    runId: RUN_ID,
+    threadId: THREAD_ID,
+    repo: DEFAULT_REPO,
+    status: "completed",
+    finalResponse: FINAL_RESPONSE,
+    progressEvents: workTraceEvents,
+  });
+  completedRun.final_result = finalResult;
+
+  const events: unknown[] = buildProgressEvents(RUN_ID, THREAD_ID, workTraceEvents).map((event) => ({
+    ...event,
+    event_type: "work_trace",
+    hidden_reasoning: "do-not-render-hidden",
+    private_reasoning: "do-not-render-private",
+  }));
+  events.push({
+    id: `${RUN_ID}-final`,
+    run_id: RUN_ID,
+    thread_id: THREAD_ID,
+    type: "final_message",
+    event_type: "final_message",
+    result: finalResult,
+    sequence: 10,
+    timestamp: new Date().toISOString(),
+  });
+
+  await setupBaseRoutes(page);
+  await mockListThreads(page, [buildThread()]);
+  await mockOpenRepository(page, DEFAULT_REPO);
+  await mockGetActiveRuns(page, []);
+  await mockGetAgentRun(page, completedRun);
+  await mockGetAgentRunEvents(page, RUN_ID, events);
+
+  await setStorageForThread(page, THREAD_ID, RUN_ID);
+  await page.goto("/app");
+  await page.waitForTimeout(800);
+
+  await expect(page.getByText("The user named README.md", { exact: false })).toBeVisible({ timeout: 8000 });
+  await expect(page.getByText("Chose next action")).toHaveCount(0);
+  await expect(page.getByText("do-not-render-hidden")).toHaveCount(0);
+  await expect(page.getByText("do-not-render-private")).toHaveCount(0);
+});
+
+test("H: active thread storage is scoped by repo branch", async ({ page }) => {
+  const devRepo = { ...DEFAULT_REPO, branch: "dev" };
+  const mainThread = {
+    id: "thread-main",
+    title: "mock/repo main",
+    repo: DEFAULT_REPO,
+    messages: [{ id: "main-msg", role: "user", content: "main branch thread", timestamp: new Date().toISOString() }],
+  };
+  const devThread = {
+    id: "thread-dev",
+    title: "mock/repo dev",
+    repo: devRepo,
+    messages: [{ id: "dev-msg", role: "user", content: "dev branch thread", timestamp: new Date().toISOString() }],
+  };
+
+  await setupBaseRoutes(page);
+  await mockListThreads(page, [mainThread, devThread]);
+  await mockOpenRepository(page, devRepo);
+  await mockGetActiveRuns(page, []);
+
+  await setStorageForThread(page, "thread-dev", undefined, activeThreadKey(devRepo));
+  await page.goto("/app");
+
+  await expect(page.getByText("dev branch thread")).toBeVisible({ timeout: 5000 });
+  await expect(page.getByText("main branch thread")).toHaveCount(0);
 });

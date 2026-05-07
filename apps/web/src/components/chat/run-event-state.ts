@@ -40,13 +40,18 @@ export function progressStepFromEvent(
     runId: event.run_id,
     sequence: event.sequence,
     eventType: event.event_type,
+    visibility: event.visibility,
+    display: event.display,
     phase: event.phase,
     label: event.label ?? event.message,
     detail: event.detail,
     detailDelta: event.detail_delta,
     message: event.message,
     safeReasoningSummary: event.safe_reasoning_summary,
-    summaryDelta: event.summary_delta,
+    summaryDelta: event.summary_delta ?? event.safe_reasoning_summary_delta,
+    evidenceNeeded: event.evidence_needed,
+    uncertainty: event.uncertainty,
+    safetyNote: event.safety_note,
     currentAction: event.current_action,
     observation: event.observation,
     observationDelta: event.observation_delta,
@@ -60,7 +65,7 @@ export function progressStepFromEvent(
     durationMs: event.duration_ms,
     elapsedMs: event.elapsed_ms,
     files: event.files,
-    command: event.command,
+    command: event.command ?? event.related_command,
     proposalId: event.proposal_id,
   };
 }
@@ -72,12 +77,12 @@ export function mergeRunEventsIntoProgressSteps(
 ): ProgressStep[] {
   let steps: ProgressStep[] = [];
   for (const event of events || []) {
-    if (event.type !== "progress_delta" || !(event.label || event.message)) continue;
+    if (event.type !== "progress_delta" || !hasProgressStepContent(event)) continue;
     steps = mergeProgressStep(steps, progressStepFromEvent(event, options));
   }
   if (steps.length === 0 && finalResult?.activity_events?.length) {
     for (const event of finalResult.activity_events) {
-      if (event.type !== "progress_delta" || !(event.label || event.message)) continue;
+      if (event.type !== "progress_delta" || !hasProgressStepContent(event)) continue;
       steps = mergeProgressStep(steps, progressStepFromEvent(event as AgentRunEvent, options));
     }
   }
@@ -156,13 +161,29 @@ export function upsertAssistantMessageForRun(
 }
 
 export function mergeProgressStep(current: ProgressStep[], incoming: ProgressStep): ProgressStep[] {
-  if (!incoming.label && !incoming.message) return current;
+  if (!hasProgressStepContent(incoming)) return current;
   const incomingKey = progressStepIdentity(incoming, current.length);
   const existingIndex = current.findIndex((step, index) => progressStepIdentity(step, index) === incomingKey);
   if (existingIndex >= 0) {
     return current.map((step, index) => (index === existingIndex ? mergeProgressStepFields(step, incoming) : step));
   }
   return [...current, incoming];
+}
+
+function hasProgressStepContent(event: Partial<AgentRunEvent & ProgressStep>): boolean {
+  return Boolean(
+    event.label
+      || event.message
+      || event.safe_reasoning_summary
+      || event.safeReasoningSummary
+      || event.current_action
+      || event.currentAction
+      || event.observation
+      || event.next_action
+      || event.nextAction
+      || event.safety_note
+      || event.safetyNote,
+  );
 }
 
 export function maxEventSequence(events?: AgentRunEvent[]): number {
@@ -191,6 +212,9 @@ function mergeProgressStepFields(existing: ProgressStep, incoming: ProgressStep)
     observation: incoming.observation ?? appendDelta(existing.observation, incoming.observationDelta),
     nextAction: incoming.nextAction ?? appendDelta(existing.nextAction, incoming.nextActionDelta),
     safeReasoningSummary: incoming.safeReasoningSummary ?? appendDelta(existing.safeReasoningSummary, incoming.summaryDelta),
+    evidenceNeeded: mergeStringLists(existing.evidenceNeeded, incoming.evidenceNeeded),
+    uncertainty: mergeStringLists(existing.uncertainty, incoming.uncertainty),
+    safetyNote: incoming.safetyNote ?? existing.safetyNote,
   };
 }
 
@@ -198,4 +222,12 @@ function appendDelta(base?: string | null, delta?: string | null): string | unde
   const current = base || "";
   if (!delta) return current || undefined;
   return `${current}${delta}`;
+}
+
+function mergeStringLists(existing?: string[], incoming?: string[]): string[] | undefined {
+  const merged: string[] = [];
+  for (const item of [...(existing || []), ...(incoming || [])]) {
+    if (item && !merged.includes(item)) merged.push(item);
+  }
+  return merged.length ? merged : undefined;
 }

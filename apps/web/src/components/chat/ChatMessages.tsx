@@ -14,6 +14,7 @@ import {
   type ProposalStatus,
 } from "./ProposalCard";
 import { ProgressTimeline, type ProgressStep } from "./ProgressTimeline";
+import { workTraceSummary } from "./work-trace-display";
 
 export type ChatMessage = {
   id: string;
@@ -273,24 +274,6 @@ function ToolCard({ metadata }: { metadata: AgentRunPayload }) {
               <span className="tool-meta-value">{metadata.agent_flow}</span>
             </div>
           )}
-          {metadata.intent_classification && (
-            <div className="tool-meta-item">
-              <span className="tool-meta-label">Intent</span>
-              <span className="tool-meta-value">{metadata.intent_classification}</span>
-            </div>
-          )}
-          {metadata.classifier && (
-            <div className="tool-meta-item">
-              <span className="tool-meta-label">Classifier</span>
-              <span className="tool-meta-value">{metadata.classifier}</span>
-            </div>
-          )}
-          {metadata.classifier_confidence !== undefined && metadata.classifier_confidence !== null && (
-            <div className="tool-meta-item">
-              <span className="tool-meta-label">Classifier confidence</span>
-              <span className="tool-meta-value">{Math.round(metadata.classifier_confidence * 100)}%</span>
-            </div>
-          )}
           {metadata.validation_status && (
             <div className="tool-meta-item">
               <span className="tool-meta-label">Validation</span>
@@ -456,7 +439,6 @@ interface ChatMessagesProps {
   questionPending: boolean;
   progressSteps?: ProgressStep[];
   streamedAnswer?: string;
-  streamedReasoning?: string;
   gitProvider: string;
   writeMode?: "basic" | "auto_review" | "full_access";
   onProposalStatusChange?: (id: string, status: ProposalStatus, message?: string) => void;
@@ -470,7 +452,6 @@ export function ChatMessages({
   questionPending,
   progressSteps = [],
   streamedAnswer = "",
-  streamedReasoning = "",
   gitProvider,
   writeMode = "basic",
   onProposalStatusChange,
@@ -482,7 +463,7 @@ export function ChatMessages({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, questionPending, streamedAnswer, streamedReasoning]);
+  }, [messages, questionPending, streamedAnswer]);
 
   const activeProvider = repoResult?.git_provider || gitProvider;
   const providerLabel =
@@ -520,12 +501,8 @@ export function ChatMessages({
     if (message.progressSteps?.length) {
       lines.push("Work log:");
       for (const step of message.progressSteps) {
-        lines.push(`- ${step.phase || "Activity"}: ${step.label || step.message || "Worked"}${step.detail ? ` — ${step.detail}` : ""}`);
+        lines.push(`- ${workTraceSummary(step)}${step.detail ? ` - ${step.detail}` : ""}`);
       }
-    }
-    if (message.metadata?.reasoning) {
-      lines.push("Reasoning / Thinking:");
-      lines.push(message.metadata.reasoning);
     }
     if (message.metadata?.selected_target_file) {
       lines.push(`Target file: ${message.metadata.selected_target_file}`);
@@ -613,6 +590,7 @@ export function ChatMessages({
             <div
               key={msg.id}
               className={`message-group message-group-${msg.role}`}
+              data-testid={msg.role === "assistant" ? "assistant-message" : undefined}
             >
               <div className="message-meta-row">
                 <span className="message-role-label">{speakerLabel(msg)}</span>
@@ -690,12 +668,6 @@ export function ChatMessages({
                     <ProgressTimeline steps={msg.progressSteps} done={true} />
                   ) : null}
                   <ChangedFilesArchive records={msg.metadata?.edit_archive} />
-                  {msg.metadata?.reasoning ? (
-                    <details className="reasoning-panel">
-                      <summary>Reasoning / Thinking</summary>
-                      <pre>{msg.metadata.reasoning}</pre>
-                    </details>
-                  ) : null}
                   <MarkdownContent content={msg.content} />
                 </div>
               ) : msg.role === "system" ? (
@@ -714,12 +686,6 @@ export function ChatMessages({
               {progressSteps.length > 0 ? (
                 <>
                   <ProgressTimeline steps={progressSteps} done={false} />
-                  {streamedReasoning ? (
-                    <details className="reasoning-panel">
-                      <summary>Reasoning / Thinking</summary>
-                      <pre>{streamedReasoning}</pre>
-                    </details>
-                  ) : null}
                   {streamedAnswer ? (
                     <div className="message-bubble message-bubble-md">
                       <MarkdownContent content={streamedAnswer} />

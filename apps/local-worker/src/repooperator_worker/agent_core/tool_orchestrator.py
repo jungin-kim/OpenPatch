@@ -16,6 +16,7 @@ from repooperator_worker.agent_core.tools.base import (
     agent_action_to_tool_payload,
     tool_result_to_action_result,
 )
+from repooperator_worker.agent_core.events import append_work_trace
 from repooperator_worker.agent_core.tools.registry import ToolRegistry, get_default_tool_registry
 from repooperator_worker.schemas import AgentRunRequest
 from repooperator_worker.services.active_repository import get_active_repository
@@ -46,6 +47,12 @@ class ToolOrchestrator:
 
     def execute_action(self, action: AgentAction) -> ActionResult:
         started = time.perf_counter()
+        tool = None
+        try:
+            tool = self.registry.get(action.type)
+        except Exception:
+            tool = None
+        self._emit_tool_trace(action, status="running", tool_name=action.type)
         try:
             result = self.execute_tool(action.type, agent_action_to_tool_payload(action))
         except Exception as exc:  # noqa: BLE001
@@ -56,6 +63,8 @@ class ToolOrchestrator:
                 payload={"errors": [safe_repr(exc, limit=500)]},
             )
         result.duration_ms = int((time.perf_counter() - started) * 1000)
+        summary = tool.summarize_result(result) if tool else result.observation
+        self._emit_tool_trace(action, status=_trace_status(result.status), tool_name=result.tool_name, observation=summary, result=result)
         action_result = tool_result_to_action_result(action, result)
         if "errors" in result.payload and action_result.status == "failed":
             action_result.errors = [str(item) for item in result.payload.get("errors") or []]
@@ -231,6 +240,35 @@ class ToolOrchestrator:
             updated = replace(updated, payload=payload)
         return updated
 
+    def _emit_tool_trace(
+        self,
+        action: AgentAction,
+        *,
+        status: str,
+        tool_name: str,
+        observation: str | None = None,
+        result: ToolResult | None = None,
+    ) -> None:
+        phase = _tool_phase(action.type, result.status if result else None)
+        files = list((result.files_read if result else None) or action.target_files or [])
+        command = action.command or (result.command_result.get("command") if result and result.command_result else None)
+        append_work_trace(
+            run_id=self.run_id,
+            request=self.request,
+            activity_id=f"action:{action.action_id}",
+            phase=phase,
+            label=_tool_label(action.type),
+            status=status,
+            safe_reasoning_summary=None,
+            current_action=_tool_current_action(action, tool_name),
+            observation=observation,
+            next_action=result.next_recommended_action if result else action.expected_output,
+            safety_note=_tool_safety_note(action.type, result),
+            related_files=files,
+            command=command,
+            aggregate={"tool": tool_name, "action_type": action.type},
+        )
+
 
 def _truncate_payload(value: Any, *, max_chars: int) -> Any:
     if isinstance(value, str):
@@ -262,3 +300,62 @@ def _truncate_payload(value: Any, *, max_chars: int) -> Any:
 
 def _child_limit(remaining: int, max_chars: int) -> int:
     return max(32, min(max_chars, max(1, remaining // 2)))
+
+
+def _trace_status(status: str) -> str:
+    if status == "waiting_approval":
+        return "waiting"
+    if status in {"success", "skipped"}:
+        return "completed"
+    return status
+
+
+def _tool_phase(action_type: str, result_status: str | None = None) -> str:
+    if result_status == "waiting_approval" or action_type in {"preview_command", "inspect_git_state", "run_approved_command"}:
+        return "Safety"
+    if action_type in {"search_files", "search_text", "inspect_repo_tree"}:
+        return "Searching"
+    if action_type == "read_file":
+        return "Reading files"
+    if action_type == "generate_edit":
+        return "Editing"
+    if action_type == "final_answer":
+        return "Finished"
+    return "Observing"
+
+
+def _tool_label(action_type: str) -> str:
+    labels = {
+        "inspect_repo_tree": "Inspecting repository structure",
+        "search_files": "Searching file names",
+        "search_text": "Searching file contents",
+        "read_file": "Reading repository files",
+        "generate_edit": "Preparing proposal-only edit",
+        "preview_command": "Checking command safety",
+        "inspect_git_state": "Checking command safety",
+        "run_approved_command": "Running approved command",
+        "analyze_repository": "Reviewing repository evidence",
+        "ask_clarification": "Preparing clarification",
+        "final_answer": "Preparing final answer",
+    }
+    return labels.get(action_type, action_type.replace("_", " ").title())
+
+
+def _tool_current_action(action: AgentAction, tool_name: str) -> str:
+    if action.type == "read_file" and action.target_files:
+        return "Reading " + ", ".join(action.target_files[:6]) + "."
+    if action.type == "generate_edit" and action.target_files:
+        return "Preparing a proposal-only patch for " + ", ".join(action.target_files[:4]) + "."
+    if action.type in {"preview_command", "inspect_git_state", "run_approved_command"} and action.command:
+        return "Checking command through policy: " + " ".join(action.command)
+    return f"Running `{tool_name}`."
+
+
+def _tool_safety_note(action_type: str, result: ToolResult | None) -> str | None:
+    if result and result.status == "waiting_approval":
+        return "This command may change repository state, so approval is required before running it."
+    if action_type == "generate_edit":
+        return "This action only creates a proposed patch and does not write files."
+    if action_type in {"preview_command", "inspect_git_state", "run_approved_command"}:
+        return "Command safety is enforced by policy before execution."
+    return None

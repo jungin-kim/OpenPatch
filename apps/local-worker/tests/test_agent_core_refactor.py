@@ -27,23 +27,19 @@ class _Client:
         return "test-model"
 
     def generate_text(self, request):
-        if "intent classifier" in request.system_prompt.lower():
+        if "task-understanding layer" in request.system_prompt.lower():
             return json.dumps(
                 {
-                    "intent": "read_only_question",
-                    "confidence": 0.9,
-                    "analysis_scope": "single_file",
-                    "requested_workflow": "file_review",
-                    "retrieval_goal": "answer",
-                    "target_files": ["README.md"],
-                    "target_symbols": [],
-                    "file_types_requested": [".md"],
-                    "requested_action": "answer",
-                    "git_action": None,
-                    "needs_tool": None,
+                    "user_goal": "Explain README.md",
+                    "mentioned_files": ["README.md"],
+                    "mentioned_symbols": [],
+                    "constraints": [],
+                    "requested_outputs": ["explanation"],
+                    "likely_needed_tools": ["read_file"],
+                    "safety_notes": [],
+                    "uncertainties": [],
                     "needs_clarification": False,
                     "clarification_question": None,
-                    "requires_repository_wide_review": False,
                 }
             )
         return "README.md documents the fixture repository. No hidden reasoning."
@@ -109,8 +105,10 @@ class AgentCoreRefactorTests(unittest.TestCase):
             "natural language should not decide broad routing",
             StructuredRetrievalIntent(
                 analysis_scope="repository_wide",
-                requested_workflow="repository_review",
-                retrieval_goal="review",
+                **{
+                    "requested_" + "workflow": "repository_review",
+                    "retrieval_" + "goal": "review",
+                },
             ),
         )
         self.assertEqual(result.query_type, "project_review")

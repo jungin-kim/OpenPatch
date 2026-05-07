@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import inspect
 import sys
 import unittest
 from pathlib import Path
@@ -32,6 +33,8 @@ from repooperator_worker.agent_core.request_understanding import (  # noqa: E402
     request_understanding_to_classifier_result,
     understand_request,
 )
+from repooperator_worker.agent_core.request_parsing import extract_file_tokens  # noqa: E402
+from repooperator_worker.agent_core.planner import TaskFrame, edit_requested, edit_requested_text  # noqa: E402
 from repooperator_worker.schemas import AgentRunRequest  # noqa: E402
 
 
@@ -58,6 +61,7 @@ class TestRequestUnderstandingDataclass(unittest.TestCase):
         self.assertEqual(ru.uncertainties, [])
         self.assertFalse(ru.needs_clarification)
         self.assertIsNone(ru.clarification_question)
+        self.assertIsNone(ru.legacy_intent)
 
     def test_has_no_routing_fields(self):
         ru = RequestUnderstanding()
@@ -76,6 +80,13 @@ class TestRequestUnderstandingDataclass(unittest.TestCase):
 
 
 class TestDeterministicExtraction(unittest.TestCase):
+
+    def test_file_token_helper_is_shared_without_planner_dependency(self):
+        self.assertEqual(extract_file_tokens("Check README.md and src/app.py"), ["README.md", "src/app.py"])
+        import repooperator_worker.agent_core.request_understanding as module
+
+        source = inspect.getsource(module)
+        self.assertNotIn("agent_core.planner import", source)
 
     def test_file_tokens_extracted_from_task(self):
         ru = _build_understanding({}, _req(task="Please explain README.md and app.py"))
@@ -124,6 +135,32 @@ class TestLikelyNeededToolsConstraint(unittest.TestCase):
     def test_empty_tool_hints_allowed(self):
         ru = _build_understanding({}, _req())
         self.assertEqual(ru.likely_needed_tools, [])
+
+
+class TestStructuredEditDetection(unittest.TestCase):
+
+    def test_korean_recover_task_is_edit_like_from_tool_hint(self):
+        frame = TaskFrame(
+            user_goal="세이브 파일 깨졌을 때 복구 가능하게 해줘.",
+            likely_needed_tools=["search_text", "read_file", "generate_edit"],
+            requested_outputs=["code_change_proposal"],
+        )
+        self.assertTrue(edit_requested(frame))
+        self.assertFalse(edit_requested_text(frame.user_goal))
+
+    def test_korean_improve_task_is_edit_like_from_requested_output(self):
+        frame = TaskFrame(
+            user_goal="저장 쪽 위험한 코드 찾아서 개선안 줘.",
+            likely_needed_tools=["search_files", "read_file"],
+            requested_outputs=["code_review", "edit_proposal"],
+        )
+        self.assertTrue(edit_requested(frame))
+        self.assertFalse(edit_requested_text(frame.user_goal))
+
+    def test_edit_requested_text_fallback_is_not_expanded_keyword_list(self):
+        source = inspect.getsource(edit_requested_text)
+        for token in ("복구", "개선", "recover", "improve", "harden", "stabilize", "cleanup"):
+            self.assertNotIn(token, source)
 
 
 class TestUnderstandRequestFallback(unittest.TestCase):

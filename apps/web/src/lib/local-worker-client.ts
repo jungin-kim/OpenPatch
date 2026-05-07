@@ -229,13 +229,19 @@ export type AgentActivityEvent = {
   timestamp?: string | null;
   persisted?: boolean;
   event_type?: string | null;
+  visibility?: "user" | "debug" | "internal" | string | null;
+  display?: "primary" | "secondary" | "hidden" | string | null;
   phase?: string;
   label?: string;
   detail?: string;
   detail_delta?: string | null;
   message?: string;
   safe_reasoning_summary?: string | null;
+  safe_reasoning_summary_delta?: string | null;
   summary_delta?: string | null;
+  evidence_needed?: string[];
+  uncertainty?: string[];
+  safety_note?: string | null;
   current_action?: string | null;
   observation?: string | null;
   observation_delta?: string | null;
@@ -249,7 +255,8 @@ export type AgentActivityEvent = {
   duration_ms?: number | null;
   elapsed_ms?: number | null;
   files?: string[];
-  command?: string | null;
+  command?: string | string[] | null;
+  related_command?: string | string[] | null;
   proposal_id?: string | null;
 };
 

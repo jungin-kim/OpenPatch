@@ -48,6 +48,7 @@ import {
   assistantTextFromRunEvents,
   finalResultFromRunEvents,
   isActiveRunStatus,
+  isTerminalRunStatus,
   maxEventSequence,
   mergeProgressStep,
   mergeRunEventsIntoProgressSteps,
@@ -56,6 +57,14 @@ import {
   upsertAssistantMessageForRun,
   type AgentRunEvent,
 } from "./run-event-state";
+import {
+  ACTIVE_REPO_IDENTITY_KEY,
+  LEGACY_ACTIVE_THREAD_KEY,
+  activeThreadStorageKey,
+  activeThreadStorageKeyForIdentity,
+  repoIdentityKey,
+  repoMatchesIdentity,
+} from "./thread-persistence";
 
 type ConnectionState = "checking" | "connected" | "unavailable";
 type ThreadStoreState = "loading" | "connected" | "saving" | "unavailable";
@@ -131,7 +140,6 @@ export function ChatApp() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [streamedAnswer, setStreamedAnswer] = useState("");
-  const [streamedReasoning, setStreamedReasoning] = useState("");
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -140,10 +148,16 @@ export function ChatApp() {
   const queuedMessagesRef = useRef<QueuedMessage[]>([]);
   const activeThreadIdRef = useRef<string | null>(null);
   const activeRunLastSequenceRef = useRef<Record<string, number>>({});
+  const activeRunByThreadRef = useRef<Record<string, string>>({});
   const threadsRef = useRef<ChatThread[]>([]);
-  // Tracks (threadId, runId) we have already rehydrated to avoid looping when
-  // rememberActiveRun mutates activeRunByThread inside the rehydrate effect.
-  const lastRehydratedRef = useRef<{ threadId: string; runId: string } | null>(null);
+  const repoResultRef = useRef<RepoOpenPayload | null>(null);
+  const lastRehydratedRef = useRef<{
+    repoIdentity: string;
+    threadId: string;
+    runId: string;
+    maxSequence: number;
+    status: string;
+  } | null>(null);
 
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
@@ -153,6 +167,14 @@ export function ChatApp() {
     threadsRef.current = threads;
   }, [threads]);
 
+  useEffect(() => {
+    activeRunByThreadRef.current = activeRunByThread;
+  }, [activeRunByThread]);
+
+  useEffect(() => {
+    repoResultRef.current = repoResult;
+  }, [repoResult]);
+
   function mergeProgressEvents(
     current: ProgressStep[],
     events: AgentRunEvent[] | undefined,
@@ -160,7 +182,7 @@ export function ChatApp() {
   ): ProgressStep[] {
     let next = current;
     for (const event of events || []) {
-      if (event.type !== "progress_delta" || !(event.label || event.message)) continue;
+      if (event.type !== "progress_delta") continue;
       const step = progressStepFromEvent(event, options);
       next = mergeProgressStep(next, step);
     }
@@ -196,23 +218,11 @@ export function ChatApp() {
     // Clear transient stream state only after the run is fully finalized.
     setProgressSteps([]);
     setStreamedAnswer("");
-    setStreamedReasoning("");
   }
 
   function activeRunStorageKey(threadId: string) {
     return `repooperator-active-run-id:${threadId}`;
   }
-
-  // Returns a storage key scoped to the given repo identity so switching repos
-  // never restores a thread that belongs to a different repository.
-  function activeThreadStorageKey(repo?: RepoOpenPayload | null): string {
-    if (!repo) return "repooperator-active-thread-id";
-    const provider = repo.git_provider || "local";
-    const path = (repo.project_path || "").replace(/[^a-zA-Z0-9_\-/.]/g, "_");
-    return `repooperator-active-thread:${provider}:${path}`;
-  }
-
-  const LEGACY_THREAD_KEY = "repooperator-active-thread-id";
 
   function rememberActiveRun(runId: string | null, threadId = activeThreadId) {
     if (!threadId) return;
@@ -221,6 +231,7 @@ export function ChatApp() {
       const next = { ...current };
       if (runId) next[threadId] = runId;
       else delete next[threadId];
+      activeRunByThreadRef.current = next;
       return next;
     });
     if (runId) {
@@ -232,14 +243,18 @@ export function ChatApp() {
 
   function rememberActiveThread(threadId: string | null, repo?: RepoOpenPayload | null) {
     setActiveThreadId(threadId);
-    const scopedKey = activeThreadStorageKey(repo ?? repoResult);
-    if (threadId) {
+    const targetRepo = repo ?? repoResult;
+    if (threadId && targetRepo) {
+      const identity = repoIdentityKey(targetRepo);
+      const scopedKey = activeThreadStorageKeyForIdentity(identity);
       window.localStorage.setItem(scopedKey, threadId);
-      // Remove legacy global key to avoid cross-repo restoration on next load.
-      window.localStorage.removeItem(LEGACY_THREAD_KEY);
+      window.localStorage.setItem(ACTIVE_REPO_IDENTITY_KEY, identity);
+      window.localStorage.removeItem(LEGACY_ACTIVE_THREAD_KEY);
     } else {
-      window.localStorage.removeItem(scopedKey);
-      window.localStorage.removeItem(LEGACY_THREAD_KEY);
+      if (targetRepo) {
+        window.localStorage.removeItem(activeThreadStorageKey(targetRepo));
+      }
+      window.localStorage.removeItem(LEGACY_ACTIVE_THREAD_KEY);
     }
   }
 
@@ -334,6 +349,7 @@ export function ChatApp() {
         for (const run of payload.runs) {
           if (run.thread_id) next[run.thread_id] = run.id;
         }
+        activeRunByThreadRef.current = next;
         setActiveRunByThread(next);
       } catch {
         // Active run indicators are a convenience; chat can still operate without them.
@@ -353,18 +369,26 @@ export function ChatApp() {
     let cancelled = false;
     async function rehydrateRun() {
       try {
+        const thread = threadsRef.current.find((item) => item.id === threadId);
+        const repoIdentity = thread?.repoResult
+          ? repoIdentityKey(thread.repoResult)
+          : repoResultRef.current
+            ? repoIdentityKey(repoResultRef.current)
+            : "unknown";
         const activeRuns = await getActiveAgentRuns(threadId).catch(() => ({ runs: [] }));
         const savedRunId = window.localStorage.getItem(activeRunStorageKey(threadId));
-        // Read activeRunByThread via ref to avoid re-triggering this effect.
-        const knownRunId = activeRunByThread[threadId];
+        const knownRunId = activeRunByThreadRef.current[threadId];
         const runId = knownRunId || savedRunId || activeRuns.runs[0]?.id;
         if (!runId) return;
-        // Skip re-fetch if we already rehydrated this (threadId, runId) pair.
-        // rememberActiveRun mutates activeRunByThread which would otherwise re-fire
-        // this effect; the ref guard prevents that loop.
         const lastRehydrated = lastRehydratedRef.current;
-        if (lastRehydrated?.threadId === threadId && lastRehydrated?.runId === runId) return;
-        lastRehydratedRef.current = { threadId, runId };
+        if (
+          lastRehydrated?.repoIdentity === repoIdentity
+          && lastRehydrated.threadId === threadId
+          && lastRehydrated.runId === runId
+          && isTerminalRunStatus(lastRehydrated.status)
+        ) {
+          return;
+        }
         const [run, eventPayload] = await Promise.all([
           getAgentRun(runId),
           getAgentRunEvents(runId),
@@ -372,7 +396,19 @@ export function ChatApp() {
         if (cancelled) return;
         const events = eventPayload.events as AgentRunEvent[];
         const finalResult = finalResultFromRunEvents(events, run.final_result);
-        activeRunLastSequenceRef.current[runId] = maxEventSequence(events);
+        const maxSequence = maxEventSequence(events);
+        const status = String(run.status || "");
+        if (
+          lastRehydrated?.repoIdentity === repoIdentity
+          && lastRehydrated.threadId === threadId
+          && lastRehydrated.runId === runId
+          && lastRehydrated.maxSequence === maxSequence
+          && lastRehydrated.status === status
+        ) {
+          return;
+        }
+        lastRehydratedRef.current = { repoIdentity, threadId, runId, maxSequence, status };
+        activeRunLastSequenceRef.current[runId] = maxSequence;
         if (isActiveRunStatus(run.status)) {
           setProgressSteps(mergeRunEventsIntoProgressSteps(events, finalResult));
           setStreamedAnswer(assistantTextFromRunEvents(events, null));
@@ -390,9 +426,8 @@ export function ChatApp() {
     return () => {
       cancelled = true;
     };
-    // Deliberately omit activeRunByThread from deps — we read it inside but do not
-    // want mutations to activeRunByThread (from rememberActiveRun) to re-trigger this
-    // effect.  The lastRehydratedRef guard ensures idempotency.
+    // Deliberately omit activeRunByThread from deps: the ref keeps the latest
+    // map available without letting rememberActiveRun cause rehydrate loops.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThreadId]);
 
@@ -429,7 +464,10 @@ export function ChatApp() {
             // up-to-date when finalizeRunInUi clears the transient state.
             setProgressSteps((current) => mergeProgressEvents(current, events, { finalizeRunning: true }));
             delete activeRunLastSequenceRef.current[activeRunId];
-            const finalThreadId = activeThreadIdRef.current || "";
+            const finalThreadId =
+              Object.entries(activeRunByThreadRef.current).find(([, runId]) => runId === activeRunId)?.[0]
+              || activeThreadIdRef.current
+              || "";
             finalizeRunInUi(activeRunId, finalThreadId, finalResult, completedSteps);
           } else {
             setProgressSteps((current) => mergeProgressEvents(current, events));
@@ -458,20 +496,8 @@ export function ChatApp() {
         threadsRef.current = loadedThreads;
         setThreads(loadedThreads);
         if (!activeThreadIdRef.current && loadedThreads.length > 0) {
-          // Try repo-scoped key for the first thread's repo, then legacy fallback.
-          const firstRepo = loadedThreads[0]?.repoResult;
-          const scopedId = firstRepo ? window.localStorage.getItem(activeThreadStorageKey(firstRepo)) : null;
-          const legacyId = window.localStorage.getItem(LEGACY_THREAD_KEY);
-          const savedThreadId = scopedId ?? legacyId;
-          const matchedThread = loadedThreads.find((thread) => thread.id === savedThreadId);
-          // Use the matched thread; fallback to first thread.
-          const safeRestored = matchedThread ?? loadedThreads[0];
-          restoreThreadSnapshot(safeRestored);
-          // Migrate legacy key to repo-scoped key after successful restore.
-          if (legacyId && !scopedId && safeRestored.repoResult) {
-            window.localStorage.removeItem(LEGACY_THREAD_KEY);
-            window.localStorage.setItem(activeThreadStorageKey(safeRestored.repoResult), safeRestored.id);
-          }
+          const restored = findThreadToRestore(loadedThreads);
+          restoreThreadSnapshot(restored);
         }
         setThreadStoreState("connected");
       } catch {
@@ -691,6 +717,42 @@ export function ChatApp() {
     };
   }
 
+  function findThreadToRestore(loadedThreads: ChatThread[]): ChatThread {
+    const currentRepoIdentity = repoResultRef.current
+      ? repoIdentityKey(repoResultRef.current)
+      : window.localStorage.getItem(ACTIVE_REPO_IDENTITY_KEY);
+
+    if (currentRepoIdentity) {
+      const scopedKey = activeThreadStorageKeyForIdentity(currentRepoIdentity);
+      const scopedThreadId = window.localStorage.getItem(scopedKey);
+      const scopedThread = loadedThreads.find(
+        (thread) => thread.id === scopedThreadId && repoMatchesIdentity(thread.repoResult, currentRepoIdentity),
+      );
+      if (scopedThread) return scopedThread;
+      if (scopedThreadId) window.localStorage.removeItem(scopedKey);
+    }
+
+    const legacyThreadId = window.localStorage.getItem(LEGACY_ACTIVE_THREAD_KEY);
+    if (legacyThreadId) {
+      const legacyThread = loadedThreads.find((thread) => thread.id === legacyThreadId);
+      const legacyMatchesCurrentRepo =
+        legacyThread && (!currentRepoIdentity || repoMatchesIdentity(legacyThread.repoResult, currentRepoIdentity));
+      window.localStorage.removeItem(LEGACY_ACTIVE_THREAD_KEY);
+      if (legacyThread && legacyMatchesCurrentRepo) {
+        const identity = repoIdentityKey(legacyThread.repoResult);
+        window.localStorage.setItem(activeThreadStorageKeyForIdentity(identity), legacyThread.id);
+        window.localStorage.setItem(ACTIVE_REPO_IDENTITY_KEY, identity);
+        return legacyThread;
+      }
+    }
+
+    if (currentRepoIdentity) {
+      const sameRepoThread = loadedThreads.find((thread) => repoMatchesIdentity(thread.repoResult, currentRepoIdentity));
+      if (sameRepoThread) return sameRepoThread;
+    }
+    return loadedThreads[0];
+  }
+
   function restoreThreadSnapshot(thread: ChatThread) {
     setGitProvider(thread.repoResult.git_provider);
     setUseAdvanced(thread.repoResult.git_provider === "local");
@@ -701,13 +763,12 @@ export function ChatApp() {
     setRepoResult(thread.repoResult);
     setMessages(thread.messages);
     rememberActiveThread(thread.id, thread.repoResult);
-    const threadRunId = activeRunByThread[thread.id] || window.localStorage.getItem(activeRunStorageKey(thread.id));
+    const threadRunId = activeRunByThreadRef.current[thread.id] || window.localStorage.getItem(activeRunStorageKey(thread.id));
     setActiveRunId(threadRunId || null);
     setQuestionPending(Boolean(threadRunId));
     if (!threadRunId) {
       setProgressSteps([]);
       setStreamedAnswer("");
-      setStreamedReasoning("");
     }
   }
 
@@ -937,9 +998,33 @@ export function ChatApp() {
     try {
       const payload = await openRepository(openInput);
       if (!isActiveRepositoryOpenRequest(requestId)) return;
+      const identity = repoIdentityKey(payload);
+      const savedThreadId = window.localStorage.getItem(activeThreadStorageKeyForIdentity(identity));
+      const existingThread = threadsRef.current.find(
+        (thread) =>
+          repoMatchesIdentity(thread.repoResult, identity)
+          && (!savedThreadId || thread.id === savedThreadId),
+      );
+      if (existingThread) {
+        const restoredThread = {
+          ...existingThread,
+          repoResult: payload,
+          updatedAt: new Date(),
+        };
+        setRepoResult(payload);
+        setMessages(restoredThread.messages);
+        rememberActiveThread(restoredThread.id, payload);
+        rememberThread(restoredThread);
+        void persistThread(restoredThread);
+        setRecentProjectHistory((prev) => mergeRecentProject(prev, payload));
+        clearRepositoryOpenProgress(requestId);
+        await refreshLocalBranchesForRepo(payload);
+        await refreshHealthCheck();
+        return;
+      }
       const nextMessages = [buildSwitchMessage(payload)];
       const nextThread: ChatThread = {
-        id: `${Date.now()}-${payload.git_provider}-${payload.project_path}`,
+        id: `${Date.now()}-${payload.git_provider}-${payload.project_path}-${payload.branch || "default"}`,
         title: buildThreadTitle(payload),
         repoResult: payload,
         messages: nextMessages,
@@ -974,7 +1059,6 @@ export function ChatApp() {
     setQuestionPending(true);
     if (activeThreadIdRef.current === runThreadId) setProgressSteps([]);
     setStreamedAnswer("");
-    setStreamedReasoning("");
 
     const userMessage: ChatMessage = {
       id: `${Date.now()}-user`,
@@ -1042,7 +1126,7 @@ export function ChatApp() {
         } else if (event.type === "assistant_delta") {
           if (activeThreadIdRef.current === runThreadId) setStreamedAnswer((prev) => prev + event.delta);
         } else if (event.type === "reasoning_delta") {
-          if (activeThreadIdRef.current === runThreadId) setStreamedReasoning((prev) => prev + event.delta);
+          continue;
         } else if (event.type === "done") {
           payload = event.result;
         } else if (event.type === "final_message") {
@@ -1099,6 +1183,7 @@ export function ChatApp() {
       }
 
       const responseRunId = payload.run_id || activeRunId || null;
+      if (responseRunId) rememberActiveRun(null, runThreadId);
       const nextMessages = responseRunId
         ? upsertAssistantMessageForRun(messagesWithUser, responseRunId, assistantMessage)
         : [...messagesWithUser, assistantMessage];
@@ -1133,7 +1218,6 @@ export function ChatApp() {
         setQuestionPending(false);
         setProgressSteps([]);
         setStreamedAnswer("");
-        setStreamedReasoning("");
       }
     }
   }
@@ -1248,7 +1332,7 @@ export function ChatApp() {
       },
     ];
     const nextThread: ChatThread = {
-      id: `${Date.now()}-${repoResult.git_provider}-${repoResult.project_path}`,
+      id: `${Date.now()}-${repoResult.git_provider}-${repoResult.project_path}-${repoResult.branch || "default"}`,
       title: buildThreadTitle(repoResult),
       repoResult,
       messages: nextMessages,
@@ -1290,13 +1374,12 @@ export function ChatApp() {
       rememberActiveThread(thread.id, reopened);
       setRepoResult(reopened);
       setMessages(thread.messages);
-      const threadRunId = activeRunByThread[thread.id] || window.localStorage.getItem(activeRunStorageKey(thread.id));
+      const threadRunId = activeRunByThreadRef.current[thread.id] || window.localStorage.getItem(activeRunStorageKey(thread.id));
       setActiveRunId(threadRunId || null);
       setQuestionPending(Boolean(threadRunId));
       if (!threadRunId) {
         setProgressSteps([]);
         setStreamedAnswer("");
-        setStreamedReasoning("");
       }
       await refreshLocalBranchesForRepo(reopened);
       setThreads((prev) =>
@@ -1358,6 +1441,7 @@ export function ChatApp() {
         head_sha: result.head_sha || repoResult.head_sha,
       };
       setRepoResult(updated);
+      if (activeThreadIdRef.current) rememberActiveThread(activeThreadIdRef.current, updated);
       updateActiveThread(messages, updated);
       await refreshLocalBranchesForRepo(updated);
     } catch (error) {
@@ -1429,6 +1513,7 @@ export function ChatApp() {
       setRepoResult(updated);
       setSelectedBranch(result.branch);
       setManualBranch(result.branch);
+      if (activeThreadIdRef.current) rememberActiveThread(activeThreadIdRef.current, updated);
       updateActiveThread(messages, updated);
       await refreshLocalBranchesForRepo(updated);
     } catch (error) {
@@ -1508,7 +1593,6 @@ export function ChatApp() {
           ...(metadata ?? {}),
           response_type: "assistant_answer",
           response: summary.response,
-          reasoning: summary.reasoning ?? null,
           files_read: [proposal.relativePath],
         } as AgentRunPayload,
       };
@@ -1627,7 +1711,6 @@ export function ChatApp() {
           questionPending={questionPending}
           progressSteps={progressSteps}
           streamedAnswer={streamedAnswer}
-          streamedReasoning={streamedReasoning}
           gitProvider={gitProvider}
           writeMode={writeMode}
           onProposalStatusChange={handleProposalStatusChange}
