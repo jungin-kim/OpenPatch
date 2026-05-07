@@ -7,6 +7,7 @@ from difflib import unified_diff
 from pathlib import Path
 from typing import Any
 
+from repooperator_worker.agent_core.command_security import validate_argv_shape
 from repooperator_worker.agent_core.events import append_activity_event
 from repooperator_worker.agent_core.policies import command_policy_preview, validate_repo_file
 from repooperator_worker.agent_core.repository_review import run_repository_review as _run_repository_review
@@ -258,8 +259,17 @@ class PreviewCommandTool(BaseTool):
     )
 
     def call(self, payload: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
-        command = list(payload.get("command") or ["git", "status", "--short"])
+        raw_command = _command_from_payload(payload, default=["git", "status", "--short"])
         reason = str(payload.get("reason_summary") or "")
+        shape = validate_argv_shape(raw_command)
+        if not shape.allowed:
+            return ToolResult(
+                tool_name=self.spec.name,
+                status="failed",
+                observation=shape.reason,
+                payload={"command_security": shape.model_dump()},
+            )
+        command = list(raw_command)
         activity_id = "command-preview:" + shlex.join(command)
         append_activity_event(
             run_id=context.run_id,
@@ -325,7 +335,11 @@ class RunApprovedCommandTool(BaseTool):
     )
 
     def check_permission(self, payload: dict[str, Any], context: ToolPermissionContext) -> PermissionDecision:
-        command = list(payload.get("command") or [])
+        raw_command = _command_from_payload(payload)
+        shape = validate_argv_shape(raw_command)
+        if not shape.allowed:
+            return PermissionDecision.deny(shape.reason, command_security=shape.model_dump())
+        command = list(raw_command)
         preview = command_policy_preview(command, project_path=context.request.project_path, reason=context.reason)
         if preview.get("blocked"):
             return PermissionDecision.deny(str(preview.get("reason") or "Command is blocked by policy."), command_preview=preview)
@@ -341,7 +355,16 @@ class RunApprovedCommandTool(BaseTool):
         )
 
     def call(self, payload: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
-        command = list(payload.get("command") or [])
+        raw_command = _command_from_payload(payload)
+        shape = validate_argv_shape(raw_command)
+        if not shape.allowed:
+            return ToolResult(
+                tool_name=self.spec.name,
+                status="failed",
+                observation=shape.reason,
+                payload={"command_security": shape.model_dump()},
+            )
+        command = list(raw_command)
         result = run_command_with_policy(
             command,
             project_path=context.request.project_path,
@@ -966,6 +989,17 @@ def _dedupe_strings(items: list[str]) -> list[str]:
         if item not in result:
             result.append(item)
     return result
+
+
+def _command_from_payload(payload: dict[str, Any], default: list[str] | None = None) -> list[str] | str:
+    command = payload.get("command")
+    if command is None:
+        return list(default or [])
+    if isinstance(command, str):
+        return command
+    if isinstance(command, list):
+        return [str(item) for item in command]
+    return str(command)
 
 
 def _compat_model_client():

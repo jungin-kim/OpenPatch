@@ -9,7 +9,7 @@ SRC_DIR = TESTS_DIR.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from repooperator_worker.agent_core.permissions import PermissionMode, ToolPermissionContext  # noqa: E402
+from repooperator_worker.agent_core.permissions import PermissionDecision, PermissionMode, PermissionPolicy, PermissionRule, PermissionRuleSource, ToolPermissionContext  # noqa: E402
 from repooperator_worker.agent_core.tools.builtin import GenerateEditTool, ReadFileTool, RunApprovedCommandTool  # noqa: E402
 from repooperator_worker.schemas import AgentRunRequest  # noqa: E402
 
@@ -51,6 +51,52 @@ class PermissionSystemTests(unittest.TestCase):
 
     def test_bypass_mode_exists_but_does_not_bypass_command_policy(self) -> None:
         decision = RunApprovedCommandTool().check_permission({"command": ["git", "commit", "-m", "test"]}, self._context(PermissionMode.BYPASS))
+        self.assertEqual(decision.decision, "ask")
+
+    def test_permission_policy_priority_and_audit(self) -> None:
+        policy = PermissionPolicy(
+            [
+                PermissionRule(
+                    id="user-allow",
+                    source=PermissionRuleSource.USER,
+                    tool_name="read_file",
+                    decision="allow",
+                    reason="user allows",
+                    priority=100_000,
+                ),
+                PermissionRule(
+                    id="system-deny",
+                    source=PermissionRuleSource.SYSTEM,
+                    tool_name="read_file",
+                    decision="deny",
+                    reason="system denies",
+                    priority=0,
+                ),
+            ]
+        )
+        decision, audit = policy.evaluate(
+            tool_name="read_file",
+            payload={"target_files": ["README.md"]},
+            context=self._context(),
+            base_decision=PermissionDecision.allow("tool default"),
+        )
+        self.assertEqual(decision.decision, "deny")
+        self.assertEqual(audit.decision, "deny")
+        self.assertEqual(audit.matched_rules[0]["id"], "user-allow")
+
+    def test_ask_overrides_allow_at_equal_priority(self) -> None:
+        policy = PermissionPolicy(
+            [
+                PermissionRule(id="allow", source=PermissionRuleSource.SESSION, tool_name="read_file", decision="allow", reason="allow", priority=1),
+                PermissionRule(id="ask", source=PermissionRuleSource.SESSION, tool_name="read_file", decision="ask", reason="ask", priority=1),
+            ]
+        )
+        decision, _audit = policy.evaluate(
+            tool_name="read_file",
+            payload={},
+            context=self._context(),
+            base_decision=PermissionDecision.allow("tool default"),
+        )
         self.assertEqual(decision.decision, "ask")
 
 

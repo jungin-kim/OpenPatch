@@ -25,6 +25,7 @@ class HookResult:
     updated_input: dict[str, Any] | None = None
     additional_context: str | None = None
     reason: str | None = None
+    source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,10 @@ class HookManager:
         for hook in hooks:
             result = hook(event) or HookResult()
             if result.updated_input is not None:
-                merged.updated_input = {**(merged.updated_input or event.payload), **result.updated_input}
+                if isinstance(result.updated_input, dict):
+                    merged.updated_input = {**(merged.updated_input or event.payload), **result.updated_input}
+                else:
+                    merged.updated_input = result.updated_input
                 event = HookEvent(
                     event.event_type,
                     tool_name=event.tool_name,
@@ -107,6 +111,8 @@ class HookManager:
                 merged.decision = result.decision
             if result.reason:
                 merged.reason = result.reason
+            if result.source:
+                merged.source = result.source
             if not result.continue_ or result.decision == "deny":
                 merged.continue_ = False
                 return merged

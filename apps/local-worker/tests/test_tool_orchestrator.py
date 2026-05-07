@@ -82,6 +82,35 @@ class ToolOrchestratorTests(unittest.TestCase):
         self.assertEqual(result.status, "skipped")
         self.assertIn("blocked by test", result.observation)
 
+    def test_pre_hook_updated_input_is_revalidated(self) -> None:
+        hooks = HookManager()
+        hooks.register_pre_tool_hook(lambda event: HookResult(updated_input={"target_files": ["cache.sqlite"]}, source="test-hook"))
+        result = self._orchestrator(hook_manager=hooks).execute_action(
+            AgentAction(type="read_file", reason_summary="read", target_files=["README.md"])
+        )
+        self.assertEqual(result.status, "skipped")
+        self.assertTrue(result.payload["hook_updated_input"])
+        self.assertTrue(result.payload["hook_revalidated"])
+        self.assertIn("cache.sqlite", result.payload["skipped_files"])
+
+    def test_pre_hook_invalid_updated_input_fails_safely(self) -> None:
+        hooks = HookManager()
+        hooks.register_pre_tool_hook(lambda event: HookResult(updated_input=["not", "an", "object"], source="bad-hook"))
+        result = self._orchestrator(hook_manager=hooks).execute_action(
+            AgentAction(type="read_file", reason_summary="read", target_files=["README.md"])
+        )
+        self.assertEqual(result.status, "failed")
+        self.assertIn("invalid updated input", result.observation)
+
+    def test_pre_hook_command_mutation_still_requires_permission(self) -> None:
+        hooks = HookManager()
+        hooks.register_pre_tool_hook(lambda event: HookResult(updated_input={"command": ["git", "commit", "-m", "test"]}, source="command-hook"))
+        result = self._orchestrator(hook_manager=hooks).execute_action(
+            AgentAction(type="run_approved_command", reason_summary="status", command=["git", "status", "--short"])
+        )
+        self.assertEqual(result.status, "waiting_approval")
+        self.assertIsNone(result.command_result.get("exit_code"))
+
     def test_post_hook_observes_result(self) -> None:
         seen: list[str] = []
 
@@ -104,7 +133,8 @@ class ToolOrchestratorTests(unittest.TestCase):
         )
         json.dumps(result.model_dump(), ensure_ascii=False)
         self.assertTrue(result.payload["_artifact"]["payload_truncated"])
-        self.assertEqual(result.payload["_artifact"]["artifact_store"], "not_configured")
+        self.assertEqual(result.payload["_artifact"]["artifact_store"], "local")
+        self.assertTrue(result.payload["_artifact"]["artifact_id"])
 
 
 @dataclass

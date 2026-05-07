@@ -4,7 +4,6 @@ import json
 import re
 import shlex
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -21,7 +20,16 @@ from repooperator_worker.agent_core.final_synthesis import (
 )
 from repooperator_worker.agent_core.final_response import build_agent_response
 from repooperator_worker.agent_core.hooks import HookManager
+from repooperator_worker.agent_core.planner import NEXT_ACTION_PROMPT, PLANNER_ACTION_TYPES, TaskFrame
 from repooperator_worker.agent_core.state import AgentCoreState, ClassifierResult
+from repooperator_worker.agent_core.steering import (
+    STEERING_PROMPT,
+    SUPPORTED_STEERING_TYPES,
+    SteeringDecision,
+    _validate_steering_payload,
+    consume_steering_for_state,
+    parse_steering_instruction,
+)
 from repooperator_worker.agent_core.tool_orchestrator import ToolOrchestrator
 from repooperator_worker.agent_core.tools.registry import get_default_tool_registry
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
@@ -65,76 +73,6 @@ SUPPORTED_INTENTS = {
     "git_workflow_request", "gitlab_mr_request", "multi_step_request", "pasted_prompt_or_spec",
     "apply_spec_to_repo", "ambiguous",
 }
-SUPPORTED_STEERING_TYPES = {
-    "add_target_file",
-    "change_output_format",
-    "cancel",
-    "continue",
-    "defer",
-    "unknown",
-}
-PLANNER_ACTION_TYPES = set(get_default_tool_registry().allowed_action_types())
-
-STEERING_PROMPT = """\
-You are RepoOperator's steering parser. Return JSON only.
-Schema:
-{
-  "steering_type": "add_target_file|change_output_format|cancel|continue|defer|unknown",
-  "target_files": [],
-  "output_format": null,
-  "confidence": 0.0,
-  "reason": "short explanation"
-}
-Extract only a structured steering decision for an already-running agent. Do not route by language keywords.
-"""
-
-NEXT_ACTION_PROMPT = """\
-You are RepoOperator's bounded next-action planner. Return JSON only.
-Choose one safe primitive action from the available tool specs. Do not use hidden reasoning.
-Schema:
-{
-  "action_type": "one of available_actions",
-  "reason_summary": "short user-visible reason",
-  "target_files": [],
-  "target_symbols": [],
-  "search_queries": [],
-  "text_queries": [],
-  "symbol_queries": [],
-  "file_globs": [],
-  "command": [],
-  "expected_output": "short description",
-  "requires_approval": false,
-  "confidence": 0.0,
-  "enough_evidence": false
-}
-Prefer gathering missing evidence before answering. Commands are policy-previewed later; never request direct shell execution.
-"""
-
-
-@dataclass
-class SteeringDecision:
-    steering_type: str = "unknown"
-    target_files: list[str] | None = None
-    output_format: str | None = None
-    confidence: float = 0.0
-    reason: str = ""
-
-
-@dataclass
-class TaskFrame:
-    user_goal: str
-    mentioned_files: list[str] = field(default_factory=list)
-    mentioned_symbols: list[str] = field(default_factory=list)
-    constraints: list[str] = field(default_factory=list)
-    likely_capabilities: list[str] = field(default_factory=list)
-    answer_style: str | None = None
-    safety_notes: list[str] = field(default_factory=list)
-    uncertainty: list[str] = field(default_factory=list)
-    should_ask_clarification: bool = False
-    clarification_question: str | None = None
-    legacy_intent: str | None = None
-
-
 def run_controller_graph(
     request: AgentRunRequest,
     *,
@@ -293,89 +231,6 @@ def check_cancel(state: AgentCoreState, request: AgentRunRequest) -> None:
         status="cancelled",
         observation="Cancellation was requested. RepoOperator stopped at the next safe checkpoint.",
     )
-
-
-def consume_steering_for_state(state: AgentCoreState, request: AgentRunRequest) -> None:
-    try:
-        from repooperator_worker.services.agent_run_coordinator import consume_steering
-
-        items = consume_steering(state.run_id)
-    except Exception:
-        items = []
-    for item in items:
-        content = str(item.get("content") or "").strip()
-        state.steering_instructions.append(item)
-        applied = False
-        decision = parse_steering_instruction(content, request, state)
-        target_files = _existing_target_files(request, decision.target_files or [])
-        if decision.steering_type == "add_target_file" and target_files:
-            existing = list(state.classifier_result.target_files)
-            for path in target_files:
-                if path not in existing:
-                    existing.append(path)
-            state.classifier_result.target_files = existing
-            applied = True
-        if decision.steering_type == "change_output_format" and decision.output_format and decision.confidence >= 0.65:
-            state.observations.append(f"Steering requested output format: {decision.output_format}.")
-            applied = True
-        if decision.steering_type == "cancel" and decision.confidence >= 0.8:
-            state.cancellation_requested = True
-            state.stop_reason = "cancelled"
-            applied = True
-        event_type = "steering_applied" if applied else "steering_deferred"
-        append_activity_event(
-            run_id=state.run_id,
-            request=request,
-            activity_id=f"controller-steering:{item.get('id') or len(state.steering_instructions)}",
-            event_type="activity_completed",
-            phase="Planning",
-            label="Updated plan from steering" if applied else "Steering deferred",
-            status="completed",
-            observation=(
-                decision.reason or "Steering updated structured run state."
-                if applied
-                else decision.reason or "Steering was recorded, but it did not safely map to the current action."
-            ),
-            detail=content[:220],
-            aggregate={"steering_event_type": event_type, "decision": json_safe(decision)},
-        )
-
-
-def parse_steering_instruction(content: str, request: AgentRunRequest, state: AgentCoreState) -> SteeringDecision:
-    raw_content = (content or "").strip()
-    if not raw_content:
-        return SteeringDecision(steering_type="defer", target_files=[], confidence=0.0, reason="Empty steering instruction.")
-    try:
-        raw = OpenAICompatibleModelClient().generate_text(
-            ModelGenerationRequest(
-                system_prompt=STEERING_PROMPT,
-                user_prompt=json.dumps(
-                    {
-                        "task": request.task,
-                        "steering": raw_content,
-                        "current_target_files": state.classifier_result.target_files,
-                        "files_read": state.files_read,
-                        "stop_reason": state.stop_reason,
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-        )
-        decision = _validate_steering_payload(_parse_json(raw))
-        if decision.steering_type != "unknown" and decision.confidence >= 0.5:
-            return decision
-    except Exception as exc:  # noqa: BLE001
-        return SteeringDecision(steering_type="defer", target_files=[], confidence=0.0, reason=f"Steering parser unavailable: {safe_repr(exc, limit=160)}")
-
-    file_targets = _file_tokens(raw_content)
-    if file_targets:
-        return SteeringDecision(
-            steering_type="add_target_file",
-            target_files=file_targets,
-            confidence=0.55,
-            reason="Detected explicit file path tokens; paths still require repository containment validation.",
-        )
-    return SteeringDecision(steering_type="defer", target_files=[], confidence=0.0, reason="No safe structured steering decision was available.")
 
 
 def controller_choose_next_action(state: AgentCoreState, request: AgentRunRequest) -> AgentAction:
@@ -617,7 +472,18 @@ def build_final_answer_text(
     for result in state.action_results:
         contents.update(result.payload.get("contents") or {})
     repo_observation = "\n".join(state.observations[-6:])
-    return _answer_with_model(request, contents, repo_observation=repo_observation, skills_context=skills_context, on_delta=on_delta)
+    answer = _answer_with_model(request, contents, state=state, repo_observation=repo_observation, skills_context=skills_context, on_delta=on_delta)
+    append_activity_event(
+        run_id=state.run_id,
+        request=request,
+        activity_id="final-synthesis-prepared",
+        event_type="activity_completed",
+        phase="Finished",
+        label="Prepared evidence-based answer",
+        status="completed",
+        observation="Prepared the final answer from gathered evidence.",
+    )
+    return answer
 
 
 def build_final_response(state: AgentCoreState, request: AgentRunRequest) -> AgentRunResponse:
@@ -731,24 +597,6 @@ def _validate_classifier_payload(payload: dict[str, Any], request: AgentRunReque
         clarification_question=payload.get("clarification_question"),
         requires_repository_wide_review=bool(payload.get("requires_repository_wide_review")),
         raw=payload,
-    )
-
-
-def _validate_steering_payload(payload: dict[str, Any]) -> SteeringDecision:
-    steering_type = str(payload.get("steering_type") or "unknown")
-    if steering_type not in SUPPORTED_STEERING_TYPES:
-        steering_type = "unknown"
-    target_files = [str(item).strip().lstrip("/") for item in payload.get("target_files") or [] if str(item).strip()]
-    try:
-        confidence = float(payload.get("confidence") or 0.0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    return SteeringDecision(
-        steering_type=steering_type,
-        target_files=target_files,
-        output_format=str(payload.get("output_format")) if payload.get("output_format") else None,
-        confidence=max(0.0, min(1.0, confidence)),
-        reason=str(payload.get("reason") or ""),
     )
 
 

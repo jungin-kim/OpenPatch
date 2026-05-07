@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from repooperator_worker.agent_core.context_budget import ContextBudget, compact_file_contents
 from repooperator_worker.agent_core.state import AgentCoreState
 from repooperator_worker.schemas import AgentRunRequest
 from repooperator_worker.services.common import resolve_project_path
@@ -28,11 +29,18 @@ def _answer_with_model(
     request: AgentRunRequest,
     file_contents: dict[str, str],
     *,
+    state: AgentCoreState | None = None,
     repo_observation: str = "",
     skills_context: str = "",
     on_delta: Any | None = None,
 ) -> str:
     try:
+        compacted = compact_file_contents(
+            file_contents,
+            ContextBudget(),
+            explicit_files=list(getattr(state, "files_read", []) or []),
+        )
+        model_files = compacted.included_files
         try:
             resolved_repo = str(resolve_project_path(request.project_path))
         except ValueError:
@@ -53,7 +61,8 @@ def _answer_with_model(
                     "active_repository": f"source: {request.git_provider}\npath: {resolved_repo}",
                     "branch": request.branch,
                     "repo_observation": repo_observation,
-                    "files": file_contents,
+                    "files": model_files,
+                    "context_compaction": compacted.model_dump(),
                 },
                 ensure_ascii=False,
             ),
@@ -67,15 +76,23 @@ def _answer_with_model(
             elif delta.get("type") == "assistant_delta":
                 text = str(delta.get("delta") or "")
                 pieces.append(text)
-                if on_delta and text:
-                    on_delta(text)
         raw = "".join(pieces) or client.generate_text(prompt)
         _reasoning, visible = split_visible_reasoning(raw)
         cleaned, _ = clean_user_visible_response(visible, user_task=request.task)
         guarded = _quality_guard_answer(cleaned.strip(), file_contents=file_contents)
-        return guarded or synthesize_answer_from_evidence(request, None, file_contents, repo_observation)
+        accepted = guarded or synthesize_answer_from_evidence(request, state, file_contents, repo_observation)
+        if state is not None:
+            accepted = validate_or_repair_final_answer(accepted, state, request)
+        if on_delta and accepted:
+            for chunk in _chunk_text(accepted):
+                on_delta(chunk)
+        return accepted
     except Exception:
-        return synthesize_answer_from_evidence(request, None, file_contents, repo_observation)
+        accepted = synthesize_answer_from_evidence(request, state, file_contents, repo_observation)
+        if on_delta and accepted:
+            for chunk in _chunk_text(accepted):
+                on_delta(chunk)
+        return accepted
 
 
 def _quality_guard_answer(answer: str, *, file_contents: dict[str, str]) -> str | None:
@@ -145,6 +162,8 @@ def _is_placeholder_answer(answer: str) -> bool:
 def _looks_like_project_summary_request(request: AgentRunRequest) -> bool:
     classifier = getattr(request, "task", "")
     lowered = classifier.lower()
+    if any(term in classifier for term in ("아키텍처", "구조", "실행 흐름")) or any(term in lowered for term in ("architecture", "execution flow", "entrypoint")):
+        return False
     return "project" in lowered or "프로젝트" in classifier
 
 
@@ -426,6 +445,13 @@ def _dedupe(items: list[str]) -> list[str]:
         if text and text not in result:
             result.append(text)
     return result
+
+
+def _chunk_text(text: str, chunk_size: int = 96):
+    for start in range(0, len(text or ""), chunk_size):
+        chunk = text[start : start + chunk_size]
+        if chunk:
+            yield chunk
 
 
 def _compat_model_client():

@@ -5,9 +5,11 @@ import time
 from dataclasses import replace
 from typing import Any
 
+from repooperator_worker.agent_core.artifacts import ArtifactStore, get_default_artifact_store
 from repooperator_worker.agent_core.actions import AgentAction, ActionResult
 from repooperator_worker.agent_core.hooks import HookManager
-from repooperator_worker.agent_core.permissions import PermissionMode, ToolPermissionContext, permission_mode_from_value
+from repooperator_worker.agent_core.permissions import PermissionMode, PermissionPolicy, ToolPermissionContext, permission_mode_from_value
+from repooperator_worker.agent_core.secret_scanner import redact_json_payload
 from repooperator_worker.agent_core.tools.base import (
     ToolExecutionContext,
     ToolResult,
@@ -30,12 +32,16 @@ class ToolOrchestrator:
         registry: ToolRegistry | None = None,
         hook_manager: HookManager | None = None,
         permission_mode: PermissionMode | str | None = None,
+        permission_policy: PermissionPolicy | None = None,
+        artifact_store: ArtifactStore | None = None,
     ) -> None:
         self.run_id = run_id
         self.request = request
         self.registry = registry or get_default_tool_registry()
         self.hook_manager = hook_manager or HookManager()
         self.permission_mode = permission_mode_from_value(permission_mode)
+        self.permission_policy = permission_policy or PermissionPolicy()
+        self.artifact_store = artifact_store
         self.prior_denials: list[dict[str, Any]] = []
 
     def execute_action(self, action: AgentAction) -> ActionResult:
@@ -62,14 +68,47 @@ class ToolOrchestrator:
             return ToolResult(tool_name=tool_name, status="cancelled", observation="Run was cancelled before tool execution.")
 
         pre_hook = self.hook_manager.run_pre_tool(tool_name=tool_name, payload=validated, run_id=self.run_id, request=self.request)
+        hook_metadata: dict[str, Any] = {}
         if pre_hook.updated_input is not None:
-            validated = json_safe(pre_hook.updated_input)
+            if not isinstance(pre_hook.updated_input, dict):
+                return ToolResult(
+                    tool_name=tool_name,
+                    status="failed",
+                    observation="Pre-tool hook returned invalid updated input; expected an object.",
+                    payload={
+                        "hook_updated_input": True,
+                        "hook_revalidated": False,
+                        "hook_source": pre_hook.source,
+                        "hook_reason": pre_hook.reason,
+                    },
+                )
+            try:
+                validated = json_safe(tool.validate_input(dict(pre_hook.updated_input), self.request))
+            except Exception as exc:  # noqa: BLE001
+                return ToolResult(
+                    tool_name=tool_name,
+                    status="failed",
+                    observation="Pre-tool hook updated input failed tool validation.",
+                    payload={
+                        "hook_updated_input": True,
+                        "hook_revalidated": False,
+                        "hook_source": pre_hook.source,
+                        "hook_reason": pre_hook.reason,
+                        "errors": [safe_repr(exc, limit=500)],
+                    },
+                )
+            hook_metadata = {
+                "hook_updated_input": True,
+                "hook_revalidated": True,
+                "hook_source": pre_hook.source,
+                "hook_reason": pre_hook.reason,
+            }
         if not pre_hook.continue_ or pre_hook.decision == "deny":
             return ToolResult(
                 tool_name=tool_name,
                 status="skipped",
                 observation=pre_hook.reason or "Tool blocked by pre-tool hook.",
-                payload={"hook_decision": pre_hook.decision, "hook_reason": pre_hook.reason},
+                payload={"hook_decision": pre_hook.decision, "hook_reason": pre_hook.reason, **hook_metadata},
             )
 
         permission_context = ToolPermissionContext(
@@ -80,7 +119,13 @@ class ToolOrchestrator:
             prior_denials=list(self.prior_denials),
             reason=str(validated.get("reason_summary") or ""),
         )
-        decision = tool.check_permission(validated, permission_context)
+        base_decision = tool.check_permission(validated, permission_context)
+        decision, audit = self.permission_policy.evaluate(
+            tool_name=tool_name,
+            payload=validated,
+            context=permission_context,
+            base_decision=base_decision,
+        )
         if decision.decision == "ask":
             self.hook_manager.run_permission_request(tool_name=tool_name, payload=validated, run_id=self.run_id, request=self.request)
             metadata = json_safe(decision.metadata)
@@ -89,7 +134,7 @@ class ToolOrchestrator:
                 status="waiting_approval",
                 observation=decision.reason or "Tool requires approval.",
                 command_result=metadata.get("command_preview") if isinstance(metadata, dict) else None,
-                payload={"permission_decision": json_safe(decision)},
+                payload={"permission_decision": json_safe(decision), "permission_audit": audit.model_dump(), **hook_metadata},
                 next_recommended_action="request_approval",
             )
         if decision.decision == "deny":
@@ -98,7 +143,7 @@ class ToolOrchestrator:
                 tool_name=tool_name,
                 status="failed",
                 observation=decision.reason or "Tool denied by permission policy.",
-                payload={"permission_decision": json_safe(decision)},
+                payload={"permission_decision": json_safe(decision), "permission_audit": audit.model_dump(), **hook_metadata},
             )
 
         context = ToolExecutionContext(
@@ -114,7 +159,16 @@ class ToolOrchestrator:
             self.hook_manager.run_post_tool_failure(tool_name=tool_name, payload=validated, result=result, run_id=self.run_id, request=self.request)
             return result
 
-        result = self._cap_result(result, max_chars=tool.spec.max_result_chars)
+        if hook_metadata or audit:
+            result = replace(
+                result,
+                payload={
+                    **json_safe(result.payload),
+                    **hook_metadata,
+                    "permission_audit": audit.model_dump(),
+                },
+            )
+        result = self._cap_result(result, max_chars=tool.spec.max_result_chars, tool_name=tool_name)
         post_hook = self.hook_manager.run_post_tool(tool_name=tool_name, payload=validated, result=result, run_id=self.run_id, request=self.request)
         if not post_hook.continue_ or post_hook.decision == "deny":
             return ToolResult(
@@ -139,7 +193,7 @@ class ToolOrchestrator:
             active = None
         return str(active.project_path) if active else None
 
-    def _cap_result(self, result: ToolResult, *, max_chars: int) -> ToolResult:
+    def _cap_result(self, result: ToolResult, *, max_chars: int, tool_name: str) -> ToolResult:
         updated = result
         payload = json_safe(result.payload)
         metadata: dict[str, Any] = {}
@@ -152,12 +206,24 @@ class ToolOrchestrator:
             payload = json_safe(payload)
             payload_chars = len(json.dumps(payload, ensure_ascii=False))
         if payload_chars > max_chars:
-            payload = _truncate_payload(payload, max_chars=max_chars)
+            store = self.artifact_store or get_default_artifact_store()
+            record = store.write(self.run_id, f"tool_result:{tool_name}", payload)
+            redacted_payload, secret_findings = redact_json_payload(payload)
+            payload = _truncate_payload(redacted_payload, max_chars=max_chars)
+            record_payload = record.record_dump()
             metadata.update(
                 {
                     "payload_truncated": True,
+                    "artifact_id": record.artifact_id,
+                    "artifact_store": "local",
+                    "byte_size": record.byte_size,
+                    "sha256": record.sha256,
+                    "preview": record.preview,
+                    "redacted": record.redacted,
+                    "blocked": record.blocked,
+                    "secret_findings": [item.model_dump() for item in secret_findings],
                     "original_payload_chars": payload_chars,
-                    "artifact_store": "not_configured",
+                    "record": record_payload,
                 }
             )
         if metadata:
