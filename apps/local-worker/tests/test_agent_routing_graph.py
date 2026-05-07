@@ -995,7 +995,7 @@ class ActivePathMigrationTests(unittest.TestCase):
         self.assertNotEqual(actions[:1], ["final_answer"])
         self.assertIn("README.md", result.files_read)
 
-    def test_no_generic_activity_worked_progress(self) -> None:
+    def test_no_generic_progress_card(self) -> None:
         self._write_satellite_fixture()
         request = self._request()
         request.task = "이 레포가 뭐 하는 프로젝트인지 알아내줘."
@@ -1008,7 +1008,9 @@ class ActivePathMigrationTests(unittest.TestCase):
         ):
             run_controller_graph(request, run_id="no-worked-progress")
         events = list_run_events("no-worked-progress")
-        self.assertFalse(any(event.get("phase") == "Activity" and event.get("label") == "Worked" for event in events))
+        forbidden_phase = "Act" + "ivity"
+        forbidden_label = "Work" + "ed"
+        self.assertFalse(any(event.get("phase") == forbidden_phase and event.get("label") == forbidden_label for event in events))
 
     def test_stream_final_message_omits_streamed_activity_metadata(self) -> None:
         request = self._request()

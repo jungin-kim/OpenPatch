@@ -47,6 +47,7 @@ class AgentCoreState:
     skills_used: list[str] = field(default_factory=list)
     memories_used: list[str] = field(default_factory=list)
     recommendation_context: dict[str, Any] | None = None
+    context_packet: dict[str, Any] | None = None
     stop_reason: str | None = None
     final_response: str = ""
     loop_iteration: int = 0
@@ -54,4 +55,3 @@ class AgentCoreState:
     max_file_reads: int = 40
     max_commands: int = 8
     max_edits: int = 6
-

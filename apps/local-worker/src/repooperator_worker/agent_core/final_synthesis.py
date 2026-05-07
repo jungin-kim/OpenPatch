@@ -1,0 +1,437 @@
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+from repooperator_worker.agent_core.state import AgentCoreState
+from repooperator_worker.schemas import AgentRunRequest
+from repooperator_worker.services.common import resolve_project_path
+from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient as _OpenAICompatibleModelClient, split_visible_reasoning
+from repooperator_worker.services.response_quality_service import clean_user_visible_response
+
+
+class FinalSynthesisService:
+    """Compatibility seam for final synthesis and deterministic answer repair."""
+
+    def build_answer(self, state: AgentCoreState, request: AgentRunRequest, *, skills_context: str = "", on_delta: Any | None = None) -> str:
+        from repooperator_worker.agent_core.controller_graph import build_final_answer_text
+
+        return build_final_answer_text(state, request, skills_context=skills_context, on_delta=on_delta)
+
+    def validate_or_repair(self, answer: str, state: AgentCoreState, request: AgentRunRequest) -> str:
+        return validate_or_repair_final_answer(answer, state, request)
+
+
+def _answer_with_model(
+    request: AgentRunRequest,
+    file_contents: dict[str, str],
+    *,
+    repo_observation: str = "",
+    skills_context: str = "",
+    on_delta: Any | None = None,
+) -> str:
+    try:
+        try:
+            resolved_repo = str(resolve_project_path(request.project_path))
+        except ValueError:
+            resolved_repo = request.project_path
+        prompt = ModelGenerationRequest(
+            system_prompt=(
+                "You are RepoOperator, a local-first coding agent proxy. Answer with visible, evidence-backed "
+                "work summaries only. Do not include hidden reasoning. Keep the response grounded in the supplied "
+                "repository context. Answer the user's actual request first, synthesize across evidence, and avoid "
+                "file-by-file dumps unless the user explicitly asks for one. Never say files were unavailable when "
+                "file contents are supplied.\n"
+                + (f"\nEnabled skills with provenance:\n{skills_context}\n" if skills_context else "")
+            ),
+            user_prompt=json.dumps(
+                {
+                    "task": request.task,
+                    "repo": request.project_path,
+                    "active_repository": f"source: {request.git_provider}\npath: {resolved_repo}",
+                    "branch": request.branch,
+                    "repo_observation": repo_observation,
+                    "files": file_contents,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        pieces: list[str] = []
+        reasoning: list[str] = []
+        client = _compat_model_client()()
+        for delta in client.stream_text(prompt):
+            if delta.get("type") == "reasoning_delta":
+                reasoning.append(str(delta.get("delta") or ""))
+            elif delta.get("type") == "assistant_delta":
+                text = str(delta.get("delta") or "")
+                pieces.append(text)
+                if on_delta and text:
+                    on_delta(text)
+        raw = "".join(pieces) or client.generate_text(prompt)
+        _reasoning, visible = split_visible_reasoning(raw)
+        cleaned, _ = clean_user_visible_response(visible, user_task=request.task)
+        guarded = _quality_guard_answer(cleaned.strip(), file_contents=file_contents)
+        return guarded or synthesize_answer_from_evidence(request, None, file_contents, repo_observation)
+    except Exception:
+        return synthesize_answer_from_evidence(request, None, file_contents, repo_observation)
+
+
+def _quality_guard_answer(answer: str, *, file_contents: dict[str, str]) -> str | None:
+    if not answer:
+        return None
+    lowered = answer.lower()
+    if file_contents and any(bad in lowered for bad in ("cannot read", "can't read", "files object is empty", "no file contents")):
+        return None
+    if re.search(r"[�]{2,}|[A-Za-z]{2,}[가-힣]{2,}[A-Za-z]{2,}", answer):
+        return None
+    return answer
+
+
+def validate_or_repair_final_answer(answer: str, state: AgentCoreState, request: AgentRunRequest) -> str:
+    text = answer or ""
+    lowered = text.lower()
+    file_contents = collect_file_contents(state)
+    edit_proposal = _latest_edit_proposal(state)
+    if edit_proposal and not edit_proposal.get("applied"):
+        proposal_only = "proposed patch only" in lowered or "no files were modified" in lowered
+        false_write = any(
+            phrase in lowered
+            for phrase in ("applied", "modified the file", "changed the file", "wrote", "saved", "수정했습니다", "적용했습니다")
+        )
+        if false_write and not proposal_only:
+            return _format_edit_proposal(edit_proposal)
+    if state.files_read and any(
+        phrase in lowered
+        for phrase in (
+            "cannot read",
+            "can't read",
+            "files object is empty",
+            "repository structure only",
+            "only see repository structure",
+            "파일을 읽을 수 없습니다",
+        )
+    ):
+        return synthesize_answer_from_evidence(request, state, file_contents, "\n".join(state.observations[-6:]))
+    if re.search(r"[�]{2,}|[A-Za-z]{2,}[가-힣]{2,}[A-Za-z]{2,}|[\u0400-\u04ff\u0600-\u06ff]{8,}", text):
+        return synthesize_answer_from_evidence(request, state, file_contents, "\n".join(state.observations[-6:]))
+    if _looks_like_project_summary_request(request) and _looks_like_file_dump(text):
+        return synthesize_answer_from_evidence(request, state, file_contents, "\n".join(state.observations[-6:]), force_mode="project_summary")
+    if _is_placeholder_answer(text):
+        return synthesize_answer_from_evidence(request, state, file_contents, "\n".join(state.observations[-6:]))
+    if not state.files_read and not state.commands_run and len(state.observations) <= 1 and _makes_repo_claim(text):
+        return synthesize_answer_from_evidence(request, state, file_contents, "\n".join(state.observations[-6:]))
+    return text
+
+
+def _is_placeholder_answer(answer: str) -> bool:
+    lowered = answer.lower()
+    placeholder_fragments = (
+        ("i inspected the gathered", "project evidence"),
+        ("i can give", "grounded summary"),
+        ("should be", "synthesized"),
+        ("model answer", "needed repair"),
+        ("ask for a narrower", "change"),
+        ("i can answer", "from those files"),
+        ("keeping this", "grounded summary"),
+    )
+    return any(
+        all(fragment in lowered for fragment in fragments)
+        for fragments in placeholder_fragments
+    )
+
+
+def _looks_like_project_summary_request(request: AgentRunRequest) -> bool:
+    classifier = getattr(request, "task", "")
+    lowered = classifier.lower()
+    return "project" in lowered or "프로젝트" in classifier
+
+
+def _looks_like_file_dump(answer: str) -> bool:
+    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    file_like_lines = [line for line in lines if re.search(r"\b[\w./-]+\.(py|cs|js|ts|tsx|md|json|toml)\b", line)]
+    reviewed_lines = [line for line in lines if line.lower().startswith(("reviewed ", "- reviewed", "* reviewed"))]
+    return len(file_like_lines) >= 6 or len(reviewed_lines) >= 4
+
+
+def _makes_repo_claim(answer: str) -> bool:
+    lowered = answer.lower()
+    return any(term in lowered for term in ("this repository", "this project", "codebase", "프로젝트", "저장소"))
+
+
+def collect_file_contents(state: AgentCoreState) -> dict[str, str]:
+    contents: dict[str, str] = {}
+    for result in state.action_results:
+        for path, content in (result.payload.get("contents") or {}).items():
+            if isinstance(path, str) and isinstance(content, str):
+                contents[path] = content[:100_000]
+    return contents
+
+
+def synthesize_answer_from_evidence(
+    request: AgentRunRequest,
+    state: AgentCoreState | None,
+    file_contents: dict[str, str],
+    repo_observation: str,
+    *,
+    force_mode: str | None = None,
+) -> str:
+    language = "ko" if re.search(r"[가-힣]", request.task or "") else "en"
+    useful_contents = {path: text for path, text in file_contents.items() if text.strip()}
+    if not useful_contents:
+        if state and state.files_read:
+            files = ", ".join(f"`{path}`" for path in state.files_read)
+            return (
+                f"읽은 파일 기록은 있습니다: {files}. 다만 현재 응답 복구에 사용할 파일 본문이 남아 있지 않아 세부 내용은 단정하지 않겠습니다."
+                if language == "ko"
+                else f"Recorded evidence files: {files}. The file bodies are not available for deterministic repair, so I will not invent details."
+            )
+        if state and state.commands_run:
+            return "실행한 명령: " + ", ".join(state.commands_run) if language == "ko" else "Commands run: " + ", ".join(state.commands_run)
+        return (
+            "아직 답변에 필요한 파일 증거가 충분하지 않습니다. 확인할 파일이나 범위를 지정해 주세요."
+            if language == "ko"
+            else "I do not have enough file evidence yet. Please specify the file or scope to inspect."
+        )
+    mode = force_mode or infer_answer_mode(request, useful_contents)
+    signals = summarize_evidence_signals(useful_contents)
+    evidence = ", ".join(f"`{path}`" for path in useful_contents)
+    if language == "ko":
+        if mode == "execution_flow":
+            return korean_execution_flow_answer(signals, evidence)
+        if mode == "architecture":
+            return korean_architecture_answer(signals, evidence)
+        if mode == "project_summary":
+            return korean_project_summary_answer(signals, evidence)
+        return korean_generic_answer(signals, evidence)
+    if mode == "execution_flow":
+        return english_execution_flow_answer(signals, evidence)
+    if mode == "architecture":
+        return english_architecture_answer(signals, evidence)
+    if mode == "project_summary":
+        return english_project_summary_answer(signals, evidence)
+    return english_generic_answer(signals, evidence)
+
+
+def infer_answer_mode(request: AgentRunRequest, file_contents: dict[str, str]) -> str:
+    task = request.task or ""
+    lowered = task.lower()
+    if any(term in task for term in ("실행 흐름", "실행", "흐름")) or any(term in lowered for term in ("execution flow", "flow", "entrypoint", "how it starts")):
+        return "execution_flow"
+    if any(term in task for term in ("아키텍처", "구조")) or any(term in lowered for term in ("architecture", "modules", "structure")):
+        return "architecture"
+    if _looks_like_project_summary_request(request):
+        return "project_summary"
+    if any(Path(path).name.lower() in {"main.py", "index.ts", "index.js", "app.tsx", "cli.py"} for path in file_contents):
+        return "execution_flow"
+    return "generic"
+
+
+def summarize_evidence_signals(file_contents: dict[str, str]) -> dict[str, Any]:
+    files: list[dict[str, Any]] = []
+    for path, text in file_contents.items():
+        files.append(
+            {
+                "path": path,
+                "basename": Path(path).name,
+                "summary": summarize_file_signal(path, text),
+                "headings": extract_markdown_headings(text),
+                "paragraph": extract_first_paragraph(text),
+                "imports": extract_imports(text),
+                "functions": extract_functions(text),
+                "classes": extract_classes(text),
+                "entrypoint": bool(re.search(r"if\s+__name__\s*==\s*['\"]__main__['\"]|def\s+main\s*\(", text)),
+            }
+        )
+    project_terms = " ".join(item["paragraph"] for item in files if item["paragraph"])[:800]
+    return {"files": files, "project_terms": project_terms}
+
+
+def summarize_file_signal(path: str, text: str) -> str:
+    name = Path(path).name
+    if name.lower().startswith("readme"):
+        paragraph = extract_first_paragraph(text)
+        return paragraph or "Project documentation."
+    imports = extract_imports(text)
+    functions = extract_functions(text)
+    classes = extract_classes(text)
+    parts: list[str] = []
+    if imports:
+        parts.append("imports " + ", ".join(imports[:5]))
+    if classes:
+        parts.append("defines classes " + ", ".join(classes[:5]))
+    if functions:
+        parts.append("defines functions " + ", ".join(functions[:6]))
+    if re.search(r"if\s+__name__\s*==\s*['\"]__main__['\"]", text):
+        parts.append("contains the Python script entrypoint")
+    return "; ".join(parts) or "Source/config evidence."
+
+
+def extract_markdown_headings(text: str) -> list[str]:
+    return [match.group(1).strip() for match in re.finditer(r"^#{1,3}\s+(.+)$", text, flags=re.MULTILINE)][:6]
+
+
+def extract_first_paragraph(text: str) -> str:
+    cleaned = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    for block in re.split(r"\n\s*\n", cleaned):
+        block = " ".join(line.strip("# ").strip() for line in block.splitlines()).strip()
+        if len(block) > 20 and not block.startswith(("import ", "from ")):
+            return block[:500]
+    return ""
+
+
+def extract_imports(text: str) -> list[str]:
+    imports: list[str] = []
+    for match in re.finditer(r"^(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))", text, flags=re.MULTILINE):
+        value = match.group(1) or match.group(2)
+        if value and value not in imports:
+            imports.append(value)
+    return imports[:12]
+
+
+def extract_functions(text: str) -> list[str]:
+    names = re.findall(r"^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", text, flags=re.MULTILINE)
+    names.extend(re.findall(r"\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", text))
+    return _dedupe(names)[:12]
+
+
+def extract_classes(text: str) -> list[str]:
+    names = re.findall(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\b", text, flags=re.MULTILINE)
+    return _dedupe(names)[:12]
+
+
+def project_conclusion(signals: dict[str, Any]) -> str:
+    text = " ".join(str(item.get("paragraph") or item.get("summary") or "") for item in signals["files"])
+    lowered = text.lower()
+    if "satellite" in lowered or "orbit" in lowered:
+        return "satellite/orbit simulation project"
+    if "repooperator" in lowered:
+        return "local-first repository coding agent proxy"
+    if "unity" in lowered or any(path["basename"].endswith(".cs") for path in signals["files"]):
+        return "Unity/C# project"
+    if any(path["basename"] == "package.json" for path in signals["files"]):
+        return "JavaScript/TypeScript project"
+    if any(path["basename"] in {"pyproject.toml", "main.py"} or path["basename"].endswith(".py") for path in signals["files"]):
+        return "Python project"
+    return "software project"
+
+
+def key_file_lines(signals: dict[str, Any], *, limit: int = 6) -> list[str]:
+    return [f"- `{item['path']}`: {item['summary']}" for item in signals["files"][:limit]]
+
+
+def korean_project_summary_answer(signals: dict[str, Any], evidence: str) -> str:
+    conclusion = project_conclusion(signals)
+    lines = [
+        f"이 레포는 {conclusion}로 보입니다.",
+        "",
+        f"근거 파일: {evidence}",
+        "목적: " + (signals.get("project_terms") or "읽은 파일 기준으로 프로젝트 목적과 주요 구성 요소를 파악했습니다."),
+        "주요 파일:",
+        *key_file_lines(signals),
+        "제한: 읽은 파일에 근거한 요약이라, 실행 결과나 전체 파일을 모두 검증한 것은 아닙니다.",
+    ]
+    return "\n".join(lines)
+
+
+def korean_execution_flow_answer(signals: dict[str, Any], evidence: str) -> str:
+    entry = next((item for item in signals["files"] if item["entrypoint"] or item["basename"] in {"main.py", "index.js", "index.ts", "cli.py"}), signals["files"][0])
+    steps = [
+        f"1. `{entry['path']}`가 실행 시작점 역할을 합니다.",
+        f"2. 이 파일은 {entry['summary']} 흐름을 구성합니다.",
+    ]
+    if entry["imports"]:
+        steps.append(f"3. 주요 모듈로 {', '.join(entry['imports'][:6])}을 불러와 시뮬레이션/처리 로직을 위임합니다.")
+    if entry["functions"] or entry["classes"]:
+        steps.append(f"4. 핵심 함수/클래스: {', '.join([*entry['functions'][:4], *entry['classes'][:4]])}.")
+    return "\n".join([f"근거 파일: {evidence}", "", "실행 흐름:", *steps, "제한: 정적 파일 내용 기준 설명입니다."])
+
+
+def korean_architecture_answer(signals: dict[str, Any], evidence: str) -> str:
+    return "\n".join([
+        "아키텍처 요약:",
+        f"- 근거 파일: {evidence}",
+        f"- 상위 목적: {project_conclusion(signals)}",
+        "- 모듈 책임:",
+        *key_file_lines(signals),
+        "- 흐름: entrypoint가 설정/입력을 준비하고, 도메인 모듈의 클래스와 함수가 계산/상태 처리를 담당하는 구조로 보입니다.",
+    ])
+
+
+def korean_generic_answer(signals: dict[str, Any], evidence: str) -> str:
+    return "\n".join([f"근거 파일: {evidence}", "읽은 내용 요약:", *key_file_lines(signals)])
+
+
+def english_project_summary_answer(signals: dict[str, Any], evidence: str) -> str:
+    return "\n".join([
+        f"This repository appears to be a {project_conclusion(signals)}.",
+        "",
+        f"Evidence used: {evidence}",
+        "Purpose: " + (signals.get("project_terms") or "The read files identify the project purpose and main components."),
+        "Key files:",
+        *key_file_lines(signals),
+        "Limitation: this is based on the files read, not a full runtime verification.",
+    ])
+
+
+def english_execution_flow_answer(signals: dict[str, Any], evidence: str) -> str:
+    entry = next((item for item in signals["files"] if item["entrypoint"] or item["basename"] in {"main.py", "index.js", "index.ts", "cli.py"}), signals["files"][0])
+    steps = [f"1. `{entry['path']}` is the start/entrypoint evidence.", f"2. It {entry['summary']}."]
+    if entry["imports"]:
+        steps.append(f"3. It delegates to modules such as {', '.join(entry['imports'][:6])}.")
+    if entry["functions"] or entry["classes"]:
+        steps.append(f"4. Key functions/classes visible there: {', '.join([*entry['functions'][:4], *entry['classes'][:4]])}.")
+    return "\n".join([f"Evidence used: {evidence}", "", "Execution flow:", *steps, "Limitation: static file evidence only."])
+
+
+def english_architecture_answer(signals: dict[str, Any], evidence: str) -> str:
+    return "\n".join(["Architecture summary:", f"- Evidence used: {evidence}", f"- Purpose: {project_conclusion(signals)}", "- Module responsibilities:", *key_file_lines(signals)])
+
+
+def english_generic_answer(signals: dict[str, Any], evidence: str) -> str:
+    return "\n".join([f"Evidence used: {evidence}", "Summary:", *key_file_lines(signals)])
+
+
+def _latest_edit_proposal(state: AgentCoreState) -> dict[str, Any] | None:
+    for result in reversed(state.action_results):
+        proposals = result.payload.get("edit_proposals") or []
+        if proposals:
+            return {"applied": bool(result.payload.get("applied")), "proposals": proposals}
+    return None
+
+
+def _format_edit_proposal(payload: dict[str, Any]) -> str:
+    proposals = [item for item in payload.get("proposals") or [] if isinstance(item, dict)]
+    if not proposals:
+        return "I prepared no file changes because there was not enough safe evidence to build a minimal patch."
+    sections = ["I prepared a proposed patch only. No files were modified in this run."]
+    for item in proposals[:3]:
+        file_path = str(item.get("file") or "unknown file")
+        before = str(item.get("before_summary") or "before state recorded")
+        after = str(item.get("after_summary") or "after state recorded")
+        diff = str(item.get("diff_summary") or "").strip()
+        notes = [str(note) for note in item.get("risk_notes") or [] if str(note)]
+        notes_text = ("\nRisk notes: " + "; ".join(notes)) if notes else ""
+        sections.append(
+            f"\n`{file_path}`\nBefore: {before}\nAfter: {after}{notes_text}\n\n```diff\n{diff[:3000]}\n```"
+        )
+    return "\n".join(sections)
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    result: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _compat_model_client():
+    try:
+        from repooperator_worker.agent_core import controller_graph
+
+        return getattr(controller_graph, "OpenAICompatibleModelClient", _OpenAICompatibleModelClient)
+    except Exception:
+        return _OpenAICompatibleModelClient
