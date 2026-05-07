@@ -241,9 +241,6 @@ class RepositoryReviewProgressTests(unittest.TestCase):
             "request": request,
             "target_files": [],
             "file_hints": [],
-            "requires_repository_wide_review": True,
-            "analysis_scope": "unknown",
-            "requested_workflow": "other",
         }
         self.assertTrue(_should_use_repository_wide_review(state))
 
@@ -265,64 +262,60 @@ class RepositoryReviewProgressTests(unittest.TestCase):
             "request": request,
             "target_files": ["server.py"],
             "file_hints": [],
-            "requires_repository_wide_review": True,
-            "analysis_scope": "repository_wide",
-            "requested_workflow": "repository_review",
         }
         self.assertFalse(_should_use_repository_wide_review(state))
 
-    def test_unknown_classifier_scope_does_not_select_repository_wide_review(self) -> None:
+    def test_specific_file_hint_does_not_select_repository_wide_review(self) -> None:
         request = AgentRunRequest(project_path=str(self.repo), git_provider="local", branch="main", task="Please help.")
         state = {
             "request": request,
-            "target_files": [],
+            "target_files": ["server.py"],
             "file_hints": [],
-            "requires_repository_wide_review": False,
-            "analysis_scope": "unknown",
-            "requested_workflow": "other",
         }
         self.assertFalse(_should_use_repository_wide_review(state))
 
     def test_korean_paraphrase_uses_mocked_classifier_scope_not_keywords(self) -> None:
         request = AgentRunRequest(project_path=str(self.repo), git_provider="local", branch="main", task="코드베이스를 한 바퀴 훑어줘")
         _ClassifierClient.payload = {
-            "intent": "repo_analysis",
-            "confidence": 0.91,
-            "analysis_scope": "repository_wide",
-            "requested_workflow": "repository_review",
-            "requires_repository_wide_review": True,
-            "target_files": [],
-            "target_symbols": [],
-            "requested_action": "broad_quality_pass",
+            "user_goal": "Broadly review the codebase",
+            "mentioned_files": [],
+            "mentioned_symbols": [],
+            "constraints": [],
+            "requested_outputs": ["review"],
+            "likely_needed_tools": ["inspect_repo_tree"],
+            "safety_notes": [],
+            "uncertainties": [],
             "needs_clarification": False,
+            "clarification_question": None,
         }
         with patch(
-            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            "repooperator_worker.agent_core.request_understanding.OpenAICompatibleModelClient",
             return_value=_ClassifierClient(),
         ):
             classified = _classify_intent({"request": request, "pending": {}})
-        self.assertEqual(classified["analysis_scope"], "repository_wide")
+        self.assertEqual(classified["target_files"], [])
         self.assertTrue(_should_use_repository_wide_review({**classified, "request": request}))
 
     def test_english_paraphrase_uses_mocked_classifier_scope_not_keywords(self) -> None:
         request = AgentRunRequest(project_path=str(self.repo), git_provider="local", branch="main", task="Give this codebase a quality pass.")
         _ClassifierClient.payload = {
-            "intent": "repo_analysis",
-            "confidence": 0.89,
-            "analysis_scope": "repository_wide",
-            "requested_workflow": "repository_review",
-            "requires_repository_wide_review": True,
-            "target_files": [],
-            "target_symbols": [],
-            "requested_action": "broad_quality_pass",
+            "user_goal": "Perform a broad quality pass over the codebase",
+            "mentioned_files": [],
+            "mentioned_symbols": [],
+            "constraints": [],
+            "requested_outputs": ["review"],
+            "likely_needed_tools": ["inspect_repo_tree"],
+            "safety_notes": [],
+            "uncertainties": [],
             "needs_clarification": False,
+            "clarification_question": None,
         }
         with patch(
-            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            "repooperator_worker.agent_core.request_understanding.OpenAICompatibleModelClient",
             return_value=_ClassifierClient(),
         ):
             classified = _classify_intent({"request": request, "pending": {}})
-        self.assertEqual(classified["requested_workflow"], "repository_review")
+        self.assertEqual(classified["target_files"], [])
         self.assertTrue(_should_use_repository_wide_review({**classified, "request": request}))
 
     def test_repository_wide_review_gate_has_no_natural_language_phrase_lists(self) -> None:

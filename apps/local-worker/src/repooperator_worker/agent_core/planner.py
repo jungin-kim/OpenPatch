@@ -250,21 +250,44 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
 
 
 def build_task_frame(request: AgentRunRequest, state: AgentCoreState) -> TaskFrame:
+    # Prefer RequestUnderstanding facts; fall back to ClassifierResult for compat.
+    ru = getattr(state, "request_understanding", None)
     classifier = state.classifier_result
-    mentioned_files = _dedupe([*getattr(classifier, "target_files", []), *_file_tokens(request.task)])
-    symbols = _dedupe([*getattr(classifier, "target_symbols", []), *symbol_tokens(request.task)])
+
+    # Merge deterministic file tokens with model-extracted mentions.
+    ru_files = list(getattr(ru, "mentioned_files", None) or []) if ru else []
+    cl_files = list(getattr(classifier, "target_files", None) or [])
+    mentioned_files = _dedupe([*ru_files, *cl_files, *_file_tokens(request.task)])
+
+    ru_symbols = list(getattr(ru, "mentioned_symbols", None) or []) if ru else []
+    cl_symbols = list(getattr(classifier, "target_symbols", None) or [])
+    symbols = _dedupe([*ru_symbols, *cl_symbols, *symbol_tokens(request.task)])
+
+    # Capability hints come from RequestUnderstanding.likely_needed_tools only.
+    # Do NOT route by retrieval_goal / requested_workflow — those fields are gone.
     capabilities: list[str] = []
-    if getattr(classifier, "retrieval_goal", "") in {"edit", "git", "command", "review", "answer"}:
-        capabilities.append(f"weak_{classifier.retrieval_goal}")
+    if ru:
+        for tool_hint in (getattr(ru, "likely_needed_tools", None) or []):
+            capabilities.append(f"weak_tool:{tool_hint}")
     if getattr(classifier, "needs_tool", None):
         capabilities.append(f"weak_tool:{classifier.needs_tool}")
     if mentioned_files or symbols:
         capabilities.append("file_read")
     if not capabilities:
         capabilities.append("open_planning")
-    constraints = []
-    if mentioned_files:
+
+    constraints = list(getattr(ru, "constraints", None) or []) if ru else []
+    if mentioned_files and not constraints:
         constraints.append("Use explicitly mentioned files before broader context.")
+
+    needs_clarification = bool(
+        (getattr(ru, "needs_clarification", None) or getattr(classifier, "needs_clarification", None))
+        and not mentioned_files
+    )
+    clarification_question = (
+        (getattr(ru, "clarification_question", None) or getattr(classifier, "clarification_question", None))
+    )
+
     return TaskFrame(
         user_goal=request.task,
         mentioned_files=mentioned_files,
@@ -272,11 +295,11 @@ def build_task_frame(request: AgentRunRequest, state: AgentCoreState) -> TaskFra
         constraints=constraints,
         likely_capabilities=_dedupe(capabilities),
         answer_style="concise_synthesis",
-        safety_notes=["Treat legacy intent as a weak hint only."],
-        uncertainty=[],
-        should_ask_clarification=bool(classifier.needs_clarification and not mentioned_files),
-        clarification_question=classifier.clarification_question,
-        legacy_intent=classifier.intent,
+        safety_notes=list(getattr(ru, "safety_notes", None) or []) if ru else [],
+        uncertainty=list(getattr(ru, "uncertainties", None) or []) if ru else [],
+        should_ask_clarification=needs_clarification,
+        clarification_question=clarification_question,
+        legacy_intent=getattr(classifier, "intent", "ambiguous"),
     )
 
 
@@ -422,12 +445,15 @@ def pending_commit_context(frame: TaskFrame) -> bool:
 
 
 def edit_requested(frame: TaskFrame) -> bool:
-    return "weak_edit" in frame.likely_capabilities or edit_requested_text(frame.user_goal)
+    weak_edit = "weak_edit" in frame.likely_capabilities or any(
+        cap in ("weak_tool:generate_edit", "weak_tool:run_command") for cap in frame.likely_capabilities
+    )
+    return weak_edit or edit_requested_text(frame.user_goal)
 
 
 def edit_requested_text(text: str) -> bool:
     lowered = (text or "").lower()
-    return any(token in lowered for token in ("fix", "change", "replace", "remove", "edit", "patch", "safe")) or any(token in text for token in ("고쳐", "바꿔", "변경", "제거", "수정", "안전"))
+    return any(token in lowered for token in ("fix", "change", "replace", "remove", "edit", "patch", "safe", "improve", "recover")) or any(token in text for token in ("고쳐", "바꿔", "변경", "제거", "수정", "안전", "복구", "개선"))
 
 
 def likely_edit_file_queries(frame: TaskFrame) -> list[str]:

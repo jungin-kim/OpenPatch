@@ -44,13 +44,16 @@ MAX_REPOSITORY_REVIEW_PROMPT_CHARS = 22_000
 
 
 def should_use_repository_wide_review(classifier: Any) -> bool:
-    if getattr(classifier, "target_files", None):
+    """Return True when no specific files are mentioned and the task is broad-scope.
+
+    Routing is evidence-based: if the caller has already identified target files,
+    skip the expensive repository-wide scan.  The decision does NOT depend on
+    workflow-bucket fields (requested_workflow, requires_repository_wide_review,
+    retrieval_goal) — those fields are intentionally absent from ClassifierResult.
+    """
+    if getattr(classifier, "target_files", None) or getattr(classifier, "mentioned_files", None):
         return False
-    return bool(
-        getattr(classifier, "requires_repository_wide_review", False)
-        or getattr(classifier, "analysis_scope", "") == "repository_wide"
-        or getattr(classifier, "requested_workflow", "") == "repository_review"
-    )
+    return True
 
 
 def run_repository_review(

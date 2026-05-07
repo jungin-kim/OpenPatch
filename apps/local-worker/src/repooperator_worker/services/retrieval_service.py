@@ -77,12 +77,20 @@ class QueryType:
 
 @dataclass
 class StructuredRetrievalIntent:
+    """Retrieval hint struct.
+
+    requested_workflow and retrieval_goal are legacy fields kept only for
+    backward compatibility with existing tests and callers. They must NOT
+    be used to route planner behavior. Use target_files and mentioned_files
+    as the primary evidence signals.
+    """
     analysis_scope: str = "unknown"
-    requested_workflow: str = "other"
     target_files: list[str] = field(default_factory=list)
     target_symbols: list[str] = field(default_factory=list)
-    retrieval_goal: str = "answer"
     file_types_requested: list[str] = field(default_factory=list)
+    # Legacy compatibility fields — do not add routing logic that reads these.
+    requested_workflow: str = "other"
+    retrieval_goal: str = "answer"
 
 
 def classify_query(task: str) -> tuple[str, list[str]]:
@@ -112,20 +120,16 @@ def classify_structured_intent(intent: StructuredRetrievalIntent | dict | None) 
     if isinstance(intent, dict):
         intent = StructuredRetrievalIntent(
             analysis_scope=str(intent.get("analysis_scope") or "unknown"),
-            requested_workflow=str(intent.get("requested_workflow") or "other"),
             target_files=[str(item) for item in intent.get("target_files") or []],
             target_symbols=[str(item) for item in intent.get("target_symbols") or []],
-            retrieval_goal=str(intent.get("retrieval_goal") or "answer"),
             file_types_requested=[str(item) for item in intent.get("file_types_requested") or []],
         )
     if intent.target_files:
         return QueryType.FILE_SPECIFIC, intent.target_files
-    if intent.analysis_scope == "repository_wide" or intent.requested_workflow == "repository_review":
+    # Evidence-based: broad scope when no target files and analysis_scope signals it.
+    # Do NOT route by requested_workflow / retrieval_goal bucket fields.
+    if intent.analysis_scope == "repository_wide":
         return QueryType.PROJECT_REVIEW, []
-    if intent.retrieval_goal == "architecture":
-        return QueryType.ARCHITECTURE, []
-    if intent.retrieval_goal == "dependencies":
-        return QueryType.DEPENDENCY, []
     return QueryType.GENERAL, []
 
 

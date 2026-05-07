@@ -272,17 +272,11 @@ class ActivePathMigrationTests(unittest.TestCase):
         *,
         intent: str = "ambiguous",
         target_files: list[str] | None = None,
-        retrieval_goal: str = "answer",
-        git_action: str | None = None,
     ) -> ClassifierResult:
         return ClassifierResult(
             intent=intent,
             confidence=0.1,
-            analysis_scope="unknown",
-            requested_workflow="other",
-            retrieval_goal=retrieval_goal,
             target_files=target_files or [],
-            git_action=git_action,
         )
 
     def test_agent_service_calls_agent_core_controller(self) -> None:
@@ -442,8 +436,6 @@ class ActivePathMigrationTests(unittest.TestCase):
         classifier = ClassifierResult(
             intent="read_only_question",
             confidence=0.9,
-            analysis_scope="single_file",
-            requested_workflow="file_review",
             target_files=["README.md"],
         )
         with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=classifier), patch(
@@ -501,7 +493,7 @@ class ActivePathMigrationTests(unittest.TestCase):
         self._write_unity_fixture()
         request = self._request()
         request.task = "Border.cs에서 &를 &&로 바꾸고 빈 Update 제거해줘. 변경 전후 설명도 해줘."
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
             "repooperator_worker.agent_core.controller_graph.get_active_repository",
             return_value=None,
         ):
@@ -516,7 +508,7 @@ class ActivePathMigrationTests(unittest.TestCase):
         self._write_unity_fixture()
         request = self._request()
         request.task = "저장 로직을 안전하게 고쳐줘."
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
             "repooperator_worker.agent_core.controller_graph.get_active_repository",
             return_value=None,
         ):
@@ -623,7 +615,7 @@ class ActivePathMigrationTests(unittest.TestCase):
                 "confidence": 0.9,
             }
         )
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
             "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
             return_value=planner,
         ), patch(
@@ -669,7 +661,7 @@ class ActivePathMigrationTests(unittest.TestCase):
         )
         request = self._request()
         request.task = "Border.cs에서 &를 &&로 바꾸고 빈 Update 제거해줘."
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
             "repooperator_worker.agent_core.action_executor.OpenAICompatibleModelClient",
             side_effect=RuntimeError("force deterministic validated fallback"),
         ), patch(
@@ -700,7 +692,7 @@ class ActivePathMigrationTests(unittest.TestCase):
         )
         request = self._request()
         request.task = "DataHandler.cs 저장 쪽 위험한 코드 찾아서 개선안 줘."
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
             "repooperator_worker.agent_core.action_executor.OpenAICompatibleModelClient",
             side_effect=RuntimeError("force deterministic validated fallback"),
         ), patch(
@@ -770,7 +762,7 @@ class ActivePathMigrationTests(unittest.TestCase):
                 "confidence": 0.9,
             }
         )
-        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
             "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
             return_value=planner,
         ), patch(
@@ -1017,8 +1009,6 @@ class ActivePathMigrationTests(unittest.TestCase):
         classifier = ClassifierResult(
             intent="read_only_question",
             confidence=0.9,
-            analysis_scope="single_file",
-            requested_workflow="file_review",
             target_files=["README.md"],
         )
         with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
@@ -1040,9 +1030,6 @@ class ActivePathMigrationTests(unittest.TestCase):
         classifier = ClassifierResult(
             intent="repo_analysis",
             confidence=0.9,
-            analysis_scope="repository_wide",
-            requested_workflow="repository_review",
-            requires_repository_wide_review=True,
         )
         action = AgentAction(
             type="analyze_repository",
@@ -1204,9 +1191,6 @@ class ActivePathMigrationTests(unittest.TestCase):
         classifier = ClassifierResult(
             intent="repo_analysis",
             confidence=0.9,
-            analysis_scope="repository_wide",
-            requested_workflow="repository_review",
-            requires_repository_wide_review=True,
         )
         with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
             "repooperator_worker.agent_core.controller_graph.classify_intent",

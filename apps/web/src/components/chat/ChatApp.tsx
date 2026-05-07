@@ -141,6 +141,9 @@ export function ChatApp() {
   const activeThreadIdRef = useRef<string | null>(null);
   const activeRunLastSequenceRef = useRef<Record<string, number>>({});
   const threadsRef = useRef<ChatThread[]>([]);
+  // Tracks (threadId, runId) we have already rehydrated to avoid looping when
+  // rememberActiveRun mutates activeRunByThread inside the rehydrate effect.
+  const lastRehydratedRef = useRef<{ threadId: string; runId: string } | null>(null);
 
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
@@ -166,13 +169,50 @@ export function ChatApp() {
       : next;
   }
 
+  // Finalizes a completed run in the UI synchronously:
+  // 1. Upserts the assistant message with final text + progress steps
+  // 2. Clears active-run state and transient stream state for this run
+  // Avoids arbitrary setTimeout delays that race with navigation or late deltas.
+  function finalizeRunInUi(
+    runId: string,
+    threadId: string,
+    finalResult: AgentRunPayload | null,
+    completedSteps: ProgressStep[],
+  ) {
+    rememberActiveRun(null, threadId);
+    setQuestionPending(false);
+    if (finalResult) {
+      setMessages((current) => {
+        const next = upsertAssistantMessageForRun(current, finalResult.run_id || runId, {
+          content: finalResult.response,
+          timestamp: new Date(),
+          metadata: finalResult,
+          progressSteps: completedSteps.length > 0 ? completedSteps : undefined,
+        });
+        updateThreadMessages(threadId, next);
+        return next;
+      });
+    }
+    // Clear transient stream state only after the run is fully finalized.
+    setProgressSteps([]);
+    setStreamedAnswer("");
+    setStreamedReasoning("");
+  }
+
   function activeRunStorageKey(threadId: string) {
     return `repooperator-active-run-id:${threadId}`;
   }
 
-  function activeThreadStorageKey() {
-    return "repooperator-active-thread-id";
+  // Returns a storage key scoped to the given repo identity so switching repos
+  // never restores a thread that belongs to a different repository.
+  function activeThreadStorageKey(repo?: RepoOpenPayload | null): string {
+    if (!repo) return "repooperator-active-thread-id";
+    const provider = repo.git_provider || "local";
+    const path = (repo.project_path || "").replace(/[^a-zA-Z0-9_\-/.]/g, "_");
+    return `repooperator-active-thread:${provider}:${path}`;
   }
+
+  const LEGACY_THREAD_KEY = "repooperator-active-thread-id";
 
   function rememberActiveRun(runId: string | null, threadId = activeThreadId) {
     if (!threadId) return;
@@ -190,12 +230,16 @@ export function ChatApp() {
     }
   }
 
-  function rememberActiveThread(threadId: string | null) {
+  function rememberActiveThread(threadId: string | null, repo?: RepoOpenPayload | null) {
     setActiveThreadId(threadId);
+    const scopedKey = activeThreadStorageKey(repo ?? repoResult);
     if (threadId) {
-      window.localStorage.setItem(activeThreadStorageKey(), threadId);
+      window.localStorage.setItem(scopedKey, threadId);
+      // Remove legacy global key to avoid cross-repo restoration on next load.
+      window.localStorage.removeItem(LEGACY_THREAD_KEY);
     } else {
-      window.localStorage.removeItem(activeThreadStorageKey());
+      window.localStorage.removeItem(scopedKey);
+      window.localStorage.removeItem(LEGACY_THREAD_KEY);
     }
   }
 
@@ -311,8 +355,16 @@ export function ChatApp() {
       try {
         const activeRuns = await getActiveAgentRuns(threadId).catch(() => ({ runs: [] }));
         const savedRunId = window.localStorage.getItem(activeRunStorageKey(threadId));
-        const runId = activeRunByThread[threadId] || savedRunId || activeRuns.runs[0]?.id;
+        // Read activeRunByThread via ref to avoid re-triggering this effect.
+        const knownRunId = activeRunByThread[threadId];
+        const runId = knownRunId || savedRunId || activeRuns.runs[0]?.id;
         if (!runId) return;
+        // Skip re-fetch if we already rehydrated this (threadId, runId) pair.
+        // rememberActiveRun mutates activeRunByThread which would otherwise re-fire
+        // this effect; the ref guard prevents that loop.
+        const lastRehydrated = lastRehydratedRef.current;
+        if (lastRehydrated?.threadId === threadId && lastRehydrated?.runId === runId) return;
+        lastRehydratedRef.current = { threadId, runId };
         const [run, eventPayload] = await Promise.all([
           getAgentRun(runId),
           getAgentRunEvents(runId),
@@ -329,21 +381,7 @@ export function ChatApp() {
           return;
         }
         const completedSteps = progressStepsForCompletedRun(events, finalResult);
-        setProgressSteps(completedSteps);
-        rememberActiveRun(null, threadId);
-        setQuestionPending(false);
-        if (finalResult) {
-          setMessages((current) => {
-            const next = upsertAssistantMessageForRun(current, finalResult.run_id || runId, {
-              content: finalResult.response,
-              timestamp: new Date(),
-              metadata: finalResult,
-              progressSteps: completedSteps.length > 0 ? completedSteps : undefined,
-            });
-            updateThreadMessages(threadId, next);
-            return next;
-          });
-        }
+        finalizeRunInUi(runId, threadId, finalResult, completedSteps);
       } catch {
         rememberActiveRun(null, threadId);
       }
@@ -352,7 +390,11 @@ export function ChatApp() {
     return () => {
       cancelled = true;
     };
-  }, [activeThreadId, activeRunByThread]);
+    // Deliberately omit activeRunByThread from deps — we read it inside but do not
+    // want mutations to activeRunByThread (from rememberActiveRun) to re-trigger this
+    // effect.  The lastRehydratedRef guard ensures idempotency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeThreadId]);
 
   function handleSidebarCollapsedChange() {
     setSidebarCollapsed((current) => {
@@ -383,22 +425,12 @@ export function ChatApp() {
             const completedEvents = completedEventPayload.events as AgentRunEvent[];
             const finalResult = finalResultFromRunEvents(completedEvents, run.final_result);
             const completedSteps = progressStepsForCompletedRun(completedEvents, finalResult);
+            // Merge latest partial events before finalizing so progress timeline is
+            // up-to-date when finalizeRunInUi clears the transient state.
             setProgressSteps((current) => mergeProgressEvents(current, events, { finalizeRunning: true }));
-            rememberActiveRun(null);
-            setQuestionPending(false);
             delete activeRunLastSequenceRef.current[activeRunId];
-            if (finalResult) {
-              setMessages((current) => {
-                const next = upsertAssistantMessageForRun(current, finalResult.run_id || activeRunId, {
-                  content: finalResult.response,
-                  timestamp: new Date(),
-                  metadata: finalResult,
-                  progressSteps: completedSteps.length > 0 ? completedSteps : undefined,
-                });
-                if (activeThreadIdRef.current) updateThreadMessages(activeThreadIdRef.current, next);
-                return next;
-              });
-            }
+            const finalThreadId = activeThreadIdRef.current || "";
+            finalizeRunInUi(activeRunId, finalThreadId, finalResult, completedSteps);
           } else {
             setProgressSteps((current) => mergeProgressEvents(current, events));
           }
@@ -426,11 +458,20 @@ export function ChatApp() {
         threadsRef.current = loadedThreads;
         setThreads(loadedThreads);
         if (!activeThreadIdRef.current && loadedThreads.length > 0) {
-          const savedThreadId = window.localStorage.getItem(activeThreadStorageKey());
-          const restored =
-            loadedThreads.find((thread) => thread.id === savedThreadId) ||
-            loadedThreads[0];
-          restoreThreadSnapshot(restored);
+          // Try repo-scoped key for the first thread's repo, then legacy fallback.
+          const firstRepo = loadedThreads[0]?.repoResult;
+          const scopedId = firstRepo ? window.localStorage.getItem(activeThreadStorageKey(firstRepo)) : null;
+          const legacyId = window.localStorage.getItem(LEGACY_THREAD_KEY);
+          const savedThreadId = scopedId ?? legacyId;
+          const matchedThread = loadedThreads.find((thread) => thread.id === savedThreadId);
+          // Use the matched thread; fallback to first thread.
+          const safeRestored = matchedThread ?? loadedThreads[0];
+          restoreThreadSnapshot(safeRestored);
+          // Migrate legacy key to repo-scoped key after successful restore.
+          if (legacyId && !scopedId && safeRestored.repoResult) {
+            window.localStorage.removeItem(LEGACY_THREAD_KEY);
+            window.localStorage.setItem(activeThreadStorageKey(safeRestored.repoResult), safeRestored.id);
+          }
         }
         setThreadStoreState("connected");
       } catch {
@@ -659,7 +700,7 @@ export function ChatApp() {
     setManualBranch(thread.repoResult.branch || "");
     setRepoResult(thread.repoResult);
     setMessages(thread.messages);
-    rememberActiveThread(thread.id);
+    rememberActiveThread(thread.id, thread.repoResult);
     const threadRunId = activeRunByThread[thread.id] || window.localStorage.getItem(activeRunStorageKey(thread.id));
     setActiveRunId(threadRunId || null);
     setQuestionPending(Boolean(threadRunId));
@@ -907,7 +948,7 @@ export function ChatApp() {
       };
       setRepoResult(payload);
       setMessages(nextMessages);
-      rememberActiveThread(nextThread.id);
+      rememberActiveThread(nextThread.id, payload);
       rememberThread(nextThread);
       void persistThread(nextThread);
       setRecentProjectHistory((prev) => mergeRecentProject(prev, payload));
@@ -1086,15 +1127,14 @@ export function ChatApp() {
       updateThreadMessages(runThreadId, messagesWithError, repoResult);
       return messagesWithError;
     } finally {
-      if (activeThreadIdRef.current === runThreadId) setQuestionPending(false);
-      // Keep progressSteps visible briefly before the message takes over
-      setTimeout(() => {
-        if (activeThreadIdRef.current === runThreadId) {
-          setProgressSteps([]);
-          setStreamedAnswer("");
-          setStreamedReasoning("");
-        }
-      }, 100);
+      // Clear transient stream state only after the run is fully finalized.
+      // The message has already been upserted above so there is no visual gap.
+      if (activeThreadIdRef.current === runThreadId) {
+        setQuestionPending(false);
+        setProgressSteps([]);
+        setStreamedAnswer("");
+        setStreamedReasoning("");
+      }
     }
   }
 
@@ -1216,7 +1256,7 @@ export function ChatApp() {
       updatedAt: new Date(),
     };
     setMessages(nextMessages);
-    rememberActiveThread(nextThread.id);
+    rememberActiveThread(nextThread.id, repoResult);
     rememberThread(nextThread);
     void persistThread(nextThread);
   }
@@ -1247,7 +1287,7 @@ export function ChatApp() {
         repoResult: reopened,
         updatedAt: new Date(),
       };
-      rememberActiveThread(thread.id);
+      rememberActiveThread(thread.id, reopened);
       setRepoResult(reopened);
       setMessages(thread.messages);
       const threadRunId = activeRunByThread[thread.id] || window.localStorage.getItem(activeRunStorageKey(thread.id));

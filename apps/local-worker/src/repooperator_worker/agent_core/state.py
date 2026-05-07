@@ -1,27 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from repooperator_worker.agent_core.actions import AgentAction, ActionResult
+
+if TYPE_CHECKING:
+    from repooperator_worker.agent_core.request_understanding import RequestUnderstanding
 
 
 @dataclass
 class ClassifierResult:
+    """Backward-compatibility struct only.
+
+    Do NOT add routing fields here (requested_workflow, retrieval_goal,
+    requires_repository_wide_review). Those fields are intentionally absent.
+    The planner must never branch on these fields.
+    Populated exclusively by request_understanding_to_classifier_result().
+    """
     intent: str = "ambiguous"
     confidence: float = 0.0
-    analysis_scope: str = "unknown"
-    requested_workflow: str = "other"
-    retrieval_goal: str = "answer"
     target_files: list[str] = field(default_factory=list)
     target_symbols: list[str] = field(default_factory=list)
-    file_types_requested: list[str] = field(default_factory=list)
     requested_action: str = ""
-    git_action: str | None = None
     needs_tool: str | None = None
     needs_clarification: bool = False
     clarification_question: str | None = None
-    requires_repository_wide_review: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -33,6 +37,9 @@ class AgentCoreState:
     branch: str | None
     user_task: str
     classifier_result: ClassifierResult = field(default_factory=ClassifierResult)
+    # Preferred: request understanding facts (populated by understand_request).
+    # classifier_result above is kept only for backward compatibility.
+    request_understanding: Any | None = None
     plan: list[str] = field(default_factory=list)
     current_step: str | None = None
     observations: list[str] = field(default_factory=list)

@@ -17,3 +17,13 @@ Use this checklist after runtime or chat-stream changes.
 13. Confirm read-only Git history/status output appears.
 14. Send `지난 작업 이력 보여주고, 지금 변경사항 커밋해줘.`
 15. Confirm commit execution is approval-gated and is not run automatically.
+
+## Thread rehydration (from 2026 patch)
+
+- Active-thread localStorage key is now **repo-scoped**: `repooperator-active-thread:{provider}:{path}`.
+  Opening a different repo will start a fresh thread; switching back restores the prior thread for that repo.
+  Legacy global key `repooperator-active-thread-id` is read as a one-time fallback and then removed.
+- The rehydrate loop guard (using a ref) prevents repeated rehydration when `activeRunByThread` changes.
+  Verify by: opening a thread, starting a run, navigating away mid-run, navigating back — confirm single rehydration, no loop.
+- Progress cleanup after a run completes is **synchronous** (via `finalizeRunInUi`), replacing the old `setTimeout(100)` hack.
+  Verify by: completing a run, immediately navigating away and back — confirm no stale progress cards.

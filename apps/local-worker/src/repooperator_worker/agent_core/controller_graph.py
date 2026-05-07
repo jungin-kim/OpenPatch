@@ -52,6 +52,12 @@ from repooperator_worker.agent_core.planner import (
     resolve_target_files,
     validate_model_next_action,
 )
+from repooperator_worker.agent_core.classifier import (
+    classify_intent,
+    validate_classifier_payload as _validate_classifier_payload,
+)
+# _parse_json kept for any tests that import it from this module.
+from repooperator_worker.agent_core.request_understanding import _parse_json
 from repooperator_worker.agent_core.state import AgentCoreState, ClassifierResult
 from repooperator_worker.agent_core.steering import (
     STEERING_PROMPT,
@@ -70,34 +76,6 @@ from repooperator_worker.services.json_safe import json_safe, safe_agent_respons
 from repooperator_worker.services.skills_service import enabled_skill_context
 from repooperator_worker.services.active_repository import get_active_repository
 
-CLASSIFIER_PROMPT = """\
-You are RepoOperator's intent classifier. Return JSON only.
-Schema:
-{
-  "intent": "read_only_question|repo_analysis|recommend_change_targets|review_recommendation|write_request|write_confirmation|file_clarification_answer|local_command_request|git_workflow_request|gitlab_mr_request|multi_step_request|pasted_prompt_or_spec|apply_spec_to_repo|ambiguous",
-  "confidence": 0.0,
-  "analysis_scope": "single_file|selected_files|repository_wide|unknown",
-  "requested_workflow": "repository_review|file_review|code_change|git_workflow|command|other",
-  "retrieval_goal": "answer|review|edit|git|command",
-  "target_files": [],
-  "target_symbols": [],
-  "file_types_requested": [],
-  "requested_action": "short structured action label",
-  "git_action": null,
-  "needs_tool": null,
-  "needs_clarification": false,
-  "clarification_question": null,
-  "requires_repository_wide_review": false
-}
-Do not route by matching user-language phrases. Extract structured intent.
-"""
-
-SUPPORTED_INTENTS = {
-    "read_only_question", "repo_analysis", "recommend_change_targets", "review_recommendation",
-    "write_request", "write_confirmation", "file_clarification_answer", "local_command_request",
-    "git_workflow_request", "gitlab_mr_request", "multi_step_request", "pasted_prompt_or_spec",
-    "apply_spec_to_repo", "ambiguous",
-}
 def run_controller_graph(
     request: AgentRunRequest,
     *,
@@ -193,7 +171,13 @@ def load_context(state: AgentCoreState, request: AgentRunRequest) -> None:
 
 
 def classify(state: AgentCoreState, request: AgentRunRequest) -> None:
-    state.classifier_result = classify_intent(request)
+    from repooperator_worker.agent_core.request_understanding import (
+        understand_request,
+        request_understanding_to_classifier_result,
+    )
+    ru = understand_request(request)
+    state.request_understanding = ru
+    state.classifier_result = request_understanding_to_classifier_result(ru, request)
     frame = build_task_frame(request, state)
     state.recommendation_context = json_safe({"task_frame": frame, "context_packet": state.context_packet})
     append_activity_event(
@@ -578,57 +562,6 @@ def propose_next_action_with_model(request: AgentRunRequest, state: AgentCoreSta
     return planner_propose_next_action_with_model(request, state, task_frame, model_client_factory=OpenAICompatibleModelClient)
 
 
-def classify_intent(request: AgentRunRequest) -> ClassifierResult:
-    try:
-        raw = OpenAICompatibleModelClient().generate_text(
-            ModelGenerationRequest(
-                system_prompt=CLASSIFIER_PROMPT,
-                user_prompt=json.dumps(
-                    {
-                        "task": request.task,
-                        "recent_messages": [
-                            {"role": item.role, "content": item.content[:500], "metadata": item.metadata}
-                            for item in request.conversation_history[-8:]
-                        ],
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-        )
-        payload = _parse_json(raw)
-    except Exception:
-        payload = {}
-    return _validate_classifier_payload(payload, request)
-
-
-def _validate_classifier_payload(payload: dict[str, Any], request: AgentRunRequest) -> ClassifierResult:
-    intent = str(payload.get("intent") or "ambiguous")
-    if intent not in SUPPORTED_INTENTS:
-        intent = "ambiguous"
-    target_files = [str(item).strip().lstrip("/") for item in payload.get("target_files") or [] if str(item).strip()]
-    if not target_files:
-        target_files = _file_tokens(request.task)
-    confidence = float(payload.get("confidence") or 0.0)
-    confidence = max(0.0, min(1.0, confidence))
-    return ClassifierResult(
-        intent=intent,
-        confidence=confidence,
-        analysis_scope=str(payload.get("analysis_scope") or "unknown"),
-        requested_workflow=str(payload.get("requested_workflow") or "other"),
-        retrieval_goal=str(payload.get("retrieval_goal") or "answer"),
-        target_files=target_files,
-        target_symbols=[str(item) for item in payload.get("target_symbols") or []],
-        file_types_requested=[str(item) for item in payload.get("file_types_requested") or []],
-        requested_action=str(payload.get("requested_action") or intent),
-        git_action=payload.get("git_action"),
-        needs_tool=payload.get("needs_tool"),
-        needs_clarification=bool(payload.get("needs_clarification")),
-        clarification_question=payload.get("clarification_question"),
-        requires_repository_wide_review=bool(payload.get("requires_repository_wide_review")),
-        raw=payload,
-    )
-
-
 def _initial_state(request: AgentRunRequest, run_id: str) -> AgentCoreState:
     return AgentCoreState(
         run_id=run_id,
@@ -731,22 +664,6 @@ def _format_command_preview(command: list[str], preview: dict[str, Any]) -> str:
     if preview.get("needs_approval"):
         return f"`{text}` requires approval before RepoOperator can run it. Reason: {preview.get('reason') or 'command policy'}"
     return f"`{text}` is allowed by command policy. I did not run a mutating command."
-
-
-def _parse_json(text: str) -> dict[str, Any]:
-    stripped = (text or "").strip()
-    if stripped.startswith("```"):
-        lines = stripped.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        stripped = "\n".join(lines)
-    try:
-        payload = json.loads(stripped)
-        return payload if isinstance(payload, dict) else {}
-    except json.JSONDecodeError:
-        return {}
 
 
 def _chunk_text(text: str, chunk_size: int = 96) -> Iterator[str]:
