@@ -234,6 +234,19 @@ export function ChatApp() {
       : next;
   }
 
+  function progressStepsForCompletedRun(
+    events?: AgentRunPayload["activity_events"],
+    finalResult?: AgentRunPayload | null,
+  ): ProgressStep[] {
+    const fromEvents = normalizeActivityEvents(events, { finalizeRunning: true });
+    if (fromEvents.length > 0) return fromEvents;
+    return normalizeActivityEvents(finalResult?.activity_events, { finalizeRunning: true });
+  }
+
+  function isRunActive(status?: string | null): boolean {
+    return status === "running" || status === "cancelling" || status === "waiting_approval";
+  }
+
   function maxEventSequence(events?: AgentRunPayload["activity_events"]): number {
     return Math.max(0, ...(events || []).map((event) => Number(event.sequence || 0)));
   }
@@ -377,7 +390,7 @@ export function ChatApp() {
         ]);
         if (cancelled) return;
         activeRunLastSequenceRef.current[runId] = maxEventSequence(eventPayload.events as AgentRunPayload["activity_events"]);
-        if (run.status === "running") {
+        if (isRunActive(run.status)) {
           setProgressSteps(normalizeActivityEvents(eventPayload.events as AgentRunPayload["activity_events"]));
           setQuestionPending(true);
           rememberActiveRun(runId, threadId);
@@ -397,9 +410,7 @@ export function ChatApp() {
             content: run.final_result.response,
             timestamp: new Date(),
             metadata: run.final_result,
-            progressSteps: normalizeActivityEvents(run.final_result.activity_events, {
-              finalizeRunning: true,
-            }),
+            progressSteps: progressStepsForCompletedRun(eventPayload.events as AgentRunPayload["activity_events"], run.final_result),
           };
           setMessages((current) => {
             if (current.some((message) => message.metadata?.run_id === run.final_result?.run_id)) return current;
@@ -440,7 +451,11 @@ export function ChatApp() {
           if (cancelled) return;
           const events = eventPayload.events as AgentRunPayload["activity_events"];
           activeRunLastSequenceRef.current[activeRunId] = Math.max(afterSequence, maxEventSequence(events));
-          if (run.status !== "running") {
+          if (!isRunActive(run.status)) {
+            const completedEventPayload = run.final_result
+              ? await getAgentRunEvents(activeRunId, 0)
+              : eventPayload;
+            const completedEvents = completedEventPayload.events as AgentRunPayload["activity_events"];
             setProgressSteps((current) => mergeProgressEvents(current, events, { finalizeRunning: true }));
             rememberActiveRun(null);
             setQuestionPending(false);
@@ -452,9 +467,7 @@ export function ChatApp() {
                 content: run.final_result.response,
                 timestamp: new Date(),
                 metadata: run.final_result,
-                progressSteps: normalizeActivityEvents(run.final_result.activity_events, {
-                  finalizeRunning: true,
-                }),
+                progressSteps: progressStepsForCompletedRun(completedEvents, run.final_result),
               };
               setMessages((current) => {
                 if (current.some((message) => message.metadata?.run_id === run.final_result?.run_id)) return current;

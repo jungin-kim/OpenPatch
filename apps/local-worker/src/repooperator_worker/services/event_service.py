@@ -131,6 +131,14 @@ def complete_active_run(
 
 def request_run_cancellation(run_id: str) -> dict[str, Any]:
     meta = get_run(run_id) or {}
+    if meta.get("status") in {"completed", "failed", "cancelled"}:
+        return meta
+    meta["status"] = "cancelling"
+    meta["error"] = meta.get("error")
+    try:
+        _run_meta_file(run_id).write_text(json.dumps(json_safe(meta), ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
     append_run_event(
         run_id,
         {
@@ -145,7 +153,7 @@ def request_run_cancellation(run_id: str) -> dict[str, Any]:
             "status": "waiting",
         },
     )
-    return complete_active_run(run_id=run_id, status="cancelled", error="Cancelled by user.")
+    return meta
 
 
 def record_run_steering(run_id: str, content: str) -> dict[str, Any]:
@@ -166,8 +174,10 @@ def record_run_steering(run_id: str, content: str) -> dict[str, Any]:
         {
             "content": summarize_user_message(content, max_len=500),
             "created_at": _now_iso(),
-            "accepted": True,
-            "reason": "Recorded for the active run. The agent applies steering at safe checkpoints when supported.",
+            "status": "recorded",
+            "accepted": None,
+            "parse_status": "pending",
+            "reason": "Recorded for parsing at the next safe checkpoint.",
         }
     )
     meta["steering_instructions"] = steering

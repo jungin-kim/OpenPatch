@@ -18,7 +18,7 @@ from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
 from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient, split_visible_reasoning
 from repooperator_worker.services.common import ensure_relative_to_repo, resolve_project_path
 from repooperator_worker.services.event_service import append_run_event, get_run, list_run_events
-from repooperator_worker.services.json_safe import json_safe, safe_repr
+from repooperator_worker.services.json_safe import json_safe, safe_agent_response_payload, safe_repr
 from repooperator_worker.services.response_quality_service import clean_user_visible_response
 from repooperator_worker.services.skills_service import enabled_skill_context
 from repooperator_worker.services.active_repository import get_active_repository
@@ -511,7 +511,7 @@ def stream_controller_graph(request: AgentRunRequest, *, run_id: str | None = No
         for chunk in _chunk_text(response.response):
             yield {"type": "assistant_delta", "delta": chunk, "streaming_mode": "post_hoc_chunking"}
     final = _response_json_safe(response.model_copy(update={"activity_events": []}), request)
-    yield {"type": "final_message", "result": final.model_dump(mode="json")}
+    yield {"type": "final_message", "result": safe_agent_response_payload(final)}
 
 
 def classify_intent(request: AgentRunRequest) -> ClassifierResult:
@@ -764,7 +764,7 @@ def _append_run_event_safe(run_id: str, event: dict[str, Any]) -> dict[str, Any]
 
 def _response_json_safe(response: AgentRunResponse, request: AgentRunRequest) -> AgentRunResponse:
     try:
-        payload = response.model_dump(mode="json")
+        payload = safe_agent_response_payload(response)
         json.dumps(payload, ensure_ascii=False)
         return response
     except Exception as exc:  # noqa: BLE001

@@ -5,6 +5,8 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,7 +18,7 @@ if str(SRC_DIR) not in sys.path:
 
 from repooperator_worker.agent_core.action_executor import ActionExecutor  # noqa: E402
 from repooperator_worker.agent_core.actions import AgentAction, ActionResult  # noqa: E402
-from repooperator_worker.agent_core.controller_graph import _existing_target_files, _answer_with_model, parse_steering_instruction, run_controller_graph, stream_controller_graph  # noqa: E402
+from repooperator_worker.agent_core.controller_graph import SteeringDecision, _existing_target_files, _answer_with_model, consume_steering_for_state, parse_steering_instruction, run_controller_graph, stream_controller_graph  # noqa: E402
 from repooperator_worker.agent_core.state import ClassifierResult  # noqa: E402
 from repooperator_worker.agent_core.repository_review import review_single_file  # noqa: E402
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse  # noqa: E402
@@ -27,7 +29,7 @@ from repooperator_worker.services.agent_orchestration_graph import (  # noqa: E4
 from repooperator_worker.services.agent_run_coordinator import start_run, stream_run  # noqa: E402
 from repooperator_worker.services.agent_service import run_agent_task  # noqa: E402
 from repooperator_worker.services.event_service import append_run_event, list_run_events  # noqa: E402
-from repooperator_worker.services.json_safe import json_safe  # noqa: E402
+from repooperator_worker.services.json_safe import json_safe, safe_agent_response_payload  # noqa: E402
 
 
 class _StreamingReviewClient:
@@ -53,6 +55,10 @@ class _LoopClient:
 
     def generate_text(self, _request):
         return "README.md evidence reached the final answer."
+
+
+class _JsonSafeEnum(Enum):
+    SAMPLE = "sample"
 
 
 class ActivePathMigrationTests(unittest.TestCase):
@@ -347,6 +353,49 @@ class ActivePathMigrationTests(unittest.TestCase):
         self.assertEqual(result.status, "success")
         self.assertIsInstance(result.payload.get("response"), dict)
 
+    def test_analyze_repository_preserves_success_when_response_metadata_needs_sanitizing(self) -> None:
+        request = self._request()
+        response = self._response(request, "run-bad-metadata").model_copy(
+            update={"activity_events": [{"bad": object(), "classifier": ClassifierResult()}]}
+        )
+        action = AgentAction(type="analyze_repository", reason_summary="Review repo", payload={"classifier": ClassifierResult()})
+        with patch(
+            "repooperator_worker.agent_core.action_executor.run_repository_review",
+            return_value=response,
+        ):
+            result = ActionExecutor(run_id="run-bad-metadata", request=request).execute(action)
+        self.assertEqual(result.status, "success")
+        payload = result.model_dump()
+        json.dumps(payload, ensure_ascii=False)
+        self.assertEqual(payload["payload"]["response"]["response"], response.response)
+        self.assertEqual(payload["payload"]["response"]["files_read"], response.files_read)
+        self.assertTrue(payload["payload"]["response"]["metadata_serialization_error"])
+
+    def test_json_safe_handles_core_boundary_values(self) -> None:
+        response = self._response(self._request(), "run-json-safe-values").model_copy(
+            update={"activity_events": [{"decision": SteeringDecision(steering_type="defer"), "when": datetime(2026, 5, 6), "kind": _JsonSafeEnum.SAMPLE}]}
+        )
+        action = AgentAction(type="analyze_repository", reason_summary="Review repo", payload={"classifier": ClassifierResult(), "paths": {Path("README.md")}})
+        result = ActionResult(action_id=action.action_id, status="success", payload={"response": safe_agent_response_payload(response)})
+        event = {"type": "action_result", "aggregate": {"steering": SteeringDecision(steering_type="defer")}, "action": action, "result": result}
+        for value in [ClassifierResult(), SteeringDecision(), action, result, event, response]:
+            json.dumps(json_safe(value), ensure_ascii=False)
+
+    def test_stream_controller_graph_final_message_result_is_json_safe(self) -> None:
+        request = self._request()
+        bad_response = self._response(request, "run-stream-safe").model_copy(update={"activity_events": [{"bad": object()}]})
+        with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
+            "repooperator_worker.services.event_service.get_repooperator_home_dir",
+            return_value=Path(self.home.name),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.run_controller_graph",
+            return_value=bad_response,
+        ):
+            events = list(stream_controller_graph(request, run_id="run-stream-safe"))
+        final = next(event for event in events if event.get("type") == "final_message")
+        json.dumps(final["result"], ensure_ascii=False)
+        self.assertEqual(final["result"]["response"], bad_response.response)
+
     def test_stream_run_does_not_reappend_persisted_assistant_delta(self) -> None:
         request = self._request()
 
@@ -396,11 +445,41 @@ class ActivePathMigrationTests(unittest.TestCase):
         self.assertEqual(decision.steering_type, "cancel")
         self.assertGreaterEqual(decision.confidence, 0.8)
 
+    def test_consume_steering_emits_applied_and_deferred_from_structured_parser(self) -> None:
+        request = self._request()
+        state = self._state_for_steering(ClassifierResult())
+        with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(self.config)}, clear=False), patch(
+            "repooperator_worker.services.event_service.get_repooperator_home_dir",
+            return_value=Path(self.home.name),
+        ), patch(
+            "repooperator_worker.services.agent_run_coordinator.consume_steering",
+            return_value=[{"id": "one", "content": "README.md"}, {"id": "two", "content": "unclear"}],
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.parse_steering_instruction",
+            side_effect=[
+                SteeringDecision(steering_type="add_target_file", target_files=["README.md"], confidence=0.9, reason="file target"),
+                SteeringDecision(steering_type="unknown", target_files=[], confidence=0.0, reason="unknown"),
+            ],
+        ):
+            consume_steering_for_state(state, request)
+            events = list_run_events("run-steering-test")
+        self.assertIn("README.md", state.classifier_result.target_files)
+        steering_events = [event for event in events if str(event.get("activity_id", "")).startswith("controller-steering:")]
+        self.assertEqual([event.get("aggregate", {}).get("steering_event_type") for event in steering_events], ["steering_applied", "steering_deferred"])
+
     def test_frontend_progress_merge_does_not_autocomplete_unrelated_running_activity(self) -> None:
         source = (TESTS_DIR.parents[2] / "apps" / "web" / "src" / "components" / "chat" / "ChatApp.tsx").read_text(encoding="utf-8")
         merge_body = source.split("function mergeProgressStep(", 1)[1].split("function mergeProgressStepFields", 1)[0]
         self.assertNotIn("completedPrev", merge_body)
         self.assertNotIn("index === current.length - 1 && step.status === \"running\"", merge_body)
+
+    def test_frontend_rehydrate_uses_stored_events_before_final_activity_events(self) -> None:
+        source = (TESTS_DIR.parents[2] / "apps" / "web" / "src" / "components" / "chat" / "ChatApp.tsx").read_text(encoding="utf-8")
+        helper_body = source.split("function progressStepsForCompletedRun(", 1)[1].split("function isRunActive", 1)[0]
+        self.assertIn("normalizeActivityEvents(events", helper_body)
+        self.assertIn("if (fromEvents.length > 0) return fromEvents", helper_body)
+        self.assertIn("progressStepsForCompletedRun(eventPayload.events", source)
+        self.assertIn("progressStepsForCompletedRun(completedEvents", source)
 
     def test_repository_review_final_response_json_safe(self) -> None:
         request = self._request()

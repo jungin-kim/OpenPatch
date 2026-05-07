@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -198,15 +199,18 @@ class ControlPlaneSafetyTests(unittest.TestCase):
                     },
                 )
                 steering = steer_run(run_id, content="Prefer a narrower pass.")
-                self.assertEqual(steering["status"], "accepted")
+                self.assertEqual(steering["status"], "recorded")
+                self.assertIsNone(steering["steering"].get("accepted"))
+                self.assertEqual(steering["steering"].get("parse_status"), "pending")
                 self.assertTrue(consume_steering(run_id))
                 cancelled = cancel_run(run_id)
-                self.assertEqual(cancelled["status"], "cancelled")
+                self.assertEqual(cancelled["status"], "cancelling")
                 events = list_run_events(run_id)
-                self.assertTrue(all(event.get("status") != "running" for event in events))
                 cancellation = [event for event in events if event.get("event_type") == "cancellation_requested"][0]
                 self.assertEqual(cancellation["thread_id"], "thread-b")
                 self.assertEqual(cancellation["repo"], str(repo))
+                self.assertIn(run_id, {item["id"] for item in get_active_runs()})
+                complete_active_run(run_id=run_id, status="cancelled", error="Cancelled by user.")
                 self.assertNotIn(run_id, {item["id"] for item in get_active_runs()})
 
     def test_stream_run_returns_generator_object_and_done(self) -> None:
@@ -261,6 +265,50 @@ class ControlPlaneSafetyTests(unittest.TestCase):
                 self.assertTrue(any("progress_delta" in chunk for chunk in chunks))
                 self.assertTrue(chunks[-1].strip().endswith("[DONE]"))
                 self.assertEqual(get_run(run_id)["status"], "completed")
+
+    def test_stream_cancellation_stays_active_until_worker_finalizes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_home:
+            home = Path(temp_home)
+            repo = home / "repo"
+            _init_repo(repo)
+            config = _write_config(home)
+            request = AgentRunRequest(project_path=str(repo), thread_id="thread-cancel-stream", task="Stream until cancelled.")
+
+            def cancellable_stream(_request, *, run_id=None):
+                yield {"type": "progress_delta", "run_id": run_id, "phase": "Thinking", "label": "Working", "status": "running"}
+                deadline = time.time() + 2
+                while time.time() < deadline and get_run(str(run_id)).get("status") != "cancelling":
+                    time.sleep(0.01)
+                response = AgentRunResponse(
+                    project_path=str(repo),
+                    task=request.task,
+                    model="test-model",
+                    repo_root_name="repo",
+                    context_summary="",
+                    top_level_entries=[],
+                    readme_included=False,
+                    diff_included=False,
+                    is_git_repository=True,
+                    response="Run cancelled.",
+                    stop_reason="cancelled",
+                )
+                yield {"type": "final_message", "run_id": run_id, "result": response.model_dump(mode="json")}
+
+            with patch.dict(os.environ, {"REPOOPERATOR_CONFIG_PATH": str(config)}, clear=True), patch(
+                "repooperator_worker.agent_core.controller_graph.stream_controller_graph",
+                side_effect=cancellable_stream,
+            ):
+                run_id, stream = stream_run(request)
+                self.assertIn(run_id, {item["id"] for item in get_active_runs()})
+                cancelling = cancel_run(run_id)
+                self.assertEqual(cancelling["status"], "cancelling")
+                self.assertIn(run_id, {item["id"] for item in get_active_runs()})
+                for _ in range(20):
+                    chunk = next(stream)
+                    if "[DONE]" in chunk:
+                        break
+                self.assertEqual(get_run(run_id)["status"], "cancelled")
+                self.assertNotIn(run_id, {item["id"] for item in get_active_runs()})
 
     def test_failed_stream_records_failed_run_and_error_event(self) -> None:
         with tempfile.TemporaryDirectory() as temp_home:

@@ -16,13 +16,14 @@ from repooperator_worker.services.event_service import (
     get_run,
     list_run_events,
     new_run_id,
+    request_run_cancellation,
     record_agent_run,
     record_event,
     start_active_run,
     summarize_user_message,
 )
 from repooperator_worker.agent_core.actions import ActionResult
-from repooperator_worker.services.json_safe import json_safe, safe_repr
+from repooperator_worker.services.json_safe import json_safe, safe_agent_response_payload, safe_repr
 from repooperator_worker.services.memory_service import maybe_record_from_agent_run
 from repooperator_worker.services.thread_context_service import update_thread_context
 
@@ -127,7 +128,10 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
                     )
                 except Exception:
                     pass
-            terminal_status = "cancelled" if isinstance(final_result, dict) and final_result.get("stop_reason") == "cancelled" else "completed"
+            run_meta = get_run(run_id) or {}
+            terminal_status = "cancelled" if (
+                isinstance(final_result, dict) and final_result.get("stop_reason") == "cancelled"
+            ) or run_meta.get("status") == "cancelling" else "completed"
             complete_active_run(run_id=run_id, status=terminal_status, final_result=final_result)
             if terminal_status == "completed":
                 _drain_queue_after_run(request)
@@ -229,7 +233,7 @@ def steer_run(run_id: str, *, content: str | None = None, queued_message_id: str
     run = get_run(run_id)
     if run is None:
         raise ValueError("Run not found.")
-    if run.get("status") != "running":
+    if run.get("status") not in {"running", "cancelling"}:
         raise ValueError("Only running agent runs can accept steering.")
     steering_content = (content or "").strip()
     queue_item: dict[str, Any] | None = None
@@ -249,9 +253,9 @@ def steer_run(run_id: str, *, content: str | None = None, queued_message_id: str
         label="Received steering instruction",
         detail=summarize_user_message(steering_content, max_len=220),
         status="completed",
-        event_type="steering_accepted",
+        event_type="steering_recorded",
     )
-    return {"status": "accepted", "run_id": run_id, "steering": meta}
+    return {"status": "recorded", "run_id": run_id, "steering": meta}
 
 
 def cancel_run(run_id: str) -> dict[str, Any]:
@@ -261,15 +265,7 @@ def cancel_run(run_id: str) -> dict[str, Any]:
     if run.get("status") not in {"running", "cancelling", "waiting_approval"}:
         return run
     _set_control_flag(run_id, "cancellation_requested", True)
-    append_activity(
-        run_id,
-        phase="Finished",
-        label="Cancellation requested",
-        detail="RepoOperator will stop this run at the next safe checkpoint.",
-        status="waiting",
-        event_type="cancellation_requested",
-    )
-    return complete_active_run(run_id=run_id, status="cancelled", error="Cancelled by user.")
+    return request_run_cancellation(run_id)
 
 
 def should_cancel(run_id: str) -> bool:
@@ -373,7 +369,7 @@ def complete_run(run_id: str, *, status: str, final_result: dict[str, Any] | Non
 
 def _safe_final_result(response: AgentRunResponse, *, run_id: str) -> dict[str, Any]:
     try:
-        payload = response.model_dump(mode="json")
+        payload = safe_agent_response_payload(response)
         json.dumps(payload, ensure_ascii=False)
         return payload
     except Exception as exc:  # noqa: BLE001
@@ -556,7 +552,10 @@ def _append_steering(run_id: str, content: str) -> dict[str, Any]:
         "id": f"steer_{uuid.uuid4().hex[:12]}",
         "content": summarize_user_message(content, max_len=500),
         "created_at": _now_iso(),
-        "accepted": True,
+        "status": "recorded",
+        "accepted": None,
+        "parse_status": "pending",
+        "reason": "Recorded for parsing at the next safe checkpoint.",
     }
     steering.append(item)
     control["steering_instructions"] = steering

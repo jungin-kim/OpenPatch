@@ -12,6 +12,7 @@ from repooperator_worker.agent_core.repository_review import run_repository_revi
 from repooperator_worker.schemas import AgentRunRequest
 from repooperator_worker.services.command_service import run_command_with_policy
 from repooperator_worker.services.common import resolve_project_path
+from repooperator_worker.services.json_safe import safe_agent_response_payload
 
 
 class ActionExecutor:
@@ -33,7 +34,7 @@ class ActionExecutor:
                     status="success",
                     observation="Repository review completed.",
                     files_read=response.files_read,
-                    payload={"response": response.model_dump(mode="json")},
+                    payload={"response": safe_agent_response_payload(response)},
                 )
             elif action.type in {"preview_command", "inspect_git_state"}:
                 result = self._preview_command(action)
