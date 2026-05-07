@@ -202,6 +202,7 @@ def run_controller_graph(
     if not state.final_response:
         on_delta = _stream_final_delta(run_id) if stream_final_answer else None
         state.final_response = build_final_answer_text(state, request, skills_context=skills_context, on_delta=on_delta)
+    state.final_response = validate_or_repair_final_answer(state.final_response, state, request)
     return build_final_response(state, request)
 
 
@@ -392,6 +393,19 @@ def controller_choose_next_action(state: AgentCoreState, request: AgentRunReques
             payload={"queries": unresolved},
         )
 
+    explicit_candidates = current_search_candidate_files(state, min_score=35.0)
+    explicit_candidate_unread = [
+        path for path in explicit_candidates
+        if path not in state.files_read and any(Path(path).name.lower() == Path(item).name.lower() for item in unresolved)
+    ]
+    if explicit_candidate_unread:
+        return AgentAction(
+            type="read_file",
+            reason_summary="Read the resolved high-confidence target file.",
+            target_files=explicit_candidate_unread[:1],
+            expected_output="File contents for grounded answer.",
+        )
+
     if frame.mentioned_symbols and not state.files_read and not _has_search_for(state, frame.mentioned_symbols):
         return AgentAction(
             type="search_files",
@@ -399,28 +413,6 @@ def controller_choose_next_action(state: AgentCoreState, request: AgentRunReques
             target_symbols=frame.mentioned_symbols,
             expected_output="Repo-relative candidate paths.",
             payload={"queries": frame.mentioned_symbols},
-        )
-
-    if edit_requested(frame) and state.files_read:
-        if not _has_action(state, "generate_edit"):
-            return AgentAction(
-                type="generate_edit",
-                reason_summary="Prepare a minimal proposed patch from the files already read.",
-                target_files=list(state.files_read[-4:]),
-                expected_output="Proposed diff and before/after summary.",
-                payload={"task_frame": json_safe(frame)},
-            )
-        return AgentAction(type="final_answer", reason_summary="Report the proposed edit without claiming it was applied.")
-
-    searched_candidates = candidate_files_from_results(state)
-    candidate_unread = [path for path in searched_candidates if path not in state.files_read]
-    if candidate_unread:
-        read_limit = 1 if edit_requested(frame) else 4
-        return AgentAction(
-            type="read_file",
-            reason_summary="Read best candidate files found by repository search.",
-            target_files=candidate_unread[:read_limit],
-            expected_output="Candidate file contents.",
         )
 
     if unresolved and _has_search_for(state, unresolved):
@@ -469,7 +461,29 @@ def controller_choose_next_action(state: AgentCoreState, request: AgentRunReques
             )
         return AgentAction(type="final_answer", reason_summary="Answer from command evidence.")
 
+    searched_candidates = candidate_files_from_results(state, edit_related=edit_requested(frame))
+    candidate_unread = [path for path in searched_candidates if path not in state.files_read]
+    if candidate_unread:
+        read_limit = 1 if edit_requested(frame) else 4
+        return AgentAction(
+            type="read_file",
+            reason_summary="Read best candidate files found by repository search.",
+            target_files=candidate_unread[:read_limit],
+            expected_output="Candidate file contents.",
+        )
+
     if edit_requested(frame):
+        edit_targets = current_edit_target_files(state, frame, request)
+        if edit_targets:
+            if not _has_action(state, "generate_edit"):
+                return AgentAction(
+                    type="generate_edit",
+                    reason_summary="Prepare a proposed patch for validated current edit targets.",
+                    target_files=edit_targets,
+                    expected_output="Proposed diff and before/after summary.",
+                    payload={"task_frame": json_safe(frame), "current_edit_targets": edit_targets},
+                )
+            return AgentAction(type="final_answer", reason_summary="Report the proposed edit without claiming it was applied.")
         if not _has_action(state, "inspect_repo_tree"):
             return AgentAction(type="inspect_repo_tree", reason_summary="Inspect repository before locating edit targets.")
         edit_queries = likely_edit_file_queries(frame)
@@ -807,9 +821,24 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
             if not unread:
                 return None
             return AgentAction(type="read_file", reason_summary=reason, target_files=unread, expected_output=expected)
+        valid_edit_targets = set(current_edit_target_files(state, task_frame, request, model_targets=resolved))
+        if not valid_edit_targets:
+            queries = _dedupe([*target_files, *target_symbols, *search_queries, *file_globs])
+            if queries or text_queries:
+                return AgentAction(
+                    type="search_files",
+                    reason_summary="Find validated edit targets before preparing a patch.",
+                    target_symbols=target_symbols,
+                    expected_output="Ranked repo-contained candidate files.",
+                    payload={"queries": queries, "text_queries": text_queries or EDIT_DISCOVERY_TEXT_SIGNALS, "file_globs": file_globs, "source": "model_planner"},
+                )
+            return None
         if not state.files_read and unread:
             return AgentAction(type="read_file", reason_summary="Read target files before preparing an edit proposal.", target_files=unread, expected_output="File contents for edit proposal.")
-        return AgentAction(type="generate_edit", reason_summary=reason, target_files=resolved, expected_output=expected, payload={"source": "model_planner"})
+        unread_valid = [path for path in valid_edit_targets if path not in state.files_read]
+        if unread_valid:
+            return AgentAction(type="read_file", reason_summary="Read target files before preparing an edit proposal.", target_files=unread_valid, expected_output="File contents for edit proposal.")
+        return AgentAction(type="generate_edit", reason_summary=reason, target_files=list(valid_edit_targets), expected_output=expected, payload={"source": "model_planner", "current_edit_targets": list(valid_edit_targets)})
 
     if action_type == "search_files":
         queries = _dedupe([*search_queries, *target_files, *file_globs, *target_symbols])
@@ -828,6 +857,13 @@ def validate_model_next_action(payload: dict[str, Any], request: AgentRunRequest
     if action_type in {"preview_command", "inspect_git_state", "run_approved_command"}:
         if not command:
             return None
+        if action_type == "run_approved_command" and not (_latest_command_preview(state, command) and _preview_read_only(_latest_command_preview(state, command).command_result)):
+            return AgentAction(
+                type="inspect_git_state" if command[:1] == ["git"] else "preview_command",
+                reason_summary=reason,
+                command=command,
+                expected_output="Command safety classification.",
+            )
         preview_action = "inspect_git_state" if command[:1] == ["git"] else "preview_command"
         if not _has_command_preview(state, command):
             return AgentAction(type=preview_action, reason_summary=reason, command=command, expected_output="Command safety classification.")
@@ -936,6 +972,73 @@ def _quality_guard_answer(answer: str, *, file_contents: dict[str, str]) -> str 
     return answer
 
 
+def validate_or_repair_final_answer(answer: str, state: AgentCoreState, request: AgentRunRequest) -> str:
+    text = answer or ""
+    lowered = text.lower()
+    edit_proposal = _latest_edit_proposal(state)
+    if edit_proposal and not edit_proposal.get("applied"):
+        proposal_only = "proposed patch only" in lowered or "no files were modified" in lowered
+        false_write = any(
+            phrase in lowered
+            for phrase in ("applied", "modified the file", "changed the file", "wrote", "saved", "수정했습니다", "적용했습니다")
+        )
+        if false_write and not proposal_only:
+            return _format_edit_proposal(edit_proposal)
+    if state.files_read and any(
+        phrase in lowered
+        for phrase in (
+            "cannot read",
+            "can't read",
+            "files object is empty",
+            "repository structure only",
+            "only see repository structure",
+            "파일을 읽을 수 없습니다",
+        )
+    ):
+        return _fallback_answer_from_state(state, request)
+    if re.search(r"[�]{2,}|[A-Za-z]{2,}[가-힣]{2,}[A-Za-z]{2,}|[\u0400-\u04ff\u0600-\u06ff]{8,}", text):
+        return _fallback_answer_from_state(state, request)
+    if _looks_like_project_summary_request(request) and _looks_like_file_dump(text):
+        return _fallback_answer_from_state(state, request, project_summary=True)
+    if not state.files_read and not state.commands_run and len(state.observations) <= 1 and _makes_repo_claim(text):
+        return "I do not have enough repository evidence yet to answer that safely. Please point me at a file or let me inspect the repository first."
+    return text
+
+
+def _fallback_answer_from_state(state: AgentCoreState, request: AgentRunRequest, *, project_summary: bool = False) -> str:
+    if project_summary and state.files_read:
+        files = ", ".join(f"`{path}`" for path in state.files_read[:6])
+        return (
+            "I inspected the gathered project evidence and can give a grounded summary.\n\n"
+            f"Evidence used: {files}.\n"
+            "Purpose and architecture should be synthesized from those files; no file-by-file review dump is needed."
+        )
+    if state.files_read:
+        files = ", ".join(f"`{path}`" for path in state.files_read)
+        return f"I inspected {files}. I can answer from those files, but the model answer needed repair, so I am keeping this grounded summary instead."
+    if state.commands_run:
+        return f"I ran: {', '.join(state.commands_run)}."
+    return "I do not have enough repository evidence yet to answer safely."
+
+
+def _looks_like_project_summary_request(request: AgentRunRequest) -> bool:
+    classifier = getattr(request, "task", "")
+    lowered = classifier.lower()
+    return "project" in lowered or "프로젝트" in classifier
+
+
+def _looks_like_file_dump(answer: str) -> bool:
+    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    file_like_lines = [line for line in lines if re.search(r"\b[\w./-]+\.(py|cs|js|ts|tsx|md|json|toml)\b", line)]
+    reviewed_lines = [line for line in lines if line.lower().startswith(("reviewed ", "- reviewed", "* reviewed"))]
+    return len(file_like_lines) >= 6 or len(reviewed_lines) >= 4
+
+
+def _makes_repo_claim(answer: str) -> bool:
+    lowered = answer.lower()
+    return any(term in lowered for term in ("this repository", "this project", "codebase", "프로젝트", "저장소"))
+
+
 def _fallback_answer(request: AgentRunRequest, file_contents: dict[str, str], repo_observation: str) -> str:
     if file_contents:
         files = ", ".join(f"`{path}`" for path in file_contents)
@@ -955,17 +1058,17 @@ def _initial_state(request: AgentRunRequest, run_id: str) -> AgentCoreState:
 
 def build_task_frame(request: AgentRunRequest, state: AgentCoreState) -> TaskFrame:
     classifier = state.classifier_result
-    mentioned_files = _dedupe([*getattr(classifier, "target_files", []), *_file_tokens(request.task), *files_from_recent_context(request)])
+    mentioned_files = _dedupe([*getattr(classifier, "target_files", []), *_file_tokens(request.task)])
     symbols = _dedupe([*getattr(classifier, "target_symbols", []), *symbol_tokens(request.task)])
     capabilities: list[str] = []
-    if command_needed_for_text(request.task):
-        capabilities.append("command")
-    if edit_requested_text(request.task) or getattr(classifier, "retrieval_goal", "") == "edit":
-        capabilities.append("edit")
+    if getattr(classifier, "retrieval_goal", "") in {"edit", "git", "command", "review", "answer"}:
+        capabilities.append(f"weak_{classifier.retrieval_goal}")
+    if getattr(classifier, "needs_tool", None):
+        capabilities.append(f"weak_tool:{classifier.needs_tool}")
     if mentioned_files or symbols:
         capabilities.append("file_read")
     if not capabilities:
-        capabilities.append("repository_context")
+        capabilities.append("open_planning")
     constraints = []
     if mentioned_files:
         constraints.append("Use explicitly mentioned files before broader context.")
@@ -1096,6 +1199,7 @@ def command_needed_for_task(frame: TaskFrame, state: AgentCoreState) -> list[str
 
 
 def command_needed_for_text(text: str) -> list[str] | None:
+    # Fallback-only compatibility heuristic. The model next-action planner is the primary planner.
     lowered = (text or "").lower()
     if ("git log" in lowered) or ("commit" in lowered and "recent" in lowered) or ("커밋" in text and "최근" in text):
         return ["git", "log", "--oneline", "-n", "5"]
@@ -1103,15 +1207,17 @@ def command_needed_for_text(text: str) -> list[str] | None:
 
 
 def pending_commit_context(frame: TaskFrame) -> bool:
+    # Fallback-only compatibility heuristic for commit approval messaging.
     lowered = frame.user_goal.lower()
     return "commit it" in lowered or "commit changes" in lowered or "커밋해" in frame.user_goal or "커밋 해" in frame.user_goal
 
 
 def edit_requested(frame: TaskFrame) -> bool:
-    return edit_requested_text(frame.user_goal) or "edit" in frame.likely_capabilities
+    return "weak_edit" in frame.likely_capabilities or edit_requested_text(frame.user_goal)
 
 
 def edit_requested_text(text: str) -> bool:
+    # Fallback-only compatibility heuristic. It must not run before explicit evidence or model planning.
     lowered = (text or "").lower()
     return any(token in lowered for token in ("fix", "change", "replace", "remove", "edit", "patch", "safe")) or any(token in text for token in ("고쳐", "바꿔", "변경", "제거", "수정", "안전"))
 
@@ -1132,13 +1238,57 @@ def _has_search_for(state: AgentCoreState, queries: list[str]) -> bool:
     return False
 
 
-def candidate_files_from_results(state: AgentCoreState) -> list[str]:
+def candidate_files_from_results(state: AgentCoreState, *, edit_related: bool = False) -> list[str]:
+    min_score = 18.0 if edit_related else 1.0
+    detail_candidates = current_search_candidate_files(state, min_score=min_score)
+    if detail_candidates:
+        return detail_candidates[:8]
     candidates: list[str] = []
     for result in state.action_results:
         for path in result.payload.get("candidates") or []:
             if isinstance(path, str) and path not in candidates:
                 candidates.append(path)
     return candidates[:8]
+
+
+def current_search_candidate_files(state: AgentCoreState, *, min_score: float = 1.0) -> list[str]:
+    candidates: list[str] = []
+    for result in reversed(state.action_results):
+        details = result.payload.get("candidate_details") or []
+        if not details:
+            continue
+        for detail in sorted(details, key=lambda item: -float(item.get("score") or 0.0)):
+            path = str(detail.get("path") or "")
+            score = float(detail.get("score") or 0.0)
+            if path and score >= min_score and path not in candidates:
+                candidates.append(path)
+        if candidates:
+            return candidates
+    return []
+
+
+def current_edit_target_files(
+    state: AgentCoreState,
+    frame: TaskFrame,
+    request: AgentRunRequest,
+    *,
+    model_targets: list[str] | None = None,
+) -> list[str]:
+    explicit = set(resolve_target_files(request, frame.mentioned_files, preferred=known_context_files(request, state)))
+    model_set = set(model_targets or [])
+    high_confidence = set(current_search_candidate_files(state, min_score=24.0)[:2])
+    candidates = [*explicit, *model_set, *high_confidence]
+    valid: list[str] = []
+    for path in candidates:
+        if path not in state.files_read:
+            continue
+        if path in valid:
+            continue
+        if path in explicit or path in high_confidence:
+            valid.append(path)
+        elif path in model_set and (path in explicit or path in high_confidence):
+            valid.append(path)
+    return valid[:3]
 
 
 def project_summary_files(request: AgentRunRequest) -> list[str]:

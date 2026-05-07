@@ -17,10 +17,10 @@ SRC_DIR = TESTS_DIR.parent / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from repooperator_worker.agent_core.action_executor import ActionExecutor  # noqa: E402
+from repooperator_worker.agent_core.action_executor import ActionExecutor, validate_edit_proposal  # noqa: E402
 from repooperator_worker.agent_core.actions import AgentAction, ActionResult  # noqa: E402
-from repooperator_worker.agent_core.controller_graph import SteeringDecision, _existing_target_files, _answer_with_model, consume_steering_for_state, parse_steering_instruction, run_controller_graph, stream_controller_graph  # noqa: E402
-from repooperator_worker.agent_core.state import ClassifierResult  # noqa: E402
+from repooperator_worker.agent_core.controller_graph import SteeringDecision, _existing_target_files, _answer_with_model, consume_steering_for_state, parse_steering_instruction, run_controller_graph, stream_controller_graph, validate_or_repair_final_answer  # noqa: E402
+from repooperator_worker.agent_core.state import AgentCoreState, ClassifierResult  # noqa: E402
 from repooperator_worker.agent_core.repository_review import review_single_file  # noqa: E402
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse, ConversationMessage  # noqa: E402
 from repooperator_worker.services.agent_orchestration_graph import (  # noqa: E402
@@ -707,6 +707,150 @@ class ActivePathMigrationTests(unittest.TestCase):
         self.assertIn("Assets/Scripts/GameManager.cs", result.files_read)
         self.assertNotIn("cannot read", result.response.lower())
         self.assertNotIn("files object is empty", result.response.lower())
+
+    def test_planner_overrides_prior_read_files_before_edit_generation(self) -> None:
+        self._write_unity_fixture()
+        request = self._request()
+        request.task = "저장 로직 쪽을 고쳐줘."
+        request.conversation_history = [
+            ConversationMessage(
+                role="assistant",
+                content="I previously read README.md and GameManager.cs.",
+                metadata={"files_read": ["README.md", "Assets/Scripts/GameManager.cs"]},
+            )
+        ]
+        planner = _PlannerClient(
+            {
+                "action_type": "search_files",
+                "reason_summary": "Find persistence implementation before editing.",
+                "search_queries": ["*.cs"],
+                "text_queries": ["Save", "Load", "BinaryFormatter", "PlayerData"],
+                "confidence": 0.9,
+            }
+        )
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=planner,
+        ), patch(
+            "repooperator_worker.agent_core.action_executor.OpenAICompatibleModelClient",
+            side_effect=RuntimeError("force deterministic validated fallback"),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="planner-overrides-last-read")
+        self.assertIn("Assets/Scripts/DataHandler.cs", result.files_read)
+        self.assertNotIn("README.md", result.files_read)
+        self.assertIn("DataHandler.cs", result.response)
+
+    def test_planner_final_answer_without_evidence_is_rejected(self) -> None:
+        request = self._request()
+        request.task = "Summarize this repository."
+        planner = _PlannerClient(
+            {
+                "action_type": "final_answer",
+                "reason_summary": "Answer immediately.",
+                "confidence": 0.9,
+                "enough_evidence": False,
+            }
+        )
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=planner,
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="reject-final-no-evidence")
+        action_types = [event["action"]["type"] for event in list_run_events("reject-final-no-evidence") if event.get("type") == "action_result"]
+        self.assertTrue({"inspect_repo_tree", "search_files", "read_file"} & set(action_types))
+        self.assertNotEqual(action_types[:1], ["final_answer"])
+        self.assertTrue(result.response)
+
+    def test_planner_mutating_command_is_previewed_not_run(self) -> None:
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        request = self._request()
+        request.task = "Create a commit."
+        planner = _PlannerClient(
+            {
+                "action_type": "run_approved_command",
+                "reason_summary": "Commit changes.",
+                "command": ["git", "commit", "-m", "test"],
+                "confidence": 0.9,
+            }
+        )
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=planner,
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="planner-mutating-preview")
+        action_events = [event for event in list_run_events("planner-mutating-preview") if event.get("type") == "action_result"]
+        action_types = [event["action"]["type"] for event in action_events]
+        self.assertIn("inspect_git_state", action_types)
+        self.assertNotIn("run_approved_command", action_types)
+        self.assertEqual(result.stop_reason, "waiting_approval")
+
+    def test_edit_validation_rejects_unjustified_awake_removal(self) -> None:
+        original = (
+            "using UnityEngine;\n"
+            "public class DataHandler : MonoBehaviour {\n"
+            "  public static DataHandler Instance;\n"
+            "  void Awake() { Instance = this; }\n"
+            "  void Start() { }\n"
+            "  public void Save(PlayerData data) { }\n"
+            "  public PlayerData Load() { return new PlayerData(); }\n"
+            "}\n"
+        )
+        proposed = (
+            "using UnityEngine;\n"
+            "public class DataHandler : MonoBehaviour {\n"
+            "  public static DataHandler Instance;\n"
+            "  void Start() { }\n"
+            "  public void Save(PlayerData data) { }\n"
+            "  public PlayerData Load() { return new PlayerData(); }\n"
+            "}\n"
+        )
+        self.assertIsNone(
+            validate_edit_proposal(
+                "Assets/Scripts/DataHandler.cs",
+                original,
+                {"file": "Assets/Scripts/DataHandler.cs", "proposed_content": proposed, "risk_notes": []},
+                "저장 로직을 고쳐줘.",
+            )
+        )
+
+    def test_final_answer_guard_repairs_false_write_claim(self) -> None:
+        state = AgentCoreState(run_id="quality-guard", thread_id="t", repo=str(self.repo), branch="main", user_task="edit")
+        state.action_results.append(
+            ActionResult(
+                action_id="a1",
+                status="success",
+                payload={
+                    "applied": False,
+                    "edit_proposals": [
+                        {
+                            "file": "Assets/Scripts/Border.cs",
+                            "before_summary": "contains single ampersand boolean checks",
+                            "after_summary": "uses short-circuit boolean checks",
+                            "diff_summary": "--- before\n+++ after\n",
+                        }
+                    ],
+                },
+            )
+        )
+        repaired = validate_or_repair_final_answer("I applied the change to the file.", state, self._request())
+        self.assertIn("proposed patch only", repaired)
+        self.assertIn("No files were modified", repaired)
+
+    def test_final_answer_guard_repairs_garbage_tokens(self) -> None:
+        state = AgentCoreState(run_id="garbage-guard", thread_id="t", repo=str(self.repo), branch="main", user_task="read")
+        state.files_read = ["README.md"]
+        repaired = validate_or_repair_final_answer("abc한글xyz ��", state, self._request())
+        self.assertNotIn("��", repaired)
+        self.assertIn("README.md", repaired)
 
     def test_stream_final_message_omits_streamed_activity_metadata(self) -> None:
         request = self._request()

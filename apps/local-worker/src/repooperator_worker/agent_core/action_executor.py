@@ -403,13 +403,35 @@ def validate_edit_proposal(relative_path: str, original: str, payload: dict[str,
     proposed = str(payload.get("proposed_content") or "")
     if not proposed.strip() or proposed == original or len(proposed) > max(200_000, len(original) * 5):
         return None
-    class_match = re.search(r"\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\b", original)
-    if class_match and class_match.group(0) not in proposed:
+    original_structure = extract_source_structure(relative_path, original)
+    proposed_structure = extract_source_structure(relative_path, proposed)
+    risk_notes = [str(item) for item in payload.get("risk_notes") or []]
+    risk_text = " ".join(risk_notes).lower()
+    missing_classes = sorted(set(original_structure["classes"]) - set(proposed_structure["classes"]))
+    if missing_classes and not mentions_removal_justification(task, risk_text, missing_classes):
         return None
+    missing_public = sorted(set(original_structure["public_members"]) - set(proposed_structure["public_members"]))
+    if missing_public and not mentions_removal_justification(task, risk_text, missing_public):
+        return None
+    missing_fields = sorted(set(original_structure["serialized_or_public_fields"]) - set(proposed_structure["serialized_or_public_fields"]))
+    if missing_fields and not mentions_removal_justification(task, risk_text, missing_fields):
+        return None
+    missing_lifecycle = sorted(set(original_structure["unity_lifecycle_methods"]) - set(proposed_structure["unity_lifecycle_methods"]))
+    for method in missing_lifecycle:
+        if method == "Update" and method_body_is_empty(original, method):
+            continue
+        if not mentions_removal_justification(task, risk_text, [method]):
+            return None
     if relative_path.lower().endswith(".cs") and not csharp_roughly_valid(proposed):
         return None
     hardening = "BinaryFormatter" in original or "binaryformatter" in task.lower()
     if hardening and "BinaryFormatter" in proposed:
+        return None
+    if hardening and not ("JsonUtility" in proposed or "System.Text.Json" in proposed or "Newtonsoft.Json" in proposed):
+        return None
+    if hardening and not ("File.Exists" in proposed and ("catch" in proposed or "try" in proposed)):
+        return None
+    if unsafe_bitwise_change(original, proposed):
         return None
     diff = str(payload.get("unified_diff") or summarize_diff(original, proposed))
     return {
@@ -417,8 +439,15 @@ def validate_edit_proposal(relative_path: str, original: str, payload: dict[str,
         "summary": str(payload.get("summary") or "Prepared edit proposal."),
         "proposed_content": proposed,
         "unified_diff": diff,
-        "risk_notes": list(payload.get("risk_notes") or []),
+        "risk_notes": risk_notes,
         "preserves_existing_behavior": bool(payload.get("preserves_existing_behavior", True)),
+        "removed_members": {
+            "classes": missing_classes,
+            "public_members": missing_public,
+            "serialized_or_public_fields": missing_fields,
+            "unity_lifecycle_methods": missing_lifecycle,
+        },
+        "preserved_members": proposed_structure,
     }
 
 
@@ -553,6 +582,90 @@ def csharp_roughly_valid(content: str) -> bool:
         if balance < 0:
             return False
     return balance == 0
+
+
+def extract_source_structure(relative_path: str, content: str) -> dict[str, list[str]]:
+    suffix = Path(relative_path).suffix.lower()
+    if suffix != ".cs":
+        return {
+            "classes": [],
+            "methods": [],
+            "fields": [],
+            "unity_lifecycle_methods": [],
+            "public_members": [],
+            "serialized_or_public_fields": [],
+        }
+    classes = re.findall(r"\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\b", content)
+    methods = re.findall(
+        r"\b(?:public|private|protected|internal)?\s*(?:static\s+)?(?:void|bool|int|string|float|double|PlayerData|[A-Za-z_][A-Za-z0-9_<>,\[\]]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+        content,
+    )
+    field_pattern = re.compile(
+        r"^\s*(?:\[SerializeField\]\s*)?(?:(public|private|protected|internal)\s+)?(?:static\s+)?(?:readonly\s+)?[A-Za-z_][A-Za-z0-9_<>,\[\]]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|;)",
+        re.MULTILINE,
+    )
+    fields: list[str] = []
+    serialized_or_public: list[str] = []
+    for match in field_pattern.finditer(content):
+        visibility = match.group(1) or ""
+        name = match.group(2)
+        fields.append(name)
+        prefix = content[max(0, match.start() - 80):match.start()]
+        if visibility == "public" or "[SerializeField]" in prefix:
+            serialized_or_public.append(name)
+    lifecycle_names = {"Awake", "Start", "Update", "FixedUpdate", "LateUpdate", "OnEnable", "OnDisable", "OnDestroy"}
+    lifecycle = [name for name in methods if name in lifecycle_names]
+    public_methods = re.findall(
+        r"\bpublic\s+(?:static\s+)?(?:void|bool|int|string|float|double|PlayerData|[A-Za-z_][A-Za-z0-9_<>,\[\]]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+        content,
+    )
+    public_fields = [
+        match.group(2)
+        for match in field_pattern.finditer(content)
+        if (match.group(1) or "") == "public"
+    ]
+    return {
+        "classes": _dedupe_strings(classes),
+        "methods": _dedupe_strings(methods),
+        "fields": _dedupe_strings(fields),
+        "unity_lifecycle_methods": _dedupe_strings(lifecycle),
+        "public_members": _dedupe_strings([*public_methods, *public_fields]),
+        "serialized_or_public_fields": _dedupe_strings(serialized_or_public),
+    }
+
+
+def mentions_removal_justification(task: str, risk_text: str, names: list[str]) -> bool:
+    lowered_task = (task or "").lower()
+    if "remove" in lowered_task or "delete" in lowered_task or "제거" in task:
+        return True
+    return any(name.lower() in risk_text for name in names) and any(word in risk_text for word in ("remove", "rename", "delete", "drop"))
+
+
+def method_body_is_empty(content: str, method_name: str) -> bool:
+    match = re.search(rf"\b{re.escape(method_name)}\s*\([^)]*\)\s*\{{", content)
+    if not match:
+        return False
+    start = content.find("{", match.start())
+    end = find_matching_brace(content, start)
+    if end == -1:
+        return False
+    body = re.sub(r"//.*|/\*.*?\*/", "", content[start + 1:end], flags=re.DOTALL).strip()
+    return not body
+
+
+def unsafe_bitwise_change(original: str, proposed: str) -> bool:
+    original_lines = original.splitlines()
+    proposed_text = proposed
+    for line in original_lines:
+        stripped = line.strip()
+        if not re.search(r"(?<!&)&(?!&)", stripped):
+            continue
+        bitwise_like = re.search(r"\b(int|long|uint|ulong|short|byte)\b", stripped) or re.search(r"\b(mask|flag|flags|bits?)\b", stripped, re.IGNORECASE)
+        if not bitwise_like:
+            continue
+        if stripped not in proposed_text and re.sub(r"(?<!&)&(?!&)", "&&", stripped) in proposed_text:
+            return True
+    return False
 
 
 def replace_boolean_ampersands(content: str) -> str:
