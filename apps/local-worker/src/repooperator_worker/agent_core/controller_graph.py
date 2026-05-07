@@ -4,7 +4,7 @@ import json
 import re
 import shlex
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -12,7 +12,6 @@ from repooperator_worker.agent_core.action_executor import ActionExecutor
 from repooperator_worker.agent_core.actions import AgentAction, ActionResult
 from repooperator_worker.agent_core.events import append_activity_event
 from repooperator_worker.agent_core.final_response import build_agent_response
-from repooperator_worker.agent_core.repository_review import run_repository_review, should_use_repository_wide_review
 from repooperator_worker.agent_core.state import AgentCoreState, ClassifierResult
 from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse
 from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient, split_visible_reasoning
@@ -45,7 +44,10 @@ Schema:
 Do not route by matching user-language phrases. Extract structured intent.
 """
 
-FILE_TOKEN_RE = re.compile(r"\b([\w./\\-]+\.[A-Za-z0-9]{1,8})\b")
+FILE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_./\\-])([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,8})(?![A-Za-z0-9_./\\-])")
+SOURCE_SUFFIXES = {".cs", ".py", ".js", ".ts", ".tsx", ".jsx", ".java", ".kt", ".swift", ".go", ".rs", ".rb", ".php", ".c", ".cpp", ".h", ".hpp"}
+TEXT_SUFFIXES = SOURCE_SUFFIXES | {".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml", ".ini", ".cfg", ".gradle"}
+SEARCH_SKIP_DIRS = {".git", ".claude", "node_modules", "runtime", ".next", "dist", "build", "out", "coverage", ".venv", "venv", "__pycache__"}
 SUPPORTED_INTENTS = {
     "read_only_question", "repo_analysis", "recommend_change_targets", "review_recommendation",
     "write_request", "write_confirmation", "file_clarification_answer", "local_command_request",
@@ -84,6 +86,21 @@ class SteeringDecision:
     reason: str = ""
 
 
+@dataclass
+class TaskFrame:
+    user_goal: str
+    mentioned_files: list[str] = field(default_factory=list)
+    mentioned_symbols: list[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+    likely_capabilities: list[str] = field(default_factory=list)
+    answer_style: str | None = None
+    safety_notes: list[str] = field(default_factory=list)
+    uncertainty: list[str] = field(default_factory=list)
+    should_ask_clarification: bool = False
+    clarification_question: str | None = None
+    legacy_intent: str | None = None
+
+
 def run_controller_graph(
     request: AgentRunRequest,
     *,
@@ -115,7 +132,12 @@ def run_controller_graph(
             break
         if action.type == "ask_clarification":
             state.stop_reason = "needs_clarification"
-            state.final_response = state.classifier_result.clarification_question or "Could you clarify which files or workflow you want me to inspect?"
+            missing = ", ".join(action.payload.get("missing_files") or [])
+            state.final_response = (
+                action.payload.get("question")
+                or state.classifier_result.clarification_question
+                or (f"I could not find {missing}. Please confirm the repo-relative path or choose one of the candidates I found." if missing else "Could you clarify which files or workflow you want me to inspect?")
+            )
             break
 
         state.actions_taken.append(action)
@@ -165,32 +187,28 @@ def load_context(state: AgentCoreState, request: AgentRunRequest) -> None:
 
 def classify(state: AgentCoreState, request: AgentRunRequest) -> None:
     state.classifier_result = classify_intent(request)
+    frame = build_task_frame(request, state)
+    state.recommendation_context = json_safe({"task_frame": frame})
     append_activity_event(
         run_id=state.run_id,
         request=request,
-        activity_id="controller-classify",
+        activity_id="controller-frame-request",
         event_type="activity_completed",
         phase="Thinking",
-        label="Classified request",
+        label="Framed request",
         status="completed",
-        observation=f"Intent: {state.classifier_result.intent}; scope: {state.classifier_result.analysis_scope}.",
+        observation=f"Goal framed with {len(frame.mentioned_files)} mentioned file(s) and {len(frame.likely_capabilities)} likely capability hint(s).",
+        aggregate={"task_frame": json_safe(frame)},
     )
 
 
 def create_initial_plan(state: AgentCoreState) -> None:
-    classifier = state.classifier_result
-    plan = ["Classify the request", "Choose the next safe action"]
-    if classifier.needs_clarification:
-        plan.append("Ask a clarification question")
-    elif should_use_repository_wide_review(classifier):
-        plan.extend(["Run repository-wide review", "Summarize completed evidence"])
-    elif classifier.target_files or _file_tokens(state.user_task):
-        plan.extend(["Read target files", "Answer from file evidence"])
-    elif classifier.intent in {"git_workflow_request", "gitlab_mr_request", "local_command_request"}:
-        plan.extend(["Preview command safety", "Run only approved or read-only command", "Report command result"])
-    else:
-        plan.extend(["Inspect repository tree", "Answer from gathered context"])
-    state.plan = plan
+    state.plan = [
+        "Frame the user's goal",
+        "Resolve missing evidence",
+        "Use safe primitive actions",
+        "Answer only from gathered evidence or ask a precise clarification",
+    ]
 
 
 def should_continue(state: AgentCoreState, *, started: float, max_wall_clock_seconds: int) -> bool:
@@ -317,48 +335,124 @@ def parse_steering_instruction(content: str, request: AgentRunRequest, state: Ag
 
 
 def controller_choose_next_action(state: AgentCoreState, request: AgentRunRequest) -> AgentAction:
-    classifier = state.classifier_result
-    if classifier.needs_clarification:
-        return AgentAction(type="ask_clarification", reason_summary="Ask for missing routing information.")
-    if should_use_repository_wide_review(classifier) and not _has_action(state, "analyze_repository"):
-        classifier_payload = json_safe(classifier)
-        return AgentAction(
-            type="analyze_repository",
-            reason_summary="Run a bounded repository-wide review.",
-            expected_output="Completed per-file review evidence.",
-            payload=dict(classifier=classifier_payload),
-        )
-    target_files = _existing_target_files(request, classifier.target_files)
-    unread = [path for path in target_files if path not in state.files_read]
-    if unread:
-        return AgentAction(
-            type="read_file",
-            reason_summary="Read structured target files before answering.",
-            target_files=unread,
-            expected_output="File contents for grounded answer.",
-        )
-    if classifier.intent in {"git_workflow_request", "gitlab_mr_request", "local_command_request"}:
-        command = _command_for_classifier(classifier)
+    frame = build_task_frame(request, state)
+    state.recommendation_context = json_safe({"task_frame": frame})
+
+    command = command_needed_for_task(frame, state)
+    if command:
         if not _has_command_preview(state, command):
             return AgentAction(
                 type="inspect_git_state" if command[:1] == ["git"] else "preview_command",
-                reason_summary=classifier.requested_action or "Preview requested command through policy.",
+                reason_summary="Preview the safe command needed for missing evidence.",
                 command=command,
                 expected_output="Command safety classification.",
             )
         preview = _latest_command_preview(state, command)
-        if preview and preview.status == "success" and _preview_read_only(preview.command_result):
-            if not _has_command_run(state, command):
+        if preview and preview.status == "success" and _preview_read_only(preview.command_result) and not _has_command_run(state, command):
+            return AgentAction(
+                type="run_approved_command",
+                reason_summary="Run read-only command after policy preview.",
+                command=command,
+                expected_output="Command output for the user request.",
+            )
+        if pending_commit_context(frame) and _has_command_run(state, ["git", "log", "--oneline", "-n", "5"]) and not _has_command_preview(state, ["git", "status", "--short"]):
+            return AgentAction(
+                type="inspect_git_state",
+                reason_summary="Inspect git status before discussing a possible commit.",
+                command=["git", "status", "--short"],
+                expected_output="Working tree status.",
+            )
+        return AgentAction(type="final_answer", reason_summary="Answer from command evidence.")
+
+    resolved = resolve_target_files(request, frame.mentioned_files, preferred=known_context_files(request, state))
+    unread = [path for path in resolved if path not in state.files_read]
+    if unread:
+        emit_target_resolution(state, request, frame.mentioned_files, resolved)
+        return AgentAction(
+            type="read_file",
+            reason_summary="Read resolved target files before answering.",
+            target_files=unread,
+            expected_output="File contents for grounded answer.",
+        )
+
+    unresolved = [item for item in frame.mentioned_files if item and not any(Path(path).name.lower() == Path(item).name.lower() or path.lower() == item.lower() for path in resolved)]
+    if unresolved and not _has_search_for(state, unresolved):
+        return AgentAction(
+            type="search_files",
+            reason_summary="Resolve mentioned files before asking for clarification.",
+            expected_output="Repo-relative candidate paths.",
+            payload={"queries": unresolved},
+        )
+
+    if frame.mentioned_symbols and not state.files_read and not _has_search_for(state, frame.mentioned_symbols):
+        return AgentAction(
+            type="search_files",
+            reason_summary="Resolve mentioned symbols before answering.",
+            target_symbols=frame.mentioned_symbols,
+            expected_output="Repo-relative candidate paths.",
+            payload={"queries": frame.mentioned_symbols},
+        )
+
+    searched_candidates = candidate_files_from_results(state)
+    candidate_unread = [path for path in searched_candidates if path not in state.files_read]
+    if candidate_unread:
+        return AgentAction(
+            type="read_file",
+            reason_summary="Read best candidate files found by repository search.",
+            target_files=candidate_unread[:4],
+            expected_output="Candidate file contents.",
+        )
+
+    if unresolved and _has_search_for(state, unresolved):
+        return AgentAction(
+            type="ask_clarification",
+            reason_summary="Ask a precise file clarification after repository search did not find targets.",
+            payload={"missing_files": unresolved},
+        )
+
+    if edit_requested(frame):
+        if state.files_read:
+            if not _has_action(state, "generate_edit"):
                 return AgentAction(
-                    type="run_approved_command",
-                    reason_summary="Run read-only command after policy preview.",
-                    command=command,
-                    expected_output="Read-only command output.",
+                    type="generate_edit",
+                    reason_summary="Prepare a minimal proposed patch from the files already read.",
+                    target_files=list(state.files_read[-4:]),
+                    expected_output="Proposed diff and before/after summary.",
+                    payload={"task_frame": json_safe(frame)},
                 )
-        return AgentAction(type="final_answer", reason_summary="Answer from command preview or result.")
-    if not _has_action(state, "inspect_repo_tree") and not state.files_read:
-        return AgentAction(type="inspect_repo_tree", reason_summary="Inspect repository inventory for a grounded answer.")
-    return AgentAction(type="final_answer", reason_summary="Enough evidence is available for a final answer.")
+            return AgentAction(type="final_answer", reason_summary="Report the proposed edit without claiming it was applied.")
+        if not _has_action(state, "inspect_repo_tree"):
+            return AgentAction(type="inspect_repo_tree", reason_summary="Inspect repository before locating edit targets.")
+        edit_queries = likely_edit_file_queries(frame)
+        if not _has_search_for(state, edit_queries):
+            return AgentAction(
+                type="search_files",
+                reason_summary="Search repository for likely edit targets.",
+                expected_output="Repo-relative candidate paths.",
+                payload={"queries": edit_queries},
+            )
+        return AgentAction(type="ask_clarification", reason_summary="Ask which file to edit after search did not find a safe target.")
+
+    if not state.files_read and not _has_action(state, "inspect_repo_tree"):
+        return AgentAction(type="inspect_repo_tree", reason_summary="Inspect repository inventory before answering.")
+
+    project_files = project_summary_files(request)
+    unread_project_files = [path for path in project_files if path not in state.files_read]
+    if unread_project_files and len(state.files_read) < 4:
+        return AgentAction(
+            type="read_file",
+            reason_summary="Read high-signal project files for a project-level answer.",
+            target_files=unread_project_files[:4],
+            expected_output="Project purpose and technology evidence.",
+        )
+
+    if not state.files_read and unresolved:
+        return AgentAction(
+            type="ask_clarification",
+            reason_summary="Ask a precise file clarification after repository search did not find targets.",
+            payload={"missing_files": unresolved},
+        )
+    return AgentAction(type="final_answer", reason_summary="Enough evidence is available for a grounded answer.")
 
 
 def observe_result(state: AgentCoreState, action: AgentAction, result: ActionResult, request: AgentRunRequest) -> None:
@@ -441,9 +535,12 @@ def build_final_answer_text(
     repository_review = _repository_review_response(state)
     if repository_review:
         return repository_review.response
+    edit_proposal = _latest_edit_proposal(state)
+    if edit_proposal:
+        return _format_edit_proposal(edit_proposal)
     command_result = _latest_command_result(state)
     if command_result:
-        return _format_command_result(command_result)
+        return _format_command_result(command_result, pending_commit=pending_commit_context(build_task_frame(request, state)))
     contents: dict[str, str] = {}
     for result in state.action_results:
         contents.update(result.payload.get("contents") or {})
@@ -650,17 +747,222 @@ def _initial_state(request: AgentRunRequest, run_id: str) -> AgentCoreState:
     )
 
 
-def _existing_target_files(request: AgentRunRequest, target_files: list[str]) -> list[str]:
+def build_task_frame(request: AgentRunRequest, state: AgentCoreState) -> TaskFrame:
+    classifier = state.classifier_result
+    mentioned_files = _dedupe([*getattr(classifier, "target_files", []), *_file_tokens(request.task), *files_from_recent_context(request)])
+    symbols = _dedupe([*getattr(classifier, "target_symbols", []), *symbol_tokens(request.task)])
+    capabilities: list[str] = []
+    if command_needed_for_text(request.task):
+        capabilities.append("command")
+    if edit_requested_text(request.task) or getattr(classifier, "retrieval_goal", "") == "edit":
+        capabilities.append("edit")
+    if mentioned_files or symbols:
+        capabilities.append("file_read")
+    if not capabilities:
+        capabilities.append("repository_context")
+    constraints = []
+    if mentioned_files:
+        constraints.append("Use explicitly mentioned files before broader context.")
+    return TaskFrame(
+        user_goal=request.task,
+        mentioned_files=mentioned_files,
+        mentioned_symbols=symbols,
+        constraints=constraints,
+        likely_capabilities=_dedupe(capabilities),
+        answer_style="concise_synthesis",
+        safety_notes=["Treat legacy intent as a weak hint only."],
+        uncertainty=[],
+        should_ask_clarification=bool(classifier.needs_clarification and not mentioned_files),
+        clarification_question=classifier.clarification_question,
+        legacy_intent=classifier.intent,
+    )
+
+
+def files_from_recent_context(request: AgentRunRequest) -> list[str]:
+    files: list[str] = []
+    for item in request.conversation_history[-8:]:
+        metadata = item.metadata or {}
+        for key in ("files_read", "resolved_files"):
+            for path in metadata.get(key) or []:
+                if isinstance(path, str):
+                    files.append(path)
+        files.extend(_file_tokens(item.content or ""))
+    return files
+
+
+def symbol_tokens(text: str) -> list[str]:
+    symbols: list[str] = []
+    for match in re.finditer(r"\b([A-Z][A-Za-z0-9_]{2,})\b", text or ""):
+        token = match.group(1)
+        if "." not in token and token not in symbols:
+            symbols.append(token)
+    return symbols[:8]
+
+
+def resolve_target_files(request: AgentRunRequest, target_files: list[str], *, preferred: list[str] | None = None) -> list[str]:
     repo = resolve_project_path(request.project_path).resolve()
-    existing: list[str] = []
+    preferred = preferred or []
+    all_files = searchable_repo_files(repo)
+    resolved: list[str] = []
     for item in target_files:
-        try:
-            candidate = ensure_relative_to_repo(repo, item)
-        except ValueError:
+        cleaned = str(item).strip().strip("`'\"")
+        if not cleaned:
             continue
-        if candidate.is_file():
-            existing.append(str(candidate.relative_to(repo)))
-    return existing[:8]
+        try:
+            candidate = ensure_relative_to_repo(repo, cleaned)
+            if candidate.is_file():
+                rel = str(candidate.relative_to(repo))
+                if rel not in resolved:
+                    resolved.append(rel)
+                    continue
+        except ValueError:
+            pass
+        lowered = cleaned.lower()
+        preferred_matches = [path for path in preferred if path.lower() == lowered or Path(path).name.lower() == Path(cleaned).name.lower()]
+        matches = preferred_matches or [path for path in all_files if path.lower() == lowered]
+        if not matches:
+            basename = Path(cleaned).name.lower()
+            matches = [path for path in all_files if Path(path).name.lower() == basename]
+        for rel in sorted(matches, key=file_match_priority):
+            if rel not in resolved:
+                resolved.append(rel)
+                break
+    return resolved[:8]
+
+
+def searchable_repo_files(repo: Path) -> list[str]:
+    files: list[str] = []
+    for path in repo.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(repo)
+        if any(part.lower() in SEARCH_SKIP_DIRS for part in rel.parts):
+            continue
+        if path.suffix.lower() not in TEXT_SUFFIXES and path.name.lower() not in {"readme", "makefile", "dockerfile"}:
+            continue
+        files.append(str(rel))
+    return files
+
+
+def file_match_priority(path: str) -> tuple[int, int, str]:
+    parts = [part.lower() for part in Path(path).parts]
+    generated = int(any(part in SEARCH_SKIP_DIRS for part in parts))
+    source_bonus = 0 if Path(path).suffix.lower() in SOURCE_SUFFIXES else 1
+    script_bonus = 0 if any(part in {"assets", "scripts", "src", "app", "apps"} for part in parts) else 1
+    return (generated, source_bonus + script_bonus, path.lower())
+
+
+def known_context_files(request: AgentRunRequest, state: AgentCoreState) -> list[str]:
+    return _dedupe([*state.files_read, *files_from_recent_context(request)])
+
+
+def emit_target_resolution(state: AgentCoreState, request: AgentRunRequest, requested: list[str], resolved: list[str]) -> None:
+    if _has_resolution_event(state):
+        return
+    state.observations.append(f"Resolved target files: {', '.join(resolved)}.")
+    append_activity_event(
+        run_id=state.run_id,
+        request=request,
+        activity_id="resolve-target-files",
+        event_type="activity_completed",
+        phase="Searching",
+        label="Resolved target files",
+        status="completed",
+        observation=f"Resolved {len(resolved)} target file(s).",
+        current_action="Resolving mentioned file names to repo-relative paths.",
+        next_action="Read resolved files before answering.",
+        related_files=resolved,
+        aggregate={"requested_files": requested, "resolved_files": resolved},
+    )
+
+
+def _has_resolution_event(state: AgentCoreState) -> bool:
+    return any(item.startswith("Resolved target files:") for item in state.observations)
+
+
+def command_needed_for_task(frame: TaskFrame, state: AgentCoreState) -> list[str] | None:
+    text_command = command_needed_for_text(frame.user_goal)
+    if text_command and not _has_command_run(state, text_command):
+        return text_command
+    if pending_commit_context(frame) and _has_command_run(state, ["git", "log", "--oneline", "-n", "5"]) and not _has_command_run(state, ["git", "status", "--short"]):
+        return ["git", "status", "--short"]
+    return None
+
+
+def command_needed_for_text(text: str) -> list[str] | None:
+    lowered = (text or "").lower()
+    if ("git log" in lowered) or ("commit" in lowered and "recent" in lowered) or ("커밋" in text and "최근" in text):
+        return ["git", "log", "--oneline", "-n", "5"]
+    return None
+
+
+def pending_commit_context(frame: TaskFrame) -> bool:
+    lowered = frame.user_goal.lower()
+    return "commit it" in lowered or "commit changes" in lowered or "커밋해" in frame.user_goal or "커밋 해" in frame.user_goal
+
+
+def edit_requested(frame: TaskFrame) -> bool:
+    return edit_requested_text(frame.user_goal) or "edit" in frame.likely_capabilities
+
+
+def edit_requested_text(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(token in lowered for token in ("fix", "change", "replace", "remove", "edit", "patch", "safe")) or any(token in text for token in ("고쳐", "바꿔", "변경", "제거", "수정", "안전"))
+
+
+def likely_edit_file_queries(frame: TaskFrame) -> list[str]:
+    queries = list(frame.mentioned_files)
+    return _dedupe(queries) or ["*.cs"]
+
+
+def _has_search_for(state: AgentCoreState, queries: list[str]) -> bool:
+    wanted = {item.lower() for item in queries}
+    for action in state.actions_taken:
+        if action.type != "search_files":
+            continue
+        previous = {str(item).lower() for item in action.payload.get("queries") or []}
+        if wanted & previous or not wanted:
+            return True
+    return False
+
+
+def candidate_files_from_results(state: AgentCoreState) -> list[str]:
+    candidates: list[str] = []
+    for result in state.action_results:
+        for path in result.payload.get("candidates") or []:
+            if isinstance(path, str) and path not in candidates:
+                candidates.append(path)
+    return candidates[:8]
+
+
+def project_summary_files(request: AgentRunRequest) -> list[str]:
+    repo = resolve_project_path(request.project_path).resolve()
+    priority = ["README.md", "readme.md", "package.json", "pyproject.toml", "apps/web/package.json", "apps/local-worker/pyproject.toml"]
+    files: list[str] = []
+    seen_resolved: set[str] = set()
+    for path in priority:
+        target = (repo / path)
+        if not target.is_file():
+            continue
+        marker = str(target.resolve()).lower()
+        if marker in seen_resolved:
+            continue
+        seen_resolved.add(marker)
+        files.append(path)
+    return files[:4]
+
+
+def _existing_target_files(request: AgentRunRequest, target_files: list[str]) -> list[str]:
+    return resolve_target_files(request, target_files)
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    result: list[str] = []
+    for item in items:
+        text = str(item).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _has_action(state: AgentCoreState, action_type: str) -> bool:
@@ -711,13 +1013,40 @@ def _latest_command_result(state: AgentCoreState) -> dict[str, Any] | None:
     return None
 
 
-def _format_command_result(result: dict[str, Any]) -> str:
+def _latest_edit_proposal(state: AgentCoreState) -> dict[str, Any] | None:
+    for result in reversed(state.action_results):
+        proposals = result.payload.get("edit_proposals") or []
+        if proposals:
+            return {"applied": bool(result.payload.get("applied")), "proposals": proposals}
+    return None
+
+
+def _format_edit_proposal(payload: dict[str, Any]) -> str:
+    proposals = [item for item in payload.get("proposals") or [] if isinstance(item, dict)]
+    if not proposals:
+        return "I prepared no file changes because there was not enough safe evidence to build a minimal patch."
+    sections = ["I prepared a proposed patch only. No files were modified in this run."]
+    for item in proposals[:3]:
+        file_path = str(item.get("file") or "unknown file")
+        before = str(item.get("before_summary") or "before state recorded")
+        after = str(item.get("after_summary") or "after state recorded")
+        diff = str(item.get("diff_summary") or "").strip()
+        sections.append(
+            f"\n`{file_path}`\nBefore: {before}\nAfter: {after}\n\n```diff\n{diff[:3000]}\n```"
+        )
+    return "\n".join(sections)
+
+
+def _format_command_result(result: dict[str, Any], *, pending_commit: bool = False) -> str:
     command = str(result.get("display_command") or shlex.join(list(result.get("command") or [])))
     stdout = str(result.get("stdout") or "").strip()
     stderr = str(result.get("stderr") or "").strip()
     status = result.get("status") or "ok"
     body = stdout or stderr or "No output."
-    return f"Ran `{command}` and finished with status `{status}`.\n\n```text\n{body[:4000]}\n```"
+    suffix = ""
+    if pending_commit:
+        suffix = "\n\nI did not create a commit. Committing requires an explicit approval path and a commit message."
+    return f"Ran `{command}` and finished with status `{status}`.\n\n```text\n{body[:4000]}\n```{suffix}"
 
 
 def _safe_observation(action: AgentAction, result: ActionResult) -> str:
@@ -726,6 +1055,13 @@ def _safe_observation(action: AgentAction, result: ActionResult) -> str:
     if result.files_read:
         files = ", ".join(result.files_read)
         return f"Read {files}."
+    if action.type == "generate_edit" and result.status == "success":
+        proposals = result.payload.get("edit_proposals") or []
+        files = ", ".join(str(item.get("file")) for item in proposals if isinstance(item, dict))
+        return f"Prepared proposed edit for {files}. No files were written."
+    if action.type == "search_files" and result.status == "success":
+        candidates = result.payload.get("candidates") or []
+        return f"Found candidate files: {', '.join(candidates[:8])}."
     if action.type == "analyze_repository" and result.status == "success":
         return "Completed repository-wide review and collected per-file evidence."
     if result.command_result and result.command_result.get("exit_code") is not None:
@@ -798,19 +1134,6 @@ def _response_json_safe(response: AgentRunResponse, request: AgentRunRequest) ->
             loop_iteration=int(safe_payload.get("loop_iteration") or 1),
             activity_events=list(safe_payload.get("activity_events") or []),
         )
-
-
-def _command_for_classifier(classifier: ClassifierResult) -> list[str]:
-    action = (classifier.git_action or classifier.requested_action or "").lower()
-    if "diff" in action:
-        return ["git", "diff", "--stat"]
-    if "log" in action or "recent" in action:
-        return ["git", "log", "--oneline", "-10"]
-    if "push" in action:
-        return ["git", "push"]
-    if "commit" in action:
-        return ["git", "status", "--short"]
-    return ["git", "status", "--short"]
 
 
 def _format_command_preview(command: list[str], preview: dict[str, Any]) -> str:

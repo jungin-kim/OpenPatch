@@ -1,6 +1,7 @@
 import inspect
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -21,7 +22,7 @@ from repooperator_worker.agent_core.actions import AgentAction, ActionResult  # 
 from repooperator_worker.agent_core.controller_graph import SteeringDecision, _existing_target_files, _answer_with_model, consume_steering_for_state, parse_steering_instruction, run_controller_graph, stream_controller_graph  # noqa: E402
 from repooperator_worker.agent_core.state import ClassifierResult  # noqa: E402
 from repooperator_worker.agent_core.repository_review import review_single_file  # noqa: E402
-from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse  # noqa: E402
+from repooperator_worker.schemas import AgentRunRequest, AgentRunResponse, ConversationMessage  # noqa: E402
 from repooperator_worker.services.agent_orchestration_graph import (  # noqa: E402
     run_agent_orchestration_graph,
     stream_agent_orchestration_graph,
@@ -81,8 +82,14 @@ class ActivePathMigrationTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        self.previous_config_env = os.environ.get("REPOOPERATOR_CONFIG_PATH")
+        os.environ["REPOOPERATOR_CONFIG_PATH"] = str(self.config)
 
     def tearDown(self) -> None:
+        if self.previous_config_env is None:
+            os.environ.pop("REPOOPERATOR_CONFIG_PATH", None)
+        else:
+            os.environ["REPOOPERATOR_CONFIG_PATH"] = self.previous_config_env
         self.home.cleanup()
         self.tmp.cleanup()
 
@@ -119,6 +126,63 @@ class ActivePathMigrationTests(unittest.TestCase):
             graph_path="agent_core:test",
             agent_flow="agent_core_controller",
             run_id=run_id,
+        )
+
+    def _write_unity_fixture(self) -> None:
+        scripts = self.repo / "Assets" / "Scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (self.repo / "README.md").write_text(
+            "# Elders Nice Shot\nPlayers ready up, take turns striking balls, and score before the timer ends.\n",
+            encoding="utf-8",
+        )
+        (scripts / "GameManager.cs").write_text(
+            "public class GameManager {\n"
+            "  public void ReadyPhase() {}\n"
+            "  public void StrikePhase() {}\n"
+            "  public void ScoreAndEndTurn() {}\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (scripts / "Ball.cs").write_text(
+            "public class Ball {\n"
+            "  public GameManager manager;\n"
+            "  public void OnCollisionEnter() { manager.ScoreAndEndTurn(); }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (scripts / "Border.cs").write_text(
+            "public class Border {\n"
+            "  void Update() {}\n"
+            "  bool IsOut(bool left, bool right) { return left & right; }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (scripts / "DataHandler.cs").write_text(
+            "using System.IO;\n"
+            "using System.Runtime.Serialization.Formatters.Binary;\n"
+            "using UnityEngine;\n"
+            "public class DataHandler : MonoBehaviour {\n"
+            "  public void Save(PlayerData data) { var formatter = new BinaryFormatter(); }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+    def _classifier(
+        self,
+        *,
+        intent: str = "ambiguous",
+        target_files: list[str] | None = None,
+        retrieval_goal: str = "answer",
+        git_action: str | None = None,
+    ) -> ClassifierResult:
+        return ClassifierResult(
+            intent=intent,
+            confidence=0.1,
+            analysis_scope="unknown",
+            requested_workflow="other",
+            retrieval_goal=retrieval_goal,
+            target_files=target_files or [],
+            git_action=git_action,
         )
 
     def test_agent_service_calls_agent_core_controller(self) -> None:
@@ -294,6 +358,126 @@ class ActivePathMigrationTests(unittest.TestCase):
         self.assertEqual(result.files_read, ["README.md"])
         self.assertEqual(result.graph_path, "agent_core:read_file_answer")
         self.assertIn("README.md evidence", result.response)
+
+    def test_explicit_target_files_are_resolved_and_read(self) -> None:
+        self._write_unity_fixture()
+        request = self._request()
+        request.task = "README.md랑 GameManager.cs만 읽고, 이 게임의 플레이 흐름을 설명해줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(intent="repo_analysis")), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=_LoopClient(),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="explicit-target-files")
+        self.assertIn("README.md", result.files_read)
+        self.assertIn("Assets/Scripts/GameManager.cs", result.files_read)
+        action_events = [event for event in list_run_events("explicit-target-files") if event.get("type") == "action_result"]
+        self.assertNotIn("analyze_repository", [event["action"]["type"] for event in action_events])
+
+    def test_follow_up_file_role_uses_prior_context_and_reads_target(self) -> None:
+        self._write_unity_fixture()
+        request = self._request()
+        request.task = "방금 말한 플레이 흐름 기준으로 Ball.cs는 어떤 역할이야?"
+        request.conversation_history = [
+            ConversationMessage(
+                role="assistant",
+                content="Read README.md and GameManager.cs.",
+                metadata={"files_read": ["README.md", "Assets/Scripts/GameManager.cs"]},
+            )
+        ]
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.OpenAICompatibleModelClient",
+            return_value=_LoopClient(),
+        ), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="follow-up-ball")
+        self.assertIn("Assets/Scripts/Ball.cs", result.files_read)
+
+    def test_edit_target_file_is_resolved_and_reported_as_proposal(self) -> None:
+        self._write_unity_fixture()
+        request = self._request()
+        request.task = "Border.cs에서 &를 &&로 바꾸고 빈 Update 제거해줘. 변경 전후 설명도 해줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="border-edit-proposal")
+        self.assertIn("Assets/Scripts/Border.cs", result.files_read)
+        self.assertIn("proposed patch only", result.response)
+        self.assertIn("No files were modified", result.response)
+        self.assertIn("&&", result.response)
+        self.assertNotIn("where is Border.cs", result.response)
+
+    def test_safe_save_logic_proposal_removes_binary_formatter(self) -> None:
+        self._write_unity_fixture()
+        request = self._request()
+        request.task = "저장 로직을 안전하게 고쳐줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(retrieval_goal="edit")), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="safe-save-proposal")
+        self.assertIn("Assets/Scripts/DataHandler.cs", result.files_read)
+        self.assertIn("JsonUtility", result.response)
+        after_chunks = [chunk for chunk in result.response.split("After:") if "DataHandler.cs" in chunk or "JsonUtility" in chunk]
+        self.assertTrue(after_chunks)
+        self.assertIn("No files were modified", result.response)
+
+    def test_recent_commits_uses_read_only_git_log_despite_wrong_intent(self) -> None:
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=self.repo, check=True)
+        subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial fixture"], cwd=self.repo, check=True, capture_output=True)
+        request = self._request()
+        request.task = "최근 커밋 보여줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(intent="repo_analysis")), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="recent-commits")
+        self.assertIn("git log --oneline -n 5", result.response)
+        self.assertIn("Initial fixture", result.response)
+        action_events = [event for event in list_run_events("recent-commits") if event.get("type") == "action_result"]
+        self.assertIn("run_approved_command", [event["action"]["type"] for event in action_events])
+        self.assertNotIn("analyze_repository", [event["action"]["type"] for event in action_events])
+
+    def test_combined_git_request_does_not_commit_without_approval(self) -> None:
+        subprocess.run(["git", "init"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=self.repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=self.repo, check=True)
+        subprocess.run(["git", "add", "README.md"], cwd=self.repo, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial fixture"], cwd=self.repo, check=True, capture_output=True)
+        (self.repo / "app.py").write_text("def main():\n    return 2\n", encoding="utf-8")
+        request = self._request()
+        request.task = "최근 커밋 보여줘. 커밋해줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier(intent="repo_analysis")), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="combined-git")
+        action_events = [event for event in list_run_events("combined-git") if event.get("type") == "action_result"]
+        commands = [event["action"].get("command") for event in action_events]
+        self.assertIn(["git", "log", "--oneline", "-n", "5"], commands)
+        self.assertIn(["git", "status", "--short"], commands)
+        self.assertNotIn(["git", "commit"], commands)
+        self.assertIn("did not create a commit", result.response)
+
+    def test_missing_requested_file_asks_clarification_without_speculation(self) -> None:
+        request = self._request()
+        request.task = "MissingManager.cs만 읽고 설명해줘."
+        with patch("repooperator_worker.agent_core.controller_graph.classify_intent", return_value=self._classifier()), patch(
+            "repooperator_worker.agent_core.controller_graph.get_active_repository",
+            return_value=None,
+        ):
+            result = run_controller_graph(request, run_id="missing-file")
+        self.assertEqual(result.stop_reason, "needs_clarification")
+        self.assertIn("MissingManager.cs", result.response)
+        self.assertEqual(result.files_read, [])
 
     def test_stream_final_message_omits_streamed_activity_metadata(self) -> None:
         request = self._request()
