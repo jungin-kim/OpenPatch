@@ -413,6 +413,12 @@ export function ChatSidebar({
           </div>
         </div>
       )}
+
+      {collapsed && onThemeToggle && (
+        <div className="sidebar-collapsed-footer">
+          <ThemeToggle theme={theme} onThemeToggle={onThemeToggle} />
+        </div>
+      )}
     </aside>
   );
 }

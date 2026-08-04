@@ -666,6 +666,14 @@ select {
   align-items: stretch;
 }
 
+/* Theme toggle stays reachable when the sidebar is collapsed */
+.sidebar-collapsed-footer {
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+  padding: 12px 0;
+}
+
 .chat-sidebar-collapsed .sidebar-brand-mark {
   opacity: 0;
 }
