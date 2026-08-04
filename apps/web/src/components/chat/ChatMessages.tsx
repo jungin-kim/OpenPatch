@@ -677,8 +677,6 @@ export function ChatMessages({
         </div>
       )}
 
-      {repoResult ? <ContextWindow messageTokens={estimateMessageTokens(messages)} /> : null}
-
       {messages.length === 0 && !questionPending ? (
         <div className="chat-empty">
           <div className="chat-empty-icon" aria-hidden="true" />
@@ -826,6 +824,8 @@ export function ChatMessages({
       )}
 
       <div ref={bottomRef} />
+
+      {repoResult ? <ContextWindow messageTokens={estimateMessageTokens(messages)} /> : null}
     </div>
   );
 }

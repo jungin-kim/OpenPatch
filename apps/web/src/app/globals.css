@@ -1405,6 +1405,76 @@ select {
   gap: 0;
 }
 
+/* Context-window widget: a donut docked bottom-right that pops the breakdown up. */
+.context-window-dock {
+  position: sticky;
+  bottom: 12px;
+  align-self: flex-end;
+  margin-top: auto;
+  z-index: 20;
+}
+
+.context-window-fab {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--foreground);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.context-window-fab:hover {
+  border-color: var(--border-strong);
+}
+
+.context-window-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: 340px;
+  max-width: 80vw;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 12.5px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.context-window-pop-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.context-window-bar {
+  display: flex;
+  height: 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border-strong, #3a3f4b);
+}
+
+.context-window-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.context-window-foot {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
 .repo-banner {
   display: flex;
   align-items: center;
