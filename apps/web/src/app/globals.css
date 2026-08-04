@@ -1564,6 +1564,93 @@ select {
   gap: 10px;
 }
 
+.composer-propose-btn {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.composer-propose-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-strong));
+}
+
+.composer-propose-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Propose-change modal */
+.propose-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 20px;
+}
+
+.propose-modal {
+  width: min(560px, 100%);
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.propose-modal-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.propose-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.propose-input,
+.propose-textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--foreground);
+  font-size: 0.9rem;
+  outline: none;
+  resize: vertical;
+}
+
+.propose-input:focus,
+.propose-textarea:focus {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.propose-error {
+  color: #DB4437;
+  font-size: 0.82rem;
+}
+
+.propose-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .context-window-inline {
   position: relative;
   display: inline-flex;

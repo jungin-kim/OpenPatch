@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   applyChangeSet,
   rejectChangeSet,
+  writeRepositoryFile,
   LocalWorkerClientError,
   type AgentRunPayload,
   type AgentProposeFilePayload,
@@ -116,8 +117,17 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
           proposal_id: proposal.proposalId,
         });
         onStatusChange(proposal.id, "applied", `Applied proposal ${proposal.proposalId}`, result);
+      } else if (proposal.projectPath && proposal.relativePath) {
+        // A single-file "Propose change" result has no run id; apply it by
+        // writing the proposed content to the workspace-bound file.
+        await writeRepositoryFile({
+          project_path: proposal.projectPath,
+          relative_path: proposal.relativePath,
+          content: proposal.proposedContent,
+        });
+        onStatusChange(proposal.id, "applied", `Applied change to ${proposal.relativePath}`);
       } else {
-        throw new Error("This proposal is missing a run id and cannot be applied safely.");
+        throw new Error("This proposal is missing a target and cannot be applied safely.");
       }
     } catch (err) {
       const msg =

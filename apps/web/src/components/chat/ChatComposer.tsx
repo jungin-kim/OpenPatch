@@ -15,6 +15,7 @@ interface ChatComposerProps {
   writeMode?: PermissionMode;
   queuedMessages?: Array<{ id: string; text: string; status: string; error?: string | null }>;
   contextSlot?: ReactNode;
+  onPropose?: () => void;
 }
 
 export function ChatComposer({
@@ -29,6 +30,7 @@ export function ChatComposer({
   writeMode = "default",
   queuedMessages = [],
   contextSlot,
+  onPropose,
 }: ChatComposerProps) {
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -117,6 +119,17 @@ export function ChatComposer({
             ) : null}
           </div>
           <div className="composer-send-group">
+            {onPropose ? (
+              <button
+                type="button"
+                className="composer-propose-btn"
+                onClick={onPropose}
+                disabled={disabled}
+                title="Propose a change to a specific file (review the diff, then apply)"
+              >
+                Propose change
+              </button>
+            ) : null}
             {contextSlot}
             <button
               className={`composer-send-btn${pending && value.trim() ? " composer-send-btn-queue" : ""}`}
