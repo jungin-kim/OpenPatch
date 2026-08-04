@@ -679,7 +679,9 @@ select {
 }
 
 .chat-sidebar-header {
-  padding: 14px 12px;
+  height: 51px;
+  box-sizing: border-box;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
