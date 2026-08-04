@@ -1385,6 +1385,73 @@ export function ChatApp() {
     }
   }
 
+  async function handleDeleteThread(threadId: string) {
+    const target = threadsRef.current.find((t) => t.id === threadId);
+    const wasActive = activeThreadId === threadId;
+    // Optimistically remove from the sidebar.
+    const remaining = threadsRef.current.filter((t) => t.id !== threadId);
+    threadsRef.current = remaining;
+    setThreads(remaining);
+    try {
+      window.localStorage.removeItem(activeRunStorageKey(threadId));
+    } catch {
+      /* ignore */
+    }
+    if (wasActive) {
+      const sameProject =
+        target &&
+        remaining.find(
+          (t) =>
+            t.repoResult.git_provider === target.repoResult.git_provider &&
+            t.repoResult.project_path === target.repoResult.project_path &&
+            (t.repoResult.branch || "") === (target.repoResult.branch || ""),
+        );
+      const next = sameProject || remaining[0] || null;
+      if (next) {
+        void handleSelectThread(next.id);
+      } else {
+        setMessages([]);
+        setProgressSteps([]);
+        setStreamedAnswer("");
+        rememberActiveThread(null);
+      }
+    }
+    try {
+      await fetch(`/api/worker/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+    } catch {
+      /* the record is gone from the UI; server cleanup is best-effort */
+    }
+  }
+
+  async function handleDeleteProject(threadIds: string[]) {
+    const ids = new Set(threadIds);
+    const wasActiveInProject = Boolean(activeThreadId && ids.has(activeThreadId));
+    const remaining = threadsRef.current.filter((t) => !ids.has(t.id));
+    threadsRef.current = remaining;
+    setThreads(remaining);
+    for (const id of threadIds) {
+      try {
+        window.localStorage.removeItem(activeRunStorageKey(id));
+      } catch {
+        /* ignore */
+      }
+    }
+    if (wasActiveInProject) {
+      const next = remaining[0] || null;
+      if (next) {
+        void handleSelectThread(next.id);
+      } else {
+        setMessages([]);
+        setProgressSteps([]);
+        setStreamedAnswer("");
+        rememberActiveThread(null);
+      }
+    }
+    await Promise.all(
+      threadIds.map((id) => fetch(`/api/worker/threads/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => undefined)),
+    );
+  }
+
   function handleNewChat() {
     setQuestion("");
     if (!repoResult) {
@@ -1742,6 +1809,8 @@ export function ChatApp() {
           threadStoreState={threadStoreState}
           onNewChat={handleNewChat}
           onSelectThread={handleSelectThread}
+          onDeleteThread={handleDeleteThread}
+          onDeleteProject={handleDeleteProject}
           onSelectRecentProject={handleRecentProjectSelect}
           collapsed={sidebarCollapsed}
           onToggleCollapsed={handleSidebarCollapsedChange}
