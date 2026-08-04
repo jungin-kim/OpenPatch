@@ -193,9 +193,35 @@ def _needs_general_final_answer_repair(answer: str, state: AgentCoreState) -> bo
         return True
     if _looks_like_raw_metadata_dump(answer):
         return True
+    if _looks_like_bare_json_answer(answer):
+        return True
     if "technical log" in lowered or "work log" in lowered:
         return True
     return False
+
+
+def _looks_like_bare_json_answer(answer: str) -> bool:
+    """True when the final answer is essentially a raw JSON object/array.
+
+    Weak models sometimes echo an internal schema (e.g. a skill's
+    ``output_contract``) as JSON instead of writing prose. Treat a message that
+    is nothing but a JSON blob (optionally wrapped in a single ```json fence) as
+    needing repair so it never reaches the user.
+    """
+
+    text = (answer or "").strip()
+    if not text:
+        return False
+    fence = re.fullmatch(r"```(?:json)?\s*(.+?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fence:
+        text = fence.group(1).strip()
+    if not text.startswith(("{", "[")):
+        return False
+    try:
+        json.loads(text)
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 def repair_final_answer(answer: str, state: AgentCoreState, request: AgentRunRequest, file_contents: dict[str, str]) -> str:
