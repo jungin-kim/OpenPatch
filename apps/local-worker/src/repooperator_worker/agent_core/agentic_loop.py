@@ -38,8 +38,11 @@ checked-out repository through a set of safe tools.
 
 Operate as a think -> act -> observe loop:
 - Choose exactly one tool call that makes the most progress on the user's task.
-- Gather evidence (inspect the tree, search, read files) before you answer.
-- All file paths must be repository-relative; never invent file contents.
+- ALWAYS gather evidence first: inspect the repository tree and read the
+  relevant files (e.g. README, entry points) BEFORE answering. Never answer a
+  question about the repository from prior knowledge or assumptions — even a
+  high-level summary must be grounded in files you actually read this run.
+- All file paths must be repository-relative; never invent files or contents.
 - Mutating, command, and network tools are gated by an approval policy. Request
   them only when genuinely needed; they may pause for user approval.
 - Do not repeat a tool call that already failed or returned nothing useful.
@@ -108,7 +111,43 @@ def propose_next_action_with_tool_calling(
     except Exception:
         return None
 
-    return _action_from_response(response, allowed)
+    action = _action_from_response(response, allowed)
+    # Guard against a lazy model that answers (or asks to clarify) before
+    # gathering any evidence. Defer to the deterministic evidence-gathering
+    # choosers so the agent inspects the tree / reads files first; the model
+    # gets another turn once real evidence is in the transcript.
+    if action is not None and action.type in {"final_answer", "ask_clarification"} and not _has_min_evidence(state):
+        return None
+    return action
+
+
+_EVIDENCE_ACTION_TYPES = frozenset(
+    {
+        "inspect_repo_tree",
+        "read_file",
+        "read_many_files",
+        "search_files",
+        "search_text",
+        "analyze_file",
+        "analyze_repository",
+        "inspect_symbol",
+        "run_approved_command",
+        "inspect_git_state",
+    }
+)
+
+
+def _has_min_evidence(state: AgentCoreState) -> bool:
+    """Whether the run has gathered any repository evidence yet."""
+
+    if getattr(state, "files_read", None):
+        return True
+    if getattr(state, "commands_run", None):
+        return True
+    for action in getattr(state, "actions_taken", []) or []:
+        if getattr(action, "type", None) in _EVIDENCE_ACTION_TYPES:
+            return True
+    return False
 
 
 def _capability_hints(registry, task_frame: Any) -> list[str]:

@@ -383,6 +383,9 @@ http://localhost:3000
 
 ## CLI Commands
 
+> **Short alias:** `repo` is a built-in alias for `repooperator`, so `repo up`,
+> `repo onboard`, etc. all work.
+
 Core commands:
 
 ```bash

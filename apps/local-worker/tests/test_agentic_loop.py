@@ -110,12 +110,39 @@ class ActionMappingTests(unittest.TestCase):
         self.assertIsNone(action)
 
     def test_text_only_response_becomes_final_answer(self) -> None:
+        # Text-only reply becomes final_answer once evidence exists.
         response = ToolCallResponse(text="It reads a repository file.")
+        state = _state(files_read=["a.py"])
         action = agentic_loop.propose_next_action_with_tool_calling(
-            _request(), _state(), _frame(), client_factory=lambda s: FakeClient(response), settings=_settings()
+            _request(), state, _frame(), client_factory=lambda s: FakeClient(response), settings=_settings()
         )
         self.assertEqual(action.type, "final_answer")
         self.assertEqual(action.payload["model_answer"], "It reads a repository file.")
+
+    def test_final_answer_blocked_without_evidence(self) -> None:
+        # Model tries to answer immediately with no files read -> must defer.
+        response = ToolCallResponse(text="This is a local-first coding agent.")
+        action = agentic_loop.propose_next_action_with_tool_calling(
+            _request(), _state(), _frame(), client_factory=lambda s: FakeClient(response), settings=_settings()
+        )
+        self.assertIsNone(action)
+
+    def test_final_answer_allowed_with_evidence(self) -> None:
+        response = ToolCallResponse(text="It reads repository files and answers questions.")
+        state = _state(files_read=["README.md"])
+        action = agentic_loop.propose_next_action_with_tool_calling(
+            _request(), state, _frame(), client_factory=lambda s: FakeClient(response), settings=_settings()
+        )
+        self.assertIsNotNone(action)
+        self.assertEqual(action.type, "final_answer")
+
+    def test_tool_call_allowed_without_evidence(self) -> None:
+        # A tool call (evidence gathering) is always fine even with no evidence yet.
+        response = ToolCallResponse(tool_calls=(ToolCall(id="c1", name="inspect_repo_tree", arguments={}),))
+        action = agentic_loop.propose_next_action_with_tool_calling(
+            _request(), _state(), _frame(), client_factory=lambda s: FakeClient(response), settings=_settings()
+        )
+        self.assertEqual(action.type, "inspect_repo_tree")
 
     def test_empty_response_returns_none(self) -> None:
         response = ToolCallResponse()

@@ -3741,6 +3741,9 @@ function printHelp() {
     [`${CLI_COMMAND} worker status`, "Inspect worker runtime state"],
     [`${CLI_COMMAND} worker logs`, "Show recent worker logs"],
   ], `Recommended flow: ${CLI_COMMAND} onboard && ${CLI_COMMAND} up`);
+  term.summaryBox("Tip", [
+    `\`repo\` is a short alias for \`${CLI_COMMAND}\` — e.g. \`repo up\`, \`repo onboard\`.`,
+  ]);
 }
 
 module.exports = {
