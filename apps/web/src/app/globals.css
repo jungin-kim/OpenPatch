@@ -828,6 +828,65 @@ select {
   font-size: 0.73rem;
 }
 
+/* Project = folder grouping several independent-context chats. */
+.sidebar-project-group {
+  margin-bottom: 6px;
+}
+
+.sidebar-project-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  text-align: left;
+}
+
+.sidebar-project-header:hover {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+.sidebar-project-header-active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.sidebar-project-caret {
+  color: var(--muted);
+  font-size: 0.7rem;
+  width: 12px;
+}
+
+.sidebar-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.sidebar-project-meta {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.sidebar-project-chats {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 0 4px 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+
 .sidebar-thread-spinner {
   grid-column: 2;
   grid-row: 1 / span 2;
