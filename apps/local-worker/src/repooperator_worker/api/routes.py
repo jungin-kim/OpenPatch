@@ -196,6 +196,14 @@ def context_window() -> dict:
     return context_window_snapshot()
 
 
+@router.post("/thread/title")
+def thread_title(payload: dict) -> dict:
+    from repooperator_worker.services.thread_service import generate_thread_title
+
+    title = generate_thread_title(str(payload.get("task") or ""), str(payload.get("answer") or ""))
+    return {"title": title}
+
+
 @router.get("/debug/skills")
 def debug_skills() -> dict:
     return discover_skills()

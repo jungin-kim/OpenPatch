@@ -55,20 +55,18 @@ function groupThreadsByProject(threads: ChatThread[]): ProjectGroup[] {
   return [...groups.values()];
 }
 
-/** Count non-system messages — a lightweight proxy for a chat's own context. */
-function contextTurns(thread: ChatThread): number {
-  return thread.messages.filter((m) => m.role !== "system").length;
-}
-
-/** Prefer the first user message as the chat label so chats in one project are
- *  distinguishable (the persisted title defaults to the repo name). */
+/** Chat label: prefer a work-generated title; else the first user message; else
+ *  "New chat". The persisted title defaults to the repo name until named. */
 function chatTitle(thread: ChatThread): string {
+  const repoDefault = (thread.repoResult.project_path || "").split(/[\\/]/).filter(Boolean).at(-1) || thread.repoResult.project_path;
+  const title = (thread.title || "").trim();
+  if (title && title !== repoDefault && title !== "New chat") return title;
   const firstUser = thread.messages.find((m) => m.role === "user" && m.content.trim());
   if (firstUser) {
     const text = firstUser.content.trim().replace(/\s+/g, " ");
     return text.length > 40 ? `${text.slice(0, 40)}…` : text;
   }
-  return thread.title || "New chat";
+  return title || "New chat";
 }
 
 export function ChatSidebar({
@@ -146,8 +144,8 @@ export function ChatSidebar({
                     <span className="sidebar-project-meta">
                       {providerLabel(group.provider)}
                       {group.branch ? ` @ ${group.branch}` : ""} · {group.chats.length}
+                      {runningInGroup ? <span className="sidebar-project-runningdot" aria-label="Run active" /> : null}
                     </span>
-                    {runningInGroup ? <span className="sidebar-thread-spinner" aria-label="Run active" /> : null}
                   </button>
 
                   {!isCollapsed && (
@@ -163,9 +161,6 @@ export function ChatSidebar({
                           onClick={() => onSelectThread(thread.id)}
                         >
                           <span className="sidebar-thread-title">{chatTitle(thread)}</span>
-                          {contextTurns(thread) > 0 ? (
-                            <span className="sidebar-thread-meta">{contextTurns(thread)} messages</span>
-                          ) : null}
                           {runningThreads.has(thread.id) ? <span className="sidebar-thread-spinner" aria-label="Run active" /> : null}
                         </button>
                       ))}
