@@ -54,6 +54,7 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
                 return recovery
 
     for chooser in (
+        _next_tool_calling_action,
         _next_explicit_target_action,
         _next_symbol_action,
         _next_policy_evidence_action,
@@ -68,6 +69,14 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
             return action
 
     return AgentAction(type="final_answer", reason_summary="Enough evidence is available for a grounded answer.")
+
+
+def _next_tool_calling_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """Model-driven native tool-calling planner (primary when enabled)."""
+
+    from repooperator_worker.agent_core.agentic_loop import propose_next_action_with_tool_calling
+
+    return propose_next_action_with_tool_calling(request, state, frame)
 
 
 def _next_explicit_target_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:

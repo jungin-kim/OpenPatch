@@ -32,6 +32,29 @@ Request understanding is not an authoritative workflow router. It may provide
 weak tool hints, but graph routing and planner decisions must stay grounded in
 safe primitive actions, gathered evidence, and validator results.
 
+## Decision Core: model-driven vs. deterministic
+
+RepoOperator supports two planners behind one decision seam
+(`choose_graph_next_action` in `graph_routes.py`):
+
+- **Model-driven agentic loop** (`agent_core/agentic_loop.py`): when native
+  tool calling is enabled (`model.toolCalling`/`REPOOPERATOR_AGENTIC_TOOL_CALLING`
+  with a tool-calling-capable model), the model sees the real tool schemas plus
+  the running think -> act -> observe transcript and emits the next tool call.
+  This is the primary planner and is what makes RepoOperator behave like an
+  autonomous agent rather than a scripted pipeline.
+- **Deterministic choosers**: a priority chain of rule-based proposers
+  (explicit targets, symbols, policy evidence, single-step model proposal,
+  commands, search candidates, edit, project summary) runs as a safety fallback
+  whenever the model is unavailable, declines, or proposes a repeat/ineffective
+  action.
+
+Both planners produce the same `AgentAction` shape, so execution, permission
+gating, secret redaction, and budgets are enforced identically by the tool
+orchestrator regardless of which planner chose the action. Native tool calling
+is provided by `services/model_client.py` (OpenAI-compatible + native Anthropic)
+and `services/model_tools.py` (schema conversion and response parsing).
+
 ## Graph Support Layout
 
 Graph helper behavior is split by responsibility:
