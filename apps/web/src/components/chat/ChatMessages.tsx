@@ -17,7 +17,6 @@ import {
 import type { ProgressStep } from "./progress-types";
 import type { LivePlanItem } from "./run-event-state";
 import { LivePlan } from "./LivePlan";
-import { ContextWindow, estimateMessageTokens } from "./ContextWindow";
 import { AgentActivityTranscript } from "./AgentActivityTranscript";
 import { renderableValidationResult } from "./validation-result";
 
@@ -824,8 +823,6 @@ export function ChatMessages({
       )}
 
       <div ref={bottomRef} />
-
-      {repoResult ? <ContextWindow messageTokens={estimateMessageTokens(messages)} /> : null}
     </div>
   );
 }

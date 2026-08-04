@@ -31,42 +31,15 @@ function usageColor(pct: number): string {
   return pct >= 90 ? "#DB4437" : pct >= 75 ? "#F4B400" : "#4C7EF3";
 }
 
-/** Small donut gauge showing % of the context window used. */
-function Donut({ pct }: { pct: number }) {
-  const r = 12;
-  const c = 2 * Math.PI * r;
-  const offset = c * (1 - Math.min(100, pct) / 100);
-  const color = usageColor(pct);
-  return (
-    <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden>
-      <circle cx="17" cy="17" r={r} fill="none" stroke="var(--border-strong, #3a3f4b)" strokeWidth="3.5" />
-      <circle
-        cx="17"
-        cy="17"
-        r={r}
-        fill="none"
-        stroke={color}
-        strokeWidth="3.5"
-        strokeLinecap="round"
-        strokeDasharray={c}
-        strokeDashoffset={offset}
-        transform="rotate(-90 17 17)"
-      />
-      <text x="17" y="17" textAnchor="middle" dominantBaseline="central" fontSize="9" fontWeight="700" fill="currentColor">
-        {pct}
-      </text>
-    </svg>
-  );
-}
-
 /**
- * Per-chat context-window usage (Claude Code / Codex style). Docked as a small
- * donut in the bottom-right of the chat area; click to pop the breakdown up.
+ * Per-chat context-window usage (Claude Code / Codex style). Rendered as a slim
+ * inline chip (mini bar + %) meant to sit left of the send button; click to pop
+ * the full breakdown upward.
  */
 export function ContextWindow({ messageTokens }: { messageTokens: number }) {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [open, setOpen] = useState(false);
-  const dockRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,11 +58,10 @@ export function ContextWindow({ messageTokens }: { messageTokens: number }) {
     };
   }, []);
 
-  // Close the popover on outside click / Escape.
   useEffect(() => {
     if (!open) return;
     function onDown(e: MouseEvent) {
-      if (dockRef.current && !dockRef.current.contains(e.target as Node)) setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
@@ -104,11 +76,11 @@ export function ContextWindow({ messageTokens }: { messageTokens: number }) {
 
   if (!snap) return null;
 
-  const window = Math.max(1, snap.context_window);
+  const windowSize = Math.max(1, snap.context_window);
   const cmp = snap.components;
   const used = messageTokens + cmp.system_tools + cmp.mcp_tools + cmp.system_prompt + cmp.skills;
-  const free = Math.max(0, window - used);
-  const pct = Math.min(100, Math.round((used / window) * 100));
+  const free = Math.max(0, windowSize - used);
+  const pct = Math.min(100, Math.round((used / windowSize) * 100));
 
   const segments: Segment[] = [
     { key: "messages", label: "Messages", tokens: messageTokens, color: COLORS.messages },
@@ -126,17 +98,17 @@ export function ContextWindow({ messageTokens }: { messageTokens: number }) {
   const rowStyle: CSSProperties = { display: "grid", gridTemplateColumns: "14px 1fr auto auto", alignItems: "center", gap: 8 };
 
   return (
-    <div className="context-window-dock" ref={dockRef}>
+    <div className="context-window-inline" ref={rootRef}>
       {open && (
         <div className="context-window-pop" role="dialog" aria-label="Context window usage">
           <div className="context-window-pop-head">
             <span style={{ fontWeight: 600 }}>Context window</span>
             <span style={{ fontVariantNumeric: "tabular-nums", color: usageColor(pct) }}>
-              {fmt(used)} / {fmt(window)} ({pct}%)
+              {fmt(used)} / {fmt(windowSize)} ({pct}%)
             </span>
           </div>
-          <div className="context-window-bar" title={`${used} of ${window} tokens`}>
-            {segments.map((s) => (s.tokens > 0 ? <span key={s.key} style={{ width: `${(s.tokens / window) * 100}%`, background: s.color }} /> : null))}
+          <div className="context-window-bar" title={`${used} of ${windowSize} tokens`}>
+            {segments.map((s) => (s.tokens > 0 ? <span key={s.key} style={{ width: `${(s.tokens / windowSize) * 100}%`, background: s.color }} /> : null))}
           </div>
           <ul className="context-window-list">
             {segments.map((s) => (
@@ -145,7 +117,7 @@ export function ContextWindow({ messageTokens }: { messageTokens: number }) {
                 <span>{s.label}</span>
                 <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--muted)" }}>{fmt(s.tokens)}</span>
                 <span style={{ fontVariantNumeric: "tabular-nums", width: 46, textAlign: "right", color: "var(--muted)" }}>
-                  {((s.tokens / window) * 100).toFixed(1)}%
+                  {((s.tokens / windowSize) * 100).toFixed(1)}%
                 </span>
               </li>
             ))}
@@ -159,19 +131,22 @@ export function ContextWindow({ messageTokens }: { messageTokens: number }) {
             ))}
           </ul>
           <div className="context-window-foot">
-            {snap.model_name} · window {fmt(window)} · reserve {fmt(snap.max_output_tokens)} out
+            {snap.model_name} · window {fmt(windowSize)} · reserve {fmt(snap.max_output_tokens)} out
           </div>
         </div>
       )}
 
       <button
         type="button"
-        className="context-window-fab"
+        className="context-trigger"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        title={`Context window: ${fmt(used)} / ${fmt(window)} (${pct}%)`}
+        title={`Context window: ${fmt(used)} / ${fmt(windowSize)} (${pct}%)`}
       >
-        <Donut pct={pct} />
+        <span className="context-trigger-track">
+          <span className="context-trigger-fill" style={{ width: `${pct}%`, background: usageColor(pct) }} />
+        </span>
+        <span className="context-trigger-pct">{pct}%</span>
       </button>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { type KeyboardEvent } from "react";
+import { type KeyboardEvent, type ReactNode } from "react";
 import type { PermissionMode } from "@/lib/local-worker-client";
 
 interface ChatComposerProps {
@@ -14,6 +14,7 @@ interface ChatComposerProps {
   pending: boolean;
   writeMode?: PermissionMode;
   queuedMessages?: Array<{ id: string; text: string; status: string; error?: string | null }>;
+  contextSlot?: ReactNode;
 }
 
 export function ChatComposer({
@@ -27,6 +28,7 @@ export function ChatComposer({
   pending,
   writeMode = "default",
   queuedMessages = [],
+  contextSlot,
 }: ChatComposerProps) {
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -114,14 +116,17 @@ export function ChatComposer({
               </div>
             ) : null}
           </div>
-          <button
-            className={`composer-send-btn${pending && value.trim() ? " composer-send-btn-queue" : ""}`}
-            type="button"
-            onClick={onSubmit}
-            disabled={!canSubmit}
-          >
-            {buttonLabel}
-          </button>
+          <div className="composer-send-group">
+            {contextSlot}
+            <button
+              className={`composer-send-btn${pending && value.trim() ? " composer-send-btn-queue" : ""}`}
+              type="button"
+              onClick={onSubmit}
+              disabled={!canSubmit}
+            >
+              {buttonLabel}
+            </button>
+          </div>
         </div>
       </div>
     </div>

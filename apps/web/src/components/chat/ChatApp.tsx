@@ -45,6 +45,7 @@ import { ChatSidebar } from "./ChatSidebar";
 import { ChatHeader } from "./ChatHeader";
 import { ChatMessages, type ChatMessage } from "./ChatMessages";
 import { ChatComposer } from "./ChatComposer";
+import { ContextWindow, estimateMessageTokens } from "./ContextWindow";
 import {
   assistantTextFromRunEvents,
   finalResultFromRunEvents,
@@ -1780,6 +1781,7 @@ export function ChatApp() {
           queuedMessages={queuedMessages
             .filter((item) => item.threadId === activeThreadId && item.status === "queued")
             .map((item) => ({ id: item.id, text: item.text, status: item.status, error: item.error }))}
+          contextSlot={repoResult ? <ContextWindow messageTokens={estimateMessageTokens(messages)} /> : null}
         />
       }
     />
