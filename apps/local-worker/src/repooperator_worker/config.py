@@ -136,9 +136,7 @@ def get_settings() -> Settings:
         openai_base_url=_resolve_model_base_url(runtime_config),
         openai_api_key=_resolve_model_api_key(runtime_config),
         openai_model=_resolve_model_name(runtime_config),
-        model_request_timeout_seconds=int(
-            os.getenv("REPOOPERATOR_MODEL_REQUEST_TIMEOUT_SECONDS", "120")
-        ),
+        model_request_timeout_seconds=_resolve_model_timeout(runtime_config),
         repooperator_config_path=repooperator_config_path,
         repooperator_home_dir=repooperator_config_path.parent,
         configured_git_provider=_resolve_configured_git_provider(runtime_config),
@@ -282,6 +280,27 @@ def _resolve_configured_model_connection_mode(runtime_config: dict) -> str | Non
     if provider:
         return "remote-api"
     return None
+
+
+def _resolve_model_timeout(runtime_config: dict) -> int:
+    """Per-request model timeout (seconds).
+
+    Local runtimes (Ollama/vLLM) run large models on the user's machine and a
+    single generation can take minutes, so they get a generous default; remote
+    APIs are fast and kept short. Overridable via
+    REPOOPERATOR_MODEL_REQUEST_TIMEOUT_SECONDS.
+    """
+
+    env_value = os.getenv("REPOOPERATOR_MODEL_REQUEST_TIMEOUT_SECONDS")
+    if env_value:
+        try:
+            parsed = int(env_value)
+            if parsed > 0:
+                return parsed
+        except ValueError:
+            pass
+    connection_mode = _resolve_configured_model_connection_mode(runtime_config)
+    return 600 if connection_mode == "local-runtime" else 120
 
 
 def _resolve_agentic_tool_calling(runtime_config: dict) -> bool:
