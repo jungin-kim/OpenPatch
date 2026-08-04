@@ -28,13 +28,33 @@ def _thread_path(thread_id: str) -> Path:
     return _get_threads_dir() / f"{safe_id}.json"
 
 
+# Non-thread JSON files that also live in the threads directory and must be
+# skipped by the thread listing (they are not ThreadSummary documents).
+_NON_THREAD_JSON = {"queue.json"}
+
+
+def _is_thread_file(path: Path) -> bool:
+    name = path.name
+    if name in _NON_THREAD_JSON:
+        return False
+    # thread context sidecars are stored as "<id>.context.json"
+    if name.endswith(".context.json"):
+        return False
+    return True
+
+
 def list_threads() -> ThreadListResponse:
     threads: list[ThreadSummary] = []
     for path in _get_threads_dir().glob("*.json"):
+        if not _is_thread_file(path):
+            continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                # A non-object JSON doc (e.g. a stray list) is not a thread.
+                continue
             threads.append(ThreadSummary(**payload))
-        except (OSError, json.JSONDecodeError, ValidationError):
+        except (OSError, json.JSONDecodeError, ValidationError, TypeError):
             continue
 
     threads.sort(key=lambda thread: thread.updated_at, reverse=True)
