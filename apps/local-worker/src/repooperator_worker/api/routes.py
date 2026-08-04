@@ -189,6 +189,13 @@ def debug_context() -> dict:
     return get_debug_context_status()
 
 
+@router.get("/context/window")
+def context_window() -> dict:
+    from repooperator_worker.services.context_window_service import context_window_snapshot
+
+    return context_window_snapshot()
+
+
 @router.get("/debug/skills")
 def debug_skills() -> dict:
     return discover_skills()

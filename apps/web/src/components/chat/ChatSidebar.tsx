@@ -163,9 +163,9 @@ export function ChatSidebar({
                           onClick={() => onSelectThread(thread.id)}
                         >
                           <span className="sidebar-thread-title">{chatTitle(thread)}</span>
-                          <span className="sidebar-thread-meta">
-                            {contextTurns(thread) > 0 ? `${contextTurns(thread)} turns · own context` : "new · own context"}
-                          </span>
+                          {contextTurns(thread) > 0 ? (
+                            <span className="sidebar-thread-meta">{contextTurns(thread)} messages</span>
+                          ) : null}
                           {runningThreads.has(thread.id) ? <span className="sidebar-thread-spinner" aria-label="Run active" /> : null}
                         </button>
                       ))}
