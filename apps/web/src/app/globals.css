@@ -887,6 +887,93 @@ select {
   border-left: 1px solid var(--border);
 }
 
+/* Row wrappers so a hover "…" actions menu can sit over each chat/project. */
+.sidebar-project-headrow,
+.sidebar-thread-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-project-headrow .sidebar-project-header,
+.sidebar-thread-row .sidebar-thread {
+  flex: 1;
+  min-width: 0;
+  padding-right: 30px;
+}
+
+.sidebar-more {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.sidebar-more-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.sidebar-project-headrow:hover .sidebar-more-btn,
+.sidebar-thread-row:hover .sidebar-more-btn,
+.sidebar-more-open .sidebar-more-btn {
+  opacity: 1;
+}
+
+.sidebar-more-btn:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: var(--foreground);
+}
+
+.sidebar-more-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-strong);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.32);
+}
+
+.sidebar-more-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.sidebar-more-item:hover {
+  background: var(--surface-hover);
+}
+
+.sidebar-more-item-danger {
+  color: #DB4437;
+}
+
+.sidebar-more-item-danger:hover {
+  background: color-mix(in srgb, #DB4437 12%, transparent);
+}
+
 .sidebar-thread-spinner {
   grid-column: 2;
   grid-row: 1 / span 2;

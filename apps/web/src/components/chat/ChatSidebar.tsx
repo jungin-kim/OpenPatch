@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ProviderProjectSummary } from "@/lib/local-worker-client";
 import type { ChatThread } from "./ChatApp";
 import Link from "next/link";
@@ -13,9 +13,70 @@ interface ChatSidebarProps {
   threadStoreState: "loading" | "connected" | "saving" | "unavailable";
   onNewChat: () => void;
   onSelectThread: (threadId: string) => void;
+  onDeleteThread?: (threadId: string) => void;
+  onDeleteProject?: (threadIds: string[]) => void;
   onSelectRecentProject: (project: ProviderProjectSummary) => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
+}
+
+type MenuItem = { label: string; danger?: boolean; onClick: () => void };
+
+/** A hover "…" trigger that opens a small actions menu (delete, etc.). */
+function MoreMenu({ items, label }: { items: MenuItem[]; label: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return (
+    <div className={`sidebar-more${open ? " sidebar-more-open" : ""}`} ref={ref}>
+      <button
+        type="button"
+        className="sidebar-more-btn"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div className="sidebar-more-menu" role="menu">
+          {items.map((item) => (
+            <button
+              key={item.label}
+              type="button"
+              role="menuitem"
+              className={`sidebar-more-item${item.danger ? " sidebar-more-item-danger" : ""}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+                item.onClick();
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function providerLabel(provider: string): string {
@@ -77,6 +138,8 @@ export function ChatSidebar({
   threadStoreState,
   onNewChat,
   onSelectThread,
+  onDeleteThread,
+  onDeleteProject,
   onSelectRecentProject,
   collapsed = false,
   onToggleCollapsed,
@@ -133,36 +196,57 @@ export function ChatSidebar({
               const runningInGroup = group.chats.some((c) => runningThreads.has(c.id));
               return (
                 <div key={group.key} className="sidebar-project-group">
-                  <button
-                    className={`sidebar-project-header${group.key === activeKey ? " sidebar-project-header-active" : ""}`}
-                    type="button"
-                    onClick={() => setCollapsedGroups((prev) => ({ ...prev, [group.key]: !isCollapsed }))}
-                    title={`${providerLabel(group.provider)}:${group.projectPath}${group.branch ? ` @ ${group.branch}` : ""}`}
-                  >
-                    <span className="sidebar-project-caret" aria-hidden="true">{isCollapsed ? "▸" : "▾"}</span>
-                    <span className="sidebar-project-name">{group.name}</span>
-                    <span className="sidebar-project-meta">
-                      {providerLabel(group.provider)}
-                      {group.branch ? ` @ ${group.branch}` : ""} · {group.chats.length}
-                      {runningInGroup ? <span className="sidebar-project-runningdot" aria-label="Run active" /> : null}
-                    </span>
-                  </button>
+                  <div className="sidebar-project-headrow">
+                    <button
+                      className={`sidebar-project-header${group.key === activeKey ? " sidebar-project-header-active" : ""}`}
+                      type="button"
+                      onClick={() => setCollapsedGroups((prev) => ({ ...prev, [group.key]: !isCollapsed }))}
+                      title={`${providerLabel(group.provider)}:${group.projectPath}${group.branch ? ` @ ${group.branch}` : ""}`}
+                    >
+                      <span className="sidebar-project-caret" aria-hidden="true">{isCollapsed ? "▸" : "▾"}</span>
+                      <span className="sidebar-project-name">{group.name}</span>
+                      <span className="sidebar-project-meta">
+                        {providerLabel(group.provider)}
+                        {group.branch ? ` @ ${group.branch}` : ""} · {group.chats.length}
+                        {runningInGroup ? <span className="sidebar-project-runningdot" aria-label="Run active" /> : null}
+                      </span>
+                    </button>
+                    {onDeleteProject ? (
+                      <MoreMenu
+                        label="Project actions"
+                        items={[
+                          {
+                            label: `Delete project (${group.chats.length} chats)`,
+                            danger: true,
+                            onClick: () => onDeleteProject(group.chats.map((c) => c.id)),
+                          },
+                        ]}
+                      />
+                    ) : null}
+                  </div>
 
                   {!isCollapsed && (
                     <div className="sidebar-project-chats">
                       {group.chats.map((thread) => (
-                        <button
-                          key={thread.id}
-                          className={`sidebar-item sidebar-thread${
-                            thread.id === activeThreadId ? " sidebar-item-active" : ""
-                          }${runningThreads.has(thread.id) ? " sidebar-thread-running" : ""}`}
-                          type="button"
-                          title={`${chatTitle(thread)} — independent context`}
-                          onClick={() => onSelectThread(thread.id)}
-                        >
-                          <span className="sidebar-thread-title">{chatTitle(thread)}</span>
-                          {runningThreads.has(thread.id) ? <span className="sidebar-thread-spinner" aria-label="Run active" /> : null}
-                        </button>
+                        <div key={thread.id} className="sidebar-thread-row">
+                          <button
+                            className={`sidebar-item sidebar-thread${
+                              thread.id === activeThreadId ? " sidebar-item-active" : ""
+                            }${runningThreads.has(thread.id) ? " sidebar-thread-running" : ""}`}
+                            type="button"
+                            title={`${chatTitle(thread)} — independent context`}
+                            onClick={() => onSelectThread(thread.id)}
+                          >
+                            <span className="sidebar-thread-title">{chatTitle(thread)}</span>
+                            {runningThreads.has(thread.id) ? <span className="sidebar-thread-spinner" aria-label="Run active" /> : null}
+                          </button>
+                          {onDeleteThread ? (
+                            <MoreMenu
+                              label="Chat actions"
+                              items={[{ label: "Delete chat", danger: true, onClick: () => onDeleteThread(thread.id) }]}
+                            />
+                          ) : null}
+                        </div>
                       ))}
                     </div>
                   )}

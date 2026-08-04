@@ -452,6 +452,13 @@ def threads_list() -> ThreadListResponse:
     return list_threads()
 
 
+@router.delete("/threads/{thread_id}")
+def threads_delete(thread_id: str) -> dict:
+    from repooperator_worker.services.thread_service import delete_thread
+
+    return {"deleted": delete_thread(thread_id), "id": thread_id}
+
+
 @router.post("/threads", response_model=ThreadSummary)
 def threads_upsert(request: ThreadUpsertRequest) -> ThreadSummary:
     try:

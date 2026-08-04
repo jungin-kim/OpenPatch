@@ -61,6 +61,31 @@ def list_threads() -> ThreadListResponse:
     return ThreadListResponse(threads=threads)
 
 
+def delete_thread(thread_id: str) -> bool:
+    """Delete a thread's stored record (and its context sidecar). Returns True if
+    a thread file was removed."""
+
+    try:
+        path = _thread_path(thread_id)
+    except ValueError:
+        return False
+    removed = False
+    if path.exists():
+        try:
+            path.unlink()
+            removed = True
+        except OSError:
+            return False
+    # Best-effort: remove a same-stem context sidecar if present.
+    sidecar = path.with_name(f"{path.stem}.context.json")
+    if sidecar.exists():
+        try:
+            sidecar.unlink()
+        except OSError:
+            pass
+    return removed
+
+
 def generate_thread_title(task: str, answer: str = "") -> str:
     """Generate a concise chat title from the work (Codex / Claude Code style).
 
