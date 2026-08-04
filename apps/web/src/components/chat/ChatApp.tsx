@@ -1810,6 +1810,7 @@ export function ChatApp() {
           onNewChat={handleNewChat}
           onSelectThread={handleSelectThread}
           onDeleteThread={handleDeleteThread}
+          onRenameThread={setThreadTitle}
           onDeleteProject={handleDeleteProject}
           onSelectRecentProject={handleRecentProjectSelect}
           collapsed={sidebarCollapsed}
