@@ -47,6 +47,7 @@ import { ChatHeader } from "./ChatHeader";
 import { ChatMessages, type ChatMessage } from "./ChatMessages";
 import { ChatComposer } from "./ChatComposer";
 import { ContextWindow, estimateMessageTokens } from "./ContextWindow";
+import { FilePicker } from "./FilePicker";
 import {
   assistantTextFromRunEvents,
   finalResultFromRunEvents,
@@ -1865,14 +1866,23 @@ export function ChatApp() {
         <div className="propose-modal" onClick={(e) => e.stopPropagation()}>
           <div className="propose-modal-title">Propose a change</div>
           <label className="propose-field">
-            <span>File path (relative to repo root)</span>
+            <span>Select a file to change</span>
+            {repoResult ? (
+              <FilePicker
+                projectPath={repoResult.project_path}
+                value={proposePath}
+                onSelect={(path) => setProposePath(path)}
+                disabled={proposeBusy}
+              />
+            ) : (
+              <div className="propose-error">Open a repository first.</div>
+            )}
             <input
-              className="propose-input"
-              placeholder="e.g. apps/local-worker/src/repooperator_worker/main.py"
+              className="propose-input propose-input-path"
+              placeholder="…or type a path relative to repo root"
               value={proposePath}
               onChange={(e) => setProposePath(e.target.value)}
               disabled={proposeBusy}
-              autoFocus
             />
           </label>
           <label className="propose-field">

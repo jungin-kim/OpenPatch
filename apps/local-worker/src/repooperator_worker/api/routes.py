@@ -9,6 +9,8 @@ from repooperator_worker.schemas import (
     AgentRunResponse,
     CommandRunRequest,
     CommandRunResponse,
+    DirListRequest,
+    DirListResponse,
     FileReadRequest,
     FileReadResponse,
     FileWriteRequest,
@@ -42,6 +44,7 @@ from repooperator_worker.schemas import (
     ThreadUpsertRequest,
 )
 from repooperator_worker.services.edit_service import propose_file_edit
+from repooperator_worker.services.fs_service import list_directory
 from repooperator_worker.services.agent_run_coordinator import (
     cancel_queued_message,
     cancel_run,
@@ -491,6 +494,16 @@ def repo_open_plan(request: RepoOpenRequest) -> RepoOpenPlanResponse:
 def fs_read(request: FileReadRequest) -> FileReadResponse:
     try:
         return read_text_file(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/fs/list", response_model=DirListResponse)
+def fs_list(project_path: str, relative_path: str = "") -> DirListResponse:
+    try:
+        return list_directory(DirListRequest(project_path=project_path, relative_path=relative_path))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:

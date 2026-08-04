@@ -188,6 +188,26 @@ class FileWriteRequest(BaseModel):
         return value.strip("/")
 
 
+class DirListRequest(BaseModel):
+    project_path: str
+    relative_path: str = ""
+
+    @field_validator("project_path", "relative_path")
+    @classmethod
+    def validate_relative_values(cls, value: str, info) -> str:
+        if info.field_name == "project_path":
+            return _normalize_project_path(value)
+        # relative_path is optional; empty means the repository root
+        if not value.strip():
+            return ""
+        path = Path(value)
+        if path.is_absolute():
+            raise ValueError("relative_path must be relative")
+        if ".." in path.parts:
+            raise ValueError("relative_path must not escape its base directory")
+        return value.strip("/")
+
+
 class CommandRunRequest(BaseModel):
     project_path: str
     command: str = Field(..., description="Command parsed into argv and executed through RepoOperator command policy.")

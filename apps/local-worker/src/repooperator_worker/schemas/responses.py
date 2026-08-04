@@ -152,6 +152,20 @@ class FileWriteResponse(BaseModel):
     message: str
 
 
+class DirEntry(BaseModel):
+    name: str
+    relative_path: str
+    type: str  # "dir" | "file"
+    size: int | None = None
+
+
+class DirListResponse(BaseModel):
+    project_path: str
+    relative_path: str
+    parent_path: str | None = None
+    entries: list[DirEntry]
+
+
 class CommandRunResponse(BaseModel):
     project_path: str
     command: str

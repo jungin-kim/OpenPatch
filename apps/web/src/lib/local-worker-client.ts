@@ -165,6 +165,20 @@ export type FileWritePayload = {
   message: string;
 };
 
+export type DirEntryPayload = {
+  name: string;
+  relative_path: string;
+  type: "dir" | "file";
+  size: number | null;
+};
+
+export type DirListPayload = {
+  project_path: string;
+  relative_path: string;
+  parent_path: string | null;
+  entries: DirEntryPayload[];
+};
+
 export type AgentRunPayload = {
   project_path: string;
   git_provider?: string | null;
@@ -756,6 +770,20 @@ export async function readRepositoryFile(input: {
   });
 
   return parseWorkerResponse<FileReadPayload>(response);
+}
+
+export async function listRepositoryDir(input: {
+  project_path: string;
+  relative_path?: string;
+}): Promise<DirListPayload> {
+  const query = new URLSearchParams({ project_path: input.project_path });
+  if (input.relative_path) {
+    query.set("relative_path", input.relative_path);
+  }
+  const response = await fetch(`/api/worker/fs-list?${query.toString()}`, {
+    cache: "no-store",
+  });
+  return parseWorkerResponse<DirListPayload>(response);
 }
 
 export async function listLocalBranches(input: {

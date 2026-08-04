@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 540" width="900" height="540" font-family="'SF Mono','JetBrains Mono','Fira Code',Menlo,Consolas,monospace" role="img" aria-label="RepoOperator CLI: running repo up starts the worker and web UI">
+  <defs>
+    <clipPath id="round"><rect x="0" y="0" width="900" height="540" rx="12"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <rect x="0" y="0" width="900" height="540" fill="#0d1117"/>
+    <rect x="0" y="0" width="900" height="40" fill="#161b22"/>
+    <circle cx="26" cy="20" r="6" fill="#ff5f56"/>
+    <circle cx="48" cy="20" r="6" fill="#ffbd2e"/>
+    <circle cx="70" cy="20" r="6" fill="#27c93f"/>
+    <text x="96" y="25" fill="#8b949e" font-size="13">repo up — RepoOperator</text>
+
+    <text x="26" y="72" font-size="13"><tspan fill="#58a6ff">~/projects</tspan><tspan fill="#7ee787"> $ </tspan><tspan fill="#e6edf3">repo up</tspan></text>
+
+    <text x="26" y="98" font-size="13" fill="#56d4dd" xml:space="preserve"><tspan x="26" dy="0"> ____                   ___                       _</tspan><tspan x="26" dy="15">|  _ \ ___ _ __   ___  / _ \ _ __   ___ _ __ __ _| |_ ___  _ __</tspan><tspan x="26" dy="15">| |_) / _ \ '_ \ / _ \| | | | '_ \ / _ \ '__/ _` | __/ _ \| '__|</tspan><tspan x="26" dy="15">|  _ &lt;  __/ |_) | (_) | |_| | |_) |  __/ | | (_| | || (_) | |</tspan><tspan x="26" dy="15">|_| \_\___| .__/ \___/ \___/| .__/ \___|_|  \__,_|\__\___/|_|</tspan><tspan x="26" dy="15">          |_|               |_|</tspan></text>
+
+    <text x="26" y="205" font-size="13" fill="#6e7681">Local-first repository assistant for teams and companies.</text>
+
+    <text x="26" y="240" font-size="13"><tspan fill="#58a6ff" font-weight="700">Runtime</tspan><tspan fill="#e6edf3" font-weight="700"> Starting local product runtime</tspan></text>
+    <text x="26" y="258" font-size="13" fill="#8b949e">RepoOperator will start the worker, start the web UI, and verify both endpoints.</text>
+    <line x1="26" y1="274" x2="874" y2="274" stroke="#21262d"/>
+
+    <text x="26" y="298" font-size="13"><tspan fill="#3fb950" font-weight="700">✔</tspan><tspan fill="#adbac7"> Start local worker</tspan></text>
+    <text x="26" y="318" font-size="13"><tspan fill="#3fb950" font-weight="700">✔</tspan><tspan fill="#adbac7"> Verify worker health</tspan></text>
+    <text x="26" y="338" font-size="13"><tspan fill="#3fb950" font-weight="700">✔</tspan><tspan fill="#adbac7"> Start web UI</tspan></text>
+    <text x="26" y="358" font-size="13"><tspan fill="#3fb950" font-weight="700">✔</tspan><tspan fill="#adbac7"> Verify web UI</tspan></text>
+
+    <rect x="26" y="378" width="848" height="132" rx="8" fill="none" stroke="#30363d"/>
+    <text x="46" y="406" font-size="13" fill="#e6edf3" font-weight="700">RepoOperator is up</text>
+    <text x="46" y="426" font-size="13" fill="#8b949e">Open the web URL to choose a repository and start chatting.</text>
+    <text x="46" y="458" font-size="13"><tspan fill="#adbac7">Web UI: </tspan><tspan fill="#58a6ff">http://127.0.0.1:3000</tspan></text>
+    <text x="46" y="476" font-size="13"><tspan fill="#adbac7">Worker: </tspan><tspan fill="#58a6ff">http://127.0.0.1:8000</tspan></text>
+    <text x="46" y="494" font-size="13" fill="#adbac7">Logs:   ~/.repooperator/logs/web.log</text>
+  </g>
+  <rect x="0.5" y="0.5" width="899" height="539" rx="12" fill="none" stroke="#1c2330"/>
+</svg>

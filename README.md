@@ -20,7 +20,7 @@
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square&logo=github&logoColor=white)](CONTRIBUTING.md)
 [![GitHub stars](https://img.shields.io/github/stars/jungin-kim/RepoOperator?style=flat-square&logo=github&logoColor=white&color=FFD43B)](https://github.com/jungin-kim/RepoOperator/stargazers)
 
-![RepoOperator CLI Screenshot](/repooperator-screenshot.png)
+![RepoOperator CLI Screenshot](repooperator-screenshot.svg)
 
 RepoOperator is a local-first repository assistant for opening private codebases, answering codebase questions, preparing proposed changes, and keeping repository access on your machine.
 
