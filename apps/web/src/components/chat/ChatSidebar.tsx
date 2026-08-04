@@ -15,13 +15,14 @@ interface ChatSidebarProps {
   onNewChat: () => void;
   onSelectThread: (threadId: string) => void;
   onDeleteThread?: (threadId: string) => void;
+  onRenameThread?: (threadId: string, title: string) => void;
   onDeleteProject?: (threadIds: string[]) => void;
   onSelectRecentProject: (project: ProviderProjectSummary) => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 }
 
-type MenuItem = { label: string; danger?: boolean; onClick: () => void };
+type MenuItem = { label: string; danger?: boolean; confirm?: string; onClick: () => void };
 
 const MENU_WIDTH = 190;
 
@@ -29,9 +30,14 @@ const MENU_WIDTH = 190;
  *  a portal (position: fixed) so it is always opaque and on top of other rows. */
 function MoreMenu({ items, label }: { items: MenuItem[]; label: string }) {
   const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState<MenuItem | null>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) setConfirming(null);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -87,21 +93,55 @@ function MoreMenu({ items, label }: { items: MenuItem[]; label: string }) {
               role="menu"
               style={{ position: "fixed", top: pos.top, left: pos.left, width: MENU_WIDTH }}
             >
-              {items.map((item) => (
-                <button
-                  key={item.label}
-                  type="button"
-                  role="menuitem"
-                  className={`sidebar-more-item${item.danger ? " sidebar-more-item-danger" : ""}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpen(false);
-                    item.onClick();
-                  }}
-                >
-                  {item.label}
-                </button>
-              ))}
+              {confirming ? (
+                <div className="sidebar-more-confirm">
+                  <div className="sidebar-more-confirm-text">{confirming.confirm}</div>
+                  <div className="sidebar-more-confirm-actions">
+                    <button
+                      type="button"
+                      className="sidebar-more-item sidebar-more-item-danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const action = confirming.onClick;
+                        setOpen(false);
+                        action();
+                      }}
+                    >
+                      Delete
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-more-item"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConfirming(null);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                items.map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    role="menuitem"
+                    className={`sidebar-more-item${item.danger ? " sidebar-more-item-danger" : ""}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (item.confirm) {
+                        setConfirming(item);
+                      } else {
+                        setOpen(false);
+                        item.onClick();
+                      }
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))
+              )}
             </div>,
             document.body,
           )
@@ -170,11 +210,14 @@ export function ChatSidebar({
   onNewChat,
   onSelectThread,
   onDeleteThread,
+  onRenameThread,
   onDeleteProject,
   onSelectRecentProject,
   collapsed = false,
   onToggleCollapsed,
 }: ChatSidebarProps) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const threadStoreLabel =
     threadStoreState === "loading"
       ? "Loading saved chats"
@@ -249,6 +292,7 @@ export function ChatSidebar({
                           {
                             label: `Delete project (${group.chats.length} chats)`,
                             danger: true,
+                            confirm: `Delete this project and its ${group.chats.length} chat(s)?`,
                             onClick: () => onDeleteProject(group.chats.map((c) => c.id)),
                           },
                         ]}
@@ -258,27 +302,68 @@ export function ChatSidebar({
 
                   {!isCollapsed && (
                     <div className="sidebar-project-chats">
-                      {group.chats.map((thread) => (
-                        <div key={thread.id} className="sidebar-thread-row">
-                          <button
-                            className={`sidebar-item sidebar-thread${
-                              thread.id === activeThreadId ? " sidebar-item-active" : ""
-                            }${runningThreads.has(thread.id) ? " sidebar-thread-running" : ""}`}
-                            type="button"
-                            title={`${chatTitle(thread)} — independent context`}
-                            onClick={() => onSelectThread(thread.id)}
-                          >
-                            <span className="sidebar-thread-title">{chatTitle(thread)}</span>
-                            {runningThreads.has(thread.id) ? <span className="sidebar-thread-spinner" aria-label="Run active" /> : null}
-                          </button>
-                          {onDeleteThread ? (
-                            <MoreMenu
-                              label="Chat actions"
-                              items={[{ label: "Delete chat", danger: true, onClick: () => onDeleteThread(thread.id) }]}
-                            />
-                          ) : null}
-                        </div>
-                      ))}
+                      {group.chats.map((thread) => {
+                        const renaming = renamingId === thread.id;
+                        return (
+                          <div key={thread.id} className="sidebar-thread-row">
+                            {renaming ? (
+                              <input
+                                className="sidebar-thread-rename"
+                                autoFocus
+                                value={renameValue}
+                                onChange={(e) => setRenameValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    const v = renameValue.trim();
+                                    if (v) onRenameThread?.(thread.id, v);
+                                    setRenamingId(null);
+                                  } else if (e.key === "Escape") {
+                                    setRenamingId(null);
+                                  }
+                                }}
+                                onBlur={() => {
+                                  const v = renameValue.trim();
+                                  if (v && v !== chatTitle(thread)) onRenameThread?.(thread.id, v);
+                                  setRenamingId(null);
+                                }}
+                              />
+                            ) : (
+                              <button
+                                className={`sidebar-item sidebar-thread${
+                                  thread.id === activeThreadId ? " sidebar-item-active" : ""
+                                }${runningThreads.has(thread.id) ? " sidebar-thread-running" : ""}`}
+                                type="button"
+                                title={`${chatTitle(thread)} — independent context`}
+                                onClick={() => onSelectThread(thread.id)}
+                              >
+                                <span className="sidebar-thread-title">{chatTitle(thread)}</span>
+                                {runningThreads.has(thread.id) ? <span className="sidebar-thread-spinner" aria-label="Run active" /> : null}
+                              </button>
+                            )}
+                            {!renaming && (onRenameThread || onDeleteThread) ? (
+                              <MoreMenu
+                                label="Chat actions"
+                                items={[
+                                  ...(onRenameThread
+                                    ? [
+                                        {
+                                          label: "Rename",
+                                          onClick: () => {
+                                            setRenameValue(chatTitle(thread));
+                                            setRenamingId(thread.id);
+                                          },
+                                        },
+                                      ]
+                                    : []),
+                                  ...(onDeleteThread
+                                    ? [{ label: "Delete chat", danger: true, confirm: "Delete this chat?", onClick: () => onDeleteThread(thread.id) }]
+                                    : []),
+                                ]}
+                              />
+                            ) : null}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

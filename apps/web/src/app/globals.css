@@ -980,6 +980,40 @@ select {
   background: color-mix(in srgb, #DB4437 12%, transparent);
 }
 
+.sidebar-more-confirm {
+  padding: 6px 8px;
+}
+
+.sidebar-more-confirm-text {
+  padding: 4px 2px 8px;
+  font-size: 0.82rem;
+  color: var(--foreground);
+}
+
+.sidebar-more-confirm-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sidebar-more-confirm-actions .sidebar-more-item {
+  flex: 1;
+  text-align: center;
+  border: 1px solid var(--border);
+}
+
+/* Inline rename input for a chat row. */
+.sidebar-thread-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--surface-strong);
+  color: var(--foreground);
+  font-size: 0.86rem;
+  outline: none;
+}
+
 .sidebar-thread-spinner {
   grid-column: 2;
   grid-row: 1 / span 2;
