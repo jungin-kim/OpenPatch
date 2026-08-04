@@ -25,6 +25,9 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 
 ## Features
 
+- Autonomous agent mode: the model drives a native tool-calling think → act → observe loop (with a deterministic planner as a safety fallback)
+- MCP plugin support: connect external tools over the Model Context Protocol (stdio and HTTP/SSE)
+- Multi-agent supervisor that fans broad requests out to scoped, model-backed subagents
 - One-command local product startup with `repooperator up`
 - Guided onboarding for repository source and model connection setup
 - Local worker that performs repository operations on the developer machine
@@ -285,6 +288,53 @@ http://127.0.0.1:8001/v1
 ```
 
 Only expose unauthenticated vLLM endpoints on trusted local or private networks.
+
+## Autonomous Agent Mode
+
+RepoOperator can run its decision core two ways:
+
+| Planner | Behavior |
+|---|---|
+| Autonomous (native tool calling) | The model sees the real tool schemas and the running think → act → observe transcript and chooses each tool call itself. This is what makes RepoOperator behave like a full agent. |
+| Guided (deterministic) | A priority chain of rule-based proposers picks safe primitive actions. Used as a fallback when a tool-calling model is not configured, or when the model declines. |
+
+Both planners produce the same action shape, so execution, permission gating,
+secret redaction, and budgets are enforced identically regardless of which
+planner chose the action.
+
+Autonomous mode is enabled when a tool-calling-capable model is configured.
+`repooperator onboard` turns it on for new installs (`model.toolCalling: true`).
+You can force it with an environment variable:
+
+```bash
+REPOOPERATOR_AGENTIC_TOOL_CALLING=1 repooperator up
+```
+
+Native tool calling is supported for OpenAI-compatible providers (OpenAI,
+Ollama, vLLM) and for Anthropic's native Messages API. The active planner is
+shown on the Debug page under **Agents**.
+
+## Plugins (MCP)
+
+RepoOperator loads external tools through the Model Context Protocol. Declare
+servers in `~/.repooperator/mcp.json` (or a repo `.repooperator/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+      "enabled": true
+    }
+  }
+}
+```
+
+MCP tools appear as `mcp_<server>_<tool>` and stay behind the same approval gate
+as any networked or mutating tool. Both `stdio` and `http`/`sse` transports are
+supported. No extra Python dependency is required.
 
 ## Web App
 

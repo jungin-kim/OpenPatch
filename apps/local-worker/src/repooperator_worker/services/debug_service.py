@@ -43,15 +43,35 @@ def get_debug_runtime_status() -> dict:
             "configured_sources": settings.configured_repository_sources,
             "effective_sources": settings.configured_repository_sources,
         },
-        "agent": {
-            "orchestration_mode": "langgraph",
-            "runtime": "langgraph",
-            "default_runtime": "langgraph",
-        },
+        "agent": _agent_runtime_status(settings, model_profile),
         "thread_context": list_thread_context_items(),
         "memory": list_memory_items(),
         "recent_runs": list_recent_runs(),
         "active_runs": get_active_runs(),
+    }
+
+
+def _agent_runtime_status(settings, model_profile) -> dict:
+    """Describe which planner drives the agent for the UI/debug surfaces."""
+
+    try:
+        from repooperator_worker.agent_core.agentic_loop import endpoint_configured, tool_calling_available
+
+        autonomous = tool_calling_available(settings)
+        endpoint = endpoint_configured(settings)
+    except Exception:
+        autonomous = False
+        endpoint = bool(settings.openai_base_url)
+    return {
+        "orchestration_mode": "langgraph",
+        "runtime": "langgraph",
+        "default_runtime": "langgraph",
+        "planner": "autonomous_tool_calling" if autonomous else "deterministic",
+        "planner_label": "Autonomous (native tool calling)" if autonomous else "Guided (deterministic planner)",
+        "tool_calling_enabled": bool(settings.agentic_tool_calling),
+        "tool_calling_active": autonomous,
+        "model_supports_tool_calls": bool(getattr(model_profile, "supports_tool_calls", False)),
+        "model_endpoint_configured": endpoint,
     }
 
 
