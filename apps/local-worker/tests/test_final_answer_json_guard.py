@@ -30,6 +30,17 @@ class BareJsonAnswerTests(unittest.TestCase):
     def test_detects_json_array(self) -> None:
         self.assertTrue(_looks_like_bare_json_answer('["README.md", "src/app.py"]'))
 
+    def test_detects_truncated_json(self) -> None:
+        # Real leaked answer: a JSON object the model never closed.
+        answer = (
+            '{"include": {"purpose": "The repository is a local-first coding agent proxy",\n'
+            '  "structure": "Python modules and scripts",\n'
+            '  "important_files": ["apps/local-worker/src/.../final_answer_support.py",\n'
+            '  "This is one of the core files that contributes to the agent\'s decision-making process. It may contain functions or classes O'
+        )
+        self.assertTrue(_looks_like_bare_json_answer(answer))
+        self.assertTrue(_needs_general_final_answer_repair(answer, _state()))
+
     def test_prose_answer_is_not_json(self) -> None:
         answer = "This repository is a local-first coding agent. The decision loop lives in graph_routes.py."
         self.assertFalse(_looks_like_bare_json_answer(answer))

@@ -219,9 +219,17 @@ def _looks_like_bare_json_answer(answer: str) -> bool:
         return False
     try:
         json.loads(text)
+        return True
     except (ValueError, TypeError):
-        return False
-    return True
+        pass
+    # Malformed or truncated JSON (models often emit an unterminated object): a
+    # message starting with { and carrying an early "key": pair, or starting with
+    # [ then an object/string, is still a JSON blob leaking to the user.
+    if text.startswith("{") and re.search(r'"[\w .-]+"\s*:', text[:400]):
+        return True
+    if text.startswith("[") and re.match(r'\[\s*["{\[]', text):
+        return True
+    return False
 
 
 def repair_final_answer(answer: str, state: AgentCoreState, request: AgentRunRequest, file_contents: dict[str, str]) -> str:
