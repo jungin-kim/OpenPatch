@@ -42,7 +42,7 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 - MCP plugin support: connect external tools over the Model Context Protocol (stdio and HTTP/SSE)
 - Multi-agent supervisor that fans broad requests out to scoped, model-backed subagents
 - Live web UI: streamed tool activity, token-by-token answers, and a live plan/todo checklist
-- One-command local product startup with `repooperator up`
+- One-command local product startup with `repo up`
 - Guided onboarding for repository source and model connection setup
 - Local worker that performs repository operations on the developer machine
 - Browser UI with project selection, branch selection, and repository-aware chat
@@ -77,7 +77,7 @@ If onboarding fails with a Python version error, set `REPOOPERATOR_PYTHON` to a
 compatible interpreter:
 
 ```bash
-REPOOPERATOR_PYTHON=$(which python3.12) repooperator onboard
+REPOOPERATOR_PYTHON=$(which python3.12) repo onboard
 ```
 
 ### First-run setup
@@ -85,32 +85,32 @@ REPOOPERATOR_PYTHON=$(which python3.12) repooperator onboard
 Run onboarding once (automatically prepares the local runtime):
 
 ```bash
-repooperator onboard
+repo onboard
 ```
 
 Start the local product runtime:
 
 ```bash
-repooperator up
+repo up
 ```
 
 Open the printed local web URL, choose a repository, and ask a repository question.
 
-> **No source clone required.** `repooperator onboard` downloads and prepares all runtime
+> **No source clone required.** `repo onboard` downloads and prepares all runtime
 > dependencies into `~/.repooperator/runtime/` automatically. You do not need to clone the
 > RepoOperator source repository as a normal user.
 
 If something looks wrong, run the diagnostics command:
 
 ```bash
-repooperator doctor
+repo doctor
 ```
 
 To reset everything and start fresh:
 
 ```bash
 rm -rf ~/.repooperator
-repooperator onboard
+repo onboard
 ```
 
 ### Troubleshooting: Python version errors
@@ -126,19 +126,19 @@ Your system Python is too old. Fix options:
 **macOS (Homebrew):**
 ```bash
 brew install python@3.12
-REPOOPERATOR_PYTHON="$(brew --prefix python@3.12)/bin/python3.12" repooperator onboard
+REPOOPERATOR_PYTHON="$(brew --prefix python@3.12)/bin/python3.12" repo onboard
 ```
 
 **Linux (apt):**
 ```bash
 sudo apt install python3.12
-REPOOPERATOR_PYTHON=$(which python3.12) repooperator onboard
+REPOOPERATOR_PYTHON=$(which python3.12) repo onboard
 ```
 
 **Linux (dnf):**
 ```bash
 sudo dnf install python3.12
-REPOOPERATOR_PYTHON=$(which python3.12) repooperator onboard
+REPOOPERATOR_PYTHON=$(which python3.12) repo onboard
 ```
 
 You can also set `REPOOPERATOR_PYTHON` permanently in your shell profile so
@@ -149,10 +149,10 @@ onboarding always uses the right interpreter.
 The intended common path is:
 
 1. Install the CLI.
-2. Run `repooperator onboard`.
+2. Run `repo onboard`.
 3. Choose a repository source: GitLab, GitHub, or local project.
 4. Choose a model connection mode: local runtime or remote API.
-5. Run `repooperator up`.
+5. Run `repo up`.
 6. Open the printed web URL.
 7. Select a project and branch.
 8. Open the repository locally.
@@ -161,10 +161,10 @@ The intended common path is:
 
 ```bash
 npm install -g repooperator
-repooperator onboard
-repooperator up
-repooperator doctor
-repooperator status
+repo onboard
+repo up
+repo doctor
+repo status
 ```
 
 Health can also be checked directly:
@@ -186,7 +186,7 @@ Tokens are stored locally in `~/.repooperator/config.json` and never sent outsid
 2. Click **Generate new token**.
 3. Set a token name and expiration date.
 4. Under **Repository access**, choose the owner or organization whose repositories you want to open.
-   - The **owner/org** value you enter during `repooperator onboard` should be a username or
+   - The **owner/org** value you enter during `repo onboard` should be a username or
      organization name such as `jungin-kim`, **not** a full URL.
 5. Under **Permissions → Repository permissions**, grant at minimum:
    - **Metadata**: Read (required for repository discovery)
@@ -321,11 +321,11 @@ secret redaction, and budgets are enforced identically regardless of which
 planner chose the action.
 
 Autonomous mode is enabled when a tool-calling-capable model is configured.
-`repooperator onboard` turns it on for new installs (`model.toolCalling: true`).
+`repo onboard` turns it on for new installs (`model.toolCalling: true`).
 You can force it with an environment variable:
 
 ```bash
-REPOOPERATOR_AGENTIC_TOOL_CALLING=1 repooperator up
+REPOOPERATOR_AGENTIC_TOOL_CALLING=1 repo up
 ```
 
 Native tool calling is supported for OpenAI-compatible providers (OpenAI,
@@ -389,29 +389,29 @@ http://localhost:3000
 Core commands:
 
 ```bash
-repooperator onboard       # Guided first-run setup (auto-prepares runtime on first install)
-repooperator up            # Start worker and web UI (self-heals missing runtime)
-repooperator down          # Stop worker and web UI
-repooperator doctor        # Run local diagnostics (reports runtime, worker, web, model state)
-repooperator status        # Show runtime status
-repooperator config show   # Print redacted config
+repo onboard       # Guided first-run setup (auto-prepares runtime on first install)
+repo up            # Start worker and web UI (self-heals missing runtime)
+repo down          # Stop worker and web UI
+repo doctor        # Run local diagnostics (reports runtime, worker, web, model state)
+repo status        # Show runtime status
+repo config show   # Print redacted config
 ```
 
 Worker maintenance commands:
 
 ```bash
-repooperator worker start
-repooperator worker stop
-repooperator worker restart
-repooperator worker status
-repooperator worker logs
+repo worker start
+repo worker stop
+repo worker restart
+repo worker status
+repo worker logs
 ```
 
 The recommended product flow is:
 
 ```bash
-repooperator onboard
-repooperator up
+repo onboard
+repo up
 ```
 
 Use `worker` commands when you need lower-level runtime inspection or maintenance.
@@ -539,7 +539,7 @@ other git tools will reflect the change immediately.
 RepoOperator currently supports:
 
 - CLI onboarding with repository provider and model connection setup
-- one-command local runtime startup through `repooperator up`
+- one-command local runtime startup through `repo up`
 - worker lifecycle management through the CLI
 - bounded health checks through `doctor` and `status`
 - GitLab and GitHub provider-backed repository open flows
@@ -569,7 +569,7 @@ RepoOperator is still alpha-stage software. Important limitations:
 
 Near-term priorities:
 
-- harden `repooperator up` and `repooperator down` across more local environments
+- harden `repo up` and `repo down` across more local environments
 - improve repository selection and branch-selection UX
 - improve file-aware retrieval for code-specific questions
 - show which files were used in each answer more consistently
