@@ -221,7 +221,9 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
             active_stream_statuses = {"pending", "running", "waiting_approval", "cancelling"}
             if run and run.get("status") not in active_stream_statuses and not events:
                 break
-            time.sleep(0.25)
+            # Poll frequently so streamed answer deltas reach the client
+            # progressively rather than batched into quarter-second bursts.
+            time.sleep(0.05)
         yield "data: [DONE]\n\n"
 
     return run_id, generate()

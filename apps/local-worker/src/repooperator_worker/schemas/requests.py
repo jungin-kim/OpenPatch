@@ -217,6 +217,16 @@ class RevealFolderRequest(BaseModel):
         return _normalize_project_path(value)
 
 
+class DiffStatRequest(BaseModel):
+    project_path: str
+    relative_paths: list[str] = Field(default_factory=list)
+
+    @field_validator("project_path")
+    @classmethod
+    def validate_project_path(cls, value: str) -> str:
+        return _normalize_project_path(value)
+
+
 class CommandRunRequest(BaseModel):
     project_path: str
     command: str = Field(..., description="Command parsed into argv and executed through RepoOperator command policy.")

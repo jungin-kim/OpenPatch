@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Iterator
 
 from langgraph.types import Command
@@ -92,6 +93,8 @@ def stream_langgraph_controller(request: AgentRunRequest, *, run_id: str | None 
     if not any(event.get("type") == "assistant_delta" for event in list_run_events(resolved_run_id)):
         for chunk in _chunk_text(response.response):
             yield {"type": "assistant_delta", "delta": chunk, "streaming_mode": "post_hoc_chunking"}
+            # Pace the fallback stream so it reads progressively too.
+            time.sleep(0.045)
     final = response.model_copy(update={"activity_events": [], "agent_flow": "langgraph"})
     yield {"type": "final_message", "result": safe_agent_response_payload(final)}
 

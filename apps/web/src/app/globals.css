@@ -1779,6 +1779,94 @@ select {
   color: #DB4437;
 }
 
+/* Changed-files (diff stat) summary under an answer */
+.diffstat-card {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+  font-size: 0.82rem;
+}
+
+.diffstat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface-strong);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.diffstat-title {
+  color: var(--foreground);
+}
+
+.diffstat-totals,
+.diffstat-counts {
+  display: inline-flex;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.diffstat-added {
+  color: #2ea043;
+}
+
+.diffstat-removed {
+  color: #f85149;
+}
+
+.diffstat-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.diffstat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+
+.diffstat-row:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.diffstat-status {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.diffstat-status-added { background: #2ea043; }
+.diffstat-status-deleted { background: #f85149; }
+.diffstat-status-modified { background: #bb8009; }
+
+.diffstat-path {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--foreground);
+}
+
 .propose-actions {
   display: flex;
   justify-content: flex-end;

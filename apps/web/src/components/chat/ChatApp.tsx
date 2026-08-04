@@ -18,6 +18,7 @@ import {
   listLocalBranches,
   listThreads,
   LocalWorkerClientError,
+  getRepositoryDiffStat,
   openRepository,
   proposeFileEdit,
   revealRepositoryFolder,
@@ -237,6 +238,29 @@ export function ChatApp() {
     setStreamedAnswer("");
     // Name the chat from the completed work (Codex / Claude Code style), once.
     window.setTimeout(() => void maybeGenerateThreadTitle(threadId), 0);
+    // Attach a "files changed" summary (file +added -removed) once the run lands.
+    if (finalResult) {
+      void attachDiffStat(threadId, finalResult.run_id || runId);
+    }
+  }
+
+  async function attachDiffStat(threadId: string, runId: string) {
+    const thread = threadsRef.current.find((item) => item.id === threadId);
+    const projectPath = thread?.repoResult?.project_path || repoResultRef.current?.project_path;
+    if (!projectPath) return;
+    try {
+      const diffStat = await getRepositoryDiffStat({ project_path: projectPath });
+      if (!diffStat.is_git_repository || diffStat.files.length === 0) return;
+      setMessages((current) => {
+        const next = current.map((msg) =>
+          msg.metadata?.run_id === runId && msg.role === "assistant" ? { ...msg, diffStat } : msg,
+        );
+        updateThreadMessages(threadId, next);
+        return next;
+      });
+    } catch {
+      // A missing diff summary should never block the finalized answer.
+    }
   }
 
   function setThreadTitle(threadId: string, title: string) {

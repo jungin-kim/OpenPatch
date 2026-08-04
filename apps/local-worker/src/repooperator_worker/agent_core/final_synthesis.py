@@ -585,11 +585,23 @@ def _dedupe(items: list[str]) -> list[str]:
     return result
 
 
-def _chunk_text(text: str, chunk_size: int = 96):
-    for start in range(0, len(text or ""), chunk_size):
-        chunk = text[start : start + chunk_size]
-        if chunk:
-            yield chunk
+def _chunk_text(text: str, chunk_size: int = 14):
+    """Yield small, word-aware chunks so streamed output reads naturally.
+
+    Whitespace (including newlines) is attached to the preceding chunk so word
+    boundaries and formatting are preserved as the answer streams in.
+    """
+    text = text or ""
+    if not text:
+        return
+    buffer = ""
+    for token in re.findall(r"\S+\s*", text):
+        buffer += token
+        if len(buffer) >= chunk_size:
+            yield buffer
+            buffer = ""
+    if buffer:
+        yield buffer
 
 
 def _compat_model_client():

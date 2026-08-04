@@ -186,6 +186,21 @@ export type RevealFolderPayload = {
   opened: boolean;
 };
 
+export type DiffStatEntryPayload = {
+  path: string;
+  added: number;
+  removed: number;
+  status: "modified" | "added" | "deleted";
+};
+
+export type DiffStatPayload = {
+  project_path: string;
+  is_git_repository: boolean;
+  files: DiffStatEntryPayload[];
+  total_added: number;
+  total_removed: number;
+};
+
 export type AgentRunPayload = {
   project_path: string;
   git_provider?: string | null;
@@ -802,6 +817,21 @@ export async function revealRepositoryFolder(input: {
     body: JSON.stringify(input),
   });
   return parseWorkerResponse<RevealFolderPayload>(response);
+}
+
+export async function getRepositoryDiffStat(input: {
+  project_path: string;
+  relative_paths?: string[];
+}): Promise<DiffStatPayload> {
+  const response = await fetch("/api/worker/git-diff-stat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      project_path: input.project_path,
+      relative_paths: input.relative_paths ?? [],
+    }),
+  });
+  return parseWorkerResponse<DiffStatPayload>(response);
 }
 
 export async function listLocalBranches(input: {

@@ -14,8 +14,18 @@ from repooperator_worker.schemas import (
     GitPushRequest,
     GitPushResponse,
 )
-from repooperator_worker.schemas.responses import GitBranchListResponse, LocalBranchSummary
-from repooperator_worker.services.common import ensure_git_repository, resolve_project_path
+from repooperator_worker.schemas.requests import DiffStatRequest
+from repooperator_worker.schemas.responses import (
+    DiffStatEntry,
+    DiffStatResponse,
+    GitBranchListResponse,
+    LocalBranchSummary,
+)
+from repooperator_worker.services.common import (
+    ensure_git_repository,
+    is_git_repository,
+    resolve_project_path,
+)
 from repooperator_worker.services.command_service import run_command_with_policy
 from repooperator_worker.services.git_providers import ProviderGitOptions, resolve_provider_git_options
 from repooperator_worker.services.review_providers import (
@@ -111,6 +121,87 @@ def get_diff(request: GitDiffRequest) -> GitDiffResponse:
         raise RuntimeError(result.stderr.strip() or "git diff failed")
 
     return GitDiffResponse(project_path=request.project_path, diff=result.stdout)
+
+
+def diff_stat(request: DiffStatRequest) -> DiffStatResponse:
+    """Per-file added/removed line counts for the current working tree.
+
+    Combines tracked changes (``git diff --numstat HEAD``) with untracked files
+    (counted as pure additions). When ``relative_paths`` is provided the result is
+    filtered to just those files, so a run can show only the files it touched.
+    """
+
+    repo_path = resolve_project_path(request.project_path)
+    if not is_git_repository(repo_path):
+        return DiffStatResponse(
+            project_path=request.project_path,
+            is_git_repository=False,
+            files=[],
+            total_added=0,
+            total_removed=0,
+        )
+
+    wanted = {p.strip("/") for p in request.relative_paths if p and p.strip("/")}
+    stats: dict[str, DiffStatEntry] = {}
+
+    # Tracked modifications / deletions vs HEAD.
+    tracked = run_subprocess(
+        command=["git", "diff", "--numstat", "HEAD"],
+        cwd=repo_path,
+        timeout_seconds=30,
+    )
+    if tracked.returncode == 0:
+        for line in tracked.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) != 3:
+                continue
+            added_raw, removed_raw, path = parts
+            # Binary files report "-" for counts.
+            added = int(added_raw) if added_raw.isdigit() else 0
+            removed = int(removed_raw) if removed_raw.isdigit() else 0
+            status = "deleted" if added == 0 and _is_deleted(repo_path, path) else "modified"
+            stats[path] = DiffStatEntry(path=path, added=added, removed=removed, status=status)
+
+    # Untracked (new) files — count their lines as additions.
+    untracked = run_subprocess(
+        command=["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=repo_path,
+        timeout_seconds=30,
+    )
+    if untracked.returncode == 0:
+        for path in untracked.stdout.splitlines():
+            path = path.strip()
+            if not path:
+                continue
+            stats[path] = DiffStatEntry(
+                path=path,
+                added=_count_lines(repo_path / path),
+                removed=0,
+                status="added",
+            )
+
+    entries = [entry for path, entry in stats.items() if not wanted or path in wanted]
+    entries.sort(key=lambda entry: entry.path.lower())
+
+    return DiffStatResponse(
+        project_path=request.project_path,
+        is_git_repository=True,
+        files=entries,
+        total_added=sum(entry.added for entry in entries),
+        total_removed=sum(entry.removed for entry in entries),
+    )
+
+
+def _is_deleted(repo_path, path: str) -> bool:
+    return not (repo_path / path).exists()
+
+
+def _count_lines(file_path) -> int:
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
+            return sum(1 for _ in handle)
+    except OSError:
+        return 0
 
 
 def create_branch(request: GitBranchCreateRequest) -> GitBranchCreateResponse:

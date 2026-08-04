@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import time
 from typing import Any
 
 from repooperator_worker.agent_core.graph.adapters import (
@@ -390,11 +391,18 @@ def _ensure_final_evidence_grounding(text: str, state: RepoOperatorGraphState) -
         return text.rstrip() + f"\n\nBased on: {cited}."
     return text
 
+# Small delay between streamed chunks so the SSE poller delivers the answer
+# progressively (word-by-word feel) instead of one burst at the end.
+_STREAM_CHUNK_DELAY_SECONDS = 0.055
+
+
 def _stream_final_delta(run_id: str):
     def emit(delta: str) -> None:
         try:
             append_run_event(run_id, {"type": "assistant_delta", "delta": delta, "streaming_mode": "model_stream"})
         except OSError:
             return
+        if _STREAM_CHUNK_DELAY_SECONDS:
+            time.sleep(_STREAM_CHUNK_DELAY_SECONDS)
 
     return emit

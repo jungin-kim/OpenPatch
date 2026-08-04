@@ -9,6 +9,8 @@ from repooperator_worker.schemas import (
     AgentRunResponse,
     CommandRunRequest,
     CommandRunResponse,
+    DiffStatRequest,
+    DiffStatResponse,
     DirListRequest,
     DirListResponse,
     RevealFolderRequest,
@@ -83,6 +85,7 @@ from repooperator_worker.services.git_service import (
     commit_changes,
     create_branch,
     create_provider_merge_request,
+    diff_stat,
     get_diff,
     list_local_branches,
     push_branch,
@@ -563,6 +566,16 @@ def cmd_run(request: CommandRunRequest) -> CommandRunResponse:
 def git_diff(request: GitDiffRequest) -> GitDiffResponse:
     try:
         return get_diff(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/git/diff-stat", response_model=DiffStatResponse)
+def git_diff_stat(request: DiffStatRequest) -> DiffStatResponse:
+    try:
+        return diff_stat(request)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

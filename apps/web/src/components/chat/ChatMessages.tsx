@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type {
   AgentRunPayload,
   CommandResultPayload,
+  DiffStatPayload,
   EditArchiveRecord,
   PermissionMode,
   RepoOpenPayload,
@@ -28,7 +29,42 @@ export type ChatMessage = {
   metadata?: AgentRunPayload;
   proposal?: ChangeProposal;
   progressSteps?: ProgressStep[];
+  diffStat?: DiffStatPayload;
 };
+
+function DiffStatCard({ diffStat }: { diffStat: DiffStatPayload }) {
+  if (!diffStat.is_git_repository || diffStat.files.length === 0) return null;
+  const fileCount = diffStat.files.length;
+  return (
+    <div className="diffstat-card">
+      <div className="diffstat-header">
+        <span className="diffstat-title">
+          {fileCount} file{fileCount === 1 ? "" : "s"} changed
+        </span>
+        <span className="diffstat-totals">
+          <span className="diffstat-added">+{diffStat.total_added}</span>
+          <span className="diffstat-removed">−{diffStat.total_removed}</span>
+        </span>
+      </div>
+      <ul className="diffstat-list">
+        {diffStat.files.map((file) => (
+          <li className="diffstat-row" key={file.path}>
+            <span className={`diffstat-status diffstat-status-${file.status}`} title={file.status}>
+              {file.status === "added" ? "A" : file.status === "deleted" ? "D" : "M"}
+            </span>
+            <span className="diffstat-path" title={file.path}>
+              {file.path}
+            </span>
+            <span className="diffstat-counts">
+              <span className="diffstat-added">+{file.added}</span>
+              <span className="diffstat-removed">−{file.removed}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function CommandApprovalCard({
   metadata,
@@ -793,6 +829,7 @@ export function ChatMessages({
                 <div className="message-bubble">{msg.content}</div>
               )}
               {msg.metadata && <ToolCard metadata={msg.metadata} />}
+              {msg.diffStat && <DiffStatCard diffStat={msg.diffStat} />}
               <span className="message-timestamp">{formatTime(msg.timestamp)}</span>
             </div>
           ))}

@@ -173,6 +173,21 @@ class RevealFolderResponse(BaseModel):
     opened: bool
 
 
+class DiffStatEntry(BaseModel):
+    path: str
+    added: int
+    removed: int
+    status: str  # "modified" | "added" | "deleted"
+
+
+class DiffStatResponse(BaseModel):
+    project_path: str
+    is_git_repository: bool
+    files: list[DiffStatEntry]
+    total_added: int
+    total_removed: int
+
+
 class CommandRunResponse(BaseModel):
     project_path: str
     command: str
