@@ -2,7 +2,6 @@
 
 import { type FormEvent, useEffect, useState } from "react";
 import type {
-  PermissionMode,
   ProviderBranchSummary,
   ProviderProjectSummary,
   RepoOpenPayload,
@@ -13,15 +12,6 @@ type ConnectionState = "checking" | "connected" | "unavailable";
 
 interface ChatHeaderProps {
   connectionState: ConnectionState;
-  configuredModelName: string;
-  configuredModelProvider: string;
-  writeMode: PermissionMode;
-  permissionPending: boolean;
-  permissionMessage: string | null;
-  permissionError: string | null;
-  onPermissionModeChange: (mode: PermissionMode) => void;
-  theme: "light" | "dark";
-  onThemeToggle: () => void;
 
   gitProvider: string;
   onGitProviderChange: (value: string) => void;
@@ -76,34 +66,6 @@ const localStages = [
   "Finalizing repository context",
 ];
 
-const permissionModes: Array<{
-  mode: PermissionMode;
-  label: string;
-  description: string;
-  disabled?: boolean;
-}> = [
-  {
-    mode: "default",
-    label: "Default",
-    description: "Work inside the active repository sandbox with approval gates.",
-  },
-  {
-    mode: "accept_edits",
-    label: "Accept edits",
-    description: "Use approval cards for elevated actions, network, and risky tools.",
-  },
-  {
-    mode: "auto_readonly",
-    label: "Read-only",
-    description: "Allow repository reads and safe git inspection without writes.",
-  },
-  {
-    mode: "full_access",
-    label: "Full access",
-    description: "Dangerous broader local access after confirmation.",
-  },
-];
-
 const BRANCH_RE = /^[a-zA-Z0-9._/\-]+$/;
 
 function validateBranchName(name: string): string | null {
@@ -115,27 +77,8 @@ function validateBranchName(name: string): string | null {
   return null;
 }
 
-function permissionLabel(mode: PermissionMode): string {
-  return permissionModes.find((item) => item.mode === mode)?.label ?? mode.replaceAll("_", " ");
-}
-
-function permissionTone(mode: PermissionMode): "review" | "full" | "default" {
-  if (mode === "accept_edits" || mode === "routine_safe" || mode === "headless_safe") return "review";
-  if (mode === "full_access") return "full";
-  return "default";
-}
-
 export function ChatHeader({
   connectionState,
-  configuredModelName,
-  configuredModelProvider,
-  writeMode,
-  permissionPending,
-  permissionMessage,
-  permissionError,
-  onPermissionModeChange,
-  theme,
-  onThemeToggle,
   gitProvider,
   onGitProviderChange,
   projects,
@@ -164,7 +107,6 @@ export function ChatHeader({
   onRevealFolder,
 }: ChatHeaderProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [showPermissions, setShowPermissions] = useState(false);
   const [showBranchCreate, setShowBranchCreate] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");
   const [newBranchBase, setNewBranchBase] = useState("");
@@ -188,15 +130,6 @@ export function ChatHeader({
 
     return () => window.clearInterval(interval);
   }, [repositoryOpenProgress]);
-
-  const connectionLabel =
-    connectionState === "connected"
-      ? "Connected"
-      : connectionState === "checking"
-        ? "Checking"
-        : "Unavailable";
-
-  const modelLabel = configuredModelName || configuredModelProvider || "No model";
 
   const allProjects = [
     ...recentProjects,
@@ -409,87 +342,7 @@ export function ChatHeader({
           )}
         </div>
 
-        <div className="chat-header-status">
-          <span
-            className={`status-pill-sm${
-              connectionState === "connected"
-                ? " status-pill-sm-connected"
-                : connectionState === "checking"
-                  ? " status-pill-sm-checking"
-                  : ""
-            }`}
-          >
-            {connectionLabel}
-          </span>
-          {configuredModelProvider && (
-            <span className="model-chip" title={modelLabel}>
-              {modelLabel}
-            </span>
-          )}
-          <div className="permission-control">
-            <button
-              className={`permission-trigger${permissionTone(writeMode) === "review" ? " permission-trigger-review" : ""}`}
-              type="button"
-              aria-label="Permission mode"
-              aria-expanded={showPermissions}
-              onClick={() => setShowPermissions((value) => !value)}
-              disabled={permissionPending}
-              title="Change RepoOperator permission mode"
-            >
-              <span className="permission-trigger-icon" aria-hidden="true">
-                {permissionTone(writeMode) === "review" ? "◇" : permissionTone(writeMode) === "full" ? "!" : "●"}
-              </span>
-              {permissionPending ? "Updating…" : permissionLabel(writeMode)}
-              <span className="permission-trigger-caret" aria-hidden="true">▾</span>
-            </button>
-            {showPermissions && (
-              <div className="permission-menu" role="menu">
-                {permissionModes.map((item) => (
-                  <button
-                    key={item.mode}
-                    className={`permission-option${item.mode === writeMode ? " permission-option-selected" : ""}`}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={item.mode === writeMode}
-                    disabled={permissionPending || item.disabled}
-                    onClick={() => {
-                      if (item.disabled) return;
-                      setShowPermissions(false);
-                      onPermissionModeChange(item.mode);
-                    }}
-                  >
-                    <span className="permission-option-check" aria-hidden="true">
-                      {item.mode === writeMode ? "✓" : ""}
-                    </span>
-                    <span className="permission-option-copy">
-                      <span className="permission-option-label">
-                        {item.label}
-                        {item.disabled ? " — Coming soon" : ""}
-                      </span>
-                      <span className="permission-option-description">{item.description}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <button
-            className="theme-toggle"
-            type="button"
-            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-            onClick={onThemeToggle}
-            title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          >
-            {theme === "dark" ? <SunIcon /> : <MoonIcon />}
-          </button>
-        </div>
       </div>
-
-      {(permissionMessage || permissionError) && (
-        <p className={`permission-inline-message${permissionError ? " permission-inline-message-error" : ""}`}>
-          {permissionError || permissionMessage}
-        </p>
-      )}
 
       {branchActionError && !showBranchCreate && (
         <p className="header-error">{branchActionError}</p>
@@ -626,26 +479,3 @@ export function ChatHeader({
   );
 }
 
-function SunIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2" />
-      <path d="M12 20v2" />
-      <path d="m4.93 4.93 1.41 1.41" />
-      <path d="m17.66 17.66 1.41 1.41" />
-      <path d="M2 12h2" />
-      <path d="M20 12h2" />
-      <path d="m6.34 17.66-1.41 1.41" />
-      <path d="m19.07 4.93-1.41 1.41" />
-    </svg>
-  );
-}
-
-function MoonIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 3a6 6 0 0 0 9 8 9 9 0 1 1-9-8Z" />
-    </svg>
-  );
-}

@@ -2,6 +2,9 @@
 
 import { type KeyboardEvent, type ReactNode } from "react";
 import type { PermissionMode } from "@/lib/local-worker-client";
+import { PermissionControl } from "./PermissionControl";
+
+type ConnectionState = "checking" | "connected" | "unavailable";
 
 interface ChatComposerProps {
   value: string;
@@ -16,6 +19,13 @@ interface ChatComposerProps {
   queuedMessages?: Array<{ id: string; text: string; status: string; error?: string | null }>;
   contextSlot?: ReactNode;
   onPropose?: () => void;
+  connectionState?: ConnectionState;
+  configuredModelName?: string;
+  configuredModelProvider?: string;
+  permissionPending?: boolean;
+  permissionMessage?: string | null;
+  permissionError?: string | null;
+  onPermissionModeChange?: (mode: PermissionMode) => void;
 }
 
 export function ChatComposer({
@@ -31,7 +41,21 @@ export function ChatComposer({
   queuedMessages = [],
   contextSlot,
   onPropose,
+  connectionState = "connected",
+  configuredModelName,
+  configuredModelProvider,
+  permissionPending = false,
+  permissionMessage,
+  permissionError,
+  onPermissionModeChange,
 }: ChatComposerProps) {
+  const connectionLabel =
+    connectionState === "connected"
+      ? "Connected"
+      : connectionState === "checking"
+        ? "Checking"
+        : "Unavailable";
+  const modelLabel = configuredModelName || configuredModelProvider || "No model";
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
@@ -51,20 +75,6 @@ export function ChatComposer({
       : writeMode === "accept_edits"
         ? "Ask a question or request a change… (⌘+Enter to send)"
         : "Ask a question about the repository… (⌘+Enter to send)";
-
-  const hint = disabled
-    ? "Open a repository to start asking questions."
-    : pending
-      ? queuedMessages.length > 0
-        ? `${queuedMessages.length} message${queuedMessages.length === 1 ? "" : "s"} queued — will run after current task finishes.`
-        : "Agent is running — type to queue a follow-up."
-      : writeMode === "accept_edits"
-        ? "Accept edits — elevated commands and risky actions use approval cards."
-        : writeMode === "full_access"
-          ? "Full access — broader local actions are enabled and logged."
-          : writeMode === "auto_readonly" || writeMode === "plan_only"
-            ? "Read-only mode — repository inspection is available without writes."
-            : "Default permissions — repository sandbox work is allowed with approval gates.";
 
   const buttonLabel = pending
     ? value.trim()
@@ -109,7 +119,16 @@ export function ChatComposer({
         />
         <div className="composer-actions">
           <div className="composer-hint-stack">
-            <span className="composer-hint">{hint}</span>
+            {onPermissionModeChange ? (
+              <PermissionControl
+                writeMode={writeMode}
+                permissionPending={permissionPending}
+                permissionMessage={permissionMessage}
+                permissionError={permissionError}
+                onPermissionModeChange={onPermissionModeChange}
+                menuDirection="up"
+              />
+            ) : null}
             {pending ? (
               <div className="composer-run-controls" aria-label="Active run controls">
                 <button type="button" className="composer-stop-btn" data-testid="stop-run-button" onClick={onStopRun}>
@@ -119,6 +138,22 @@ export function ChatComposer({
             ) : null}
           </div>
           <div className="composer-send-group">
+            <span
+              className={`status-pill-sm${
+                connectionState === "connected"
+                  ? " status-pill-sm-connected"
+                  : connectionState === "checking"
+                    ? " status-pill-sm-checking"
+                    : ""
+              }`}
+            >
+              {connectionLabel}
+            </span>
+            {configuredModelProvider ? (
+              <span className="model-chip" title={modelLabel}>
+                {modelLabel}
+              </span>
+            ) : null}
             {onPropose ? (
               <button
                 type="button"

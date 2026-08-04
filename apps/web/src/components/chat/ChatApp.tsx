@@ -1963,20 +1963,13 @@ export function ChatApp() {
           onSelectRecentProject={handleRecentProjectSelect}
           collapsed={sidebarCollapsed}
           onToggleCollapsed={handleSidebarCollapsedChange}
+          theme={theme}
+          onThemeToggle={handleThemeToggle}
         />
       }
       header={
         <ChatHeader
           connectionState={connectionState}
-          configuredModelName={configuredModelName}
-          configuredModelProvider={configuredModelProvider}
-          writeMode={writeMode}
-          permissionPending={permissionPending}
-          permissionMessage={permissionMessage}
-          permissionError={permissionError}
-          onPermissionModeChange={handlePermissionModeChange}
-          theme={theme}
-          onThemeToggle={handleThemeToggle}
           gitProvider={gitProvider}
           onGitProviderChange={handleGitProviderChange}
           projects={projects}
@@ -2036,6 +2029,13 @@ export function ChatApp() {
             .map((item) => ({ id: item.id, text: item.text, status: item.status, error: item.error }))}
           contextSlot={repoResult ? <ContextWindow messageTokens={estimateMessageTokens(messages)} /> : null}
           onPropose={repoResult ? () => { setProposeError(null); setProposeOpen(true); } : undefined}
+          connectionState={connectionState}
+          configuredModelName={configuredModelName}
+          configuredModelProvider={configuredModelProvider}
+          permissionPending={permissionPending}
+          permissionMessage={permissionMessage}
+          permissionError={permissionError}
+          onPermissionModeChange={handlePermissionModeChange}
         />
       }
     />

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 
 import { createPortal } from "react-dom";
 import type { ProviderProjectSummary } from "@/lib/local-worker-client";
 import type { ChatThread } from "./ChatApp";
+import { ThemeToggle } from "./ThemeToggle";
 import Link from "next/link";
 
 interface ChatSidebarProps {
@@ -20,6 +21,8 @@ interface ChatSidebarProps {
   onSelectRecentProject: (project: ProviderProjectSummary) => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
+  theme?: "light" | "dark";
+  onThemeToggle?: () => void;
 }
 
 type MenuItem = { label: string; danger?: boolean; confirm?: string; onClick: () => void };
@@ -215,6 +218,8 @@ export function ChatSidebar({
   onSelectRecentProject,
   collapsed = false,
   onToggleCollapsed,
+  theme = "light",
+  onThemeToggle,
 }: ChatSidebarProps) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -399,9 +404,12 @@ export function ChatSidebar({
             <Link href="/debug" className="sidebar-item" style={{ display: "block", color: "var(--muted)", fontSize: "0.84rem", marginBottom: 6 }}>
               Debug dashboard
             </Link>
-            <Link href="/" className="sidebar-item" style={{ display: "block", color: "var(--muted)", fontSize: "0.84rem" }}>
-              ← Home
-            </Link>
+            <div className="sidebar-home-row">
+              <Link href="/" className="sidebar-item sidebar-home-link" style={{ color: "var(--muted)", fontSize: "0.84rem" }}>
+                ← Home
+              </Link>
+              {onThemeToggle && <ThemeToggle theme={theme} onThemeToggle={onThemeToggle} />}
+            </div>
           </div>
         </div>
       )}

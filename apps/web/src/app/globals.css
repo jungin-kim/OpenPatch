@@ -1326,6 +1326,14 @@ select {
   box-shadow: var(--shadow);
 }
 
+/* Upward-opening permission menu (used in the composer at the bottom) */
+.permission-menu-up {
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: auto;
+}
+
 .permission-option {
   width: 100%;
   display: grid;
@@ -1561,7 +1569,21 @@ select {
 .composer-send-group {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+/* Home line in the sidebar footer holds the theme toggle on the right */
+.sidebar-home-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar-home-link {
+  display: inline-block;
 }
 
 .composer-propose-btn {
