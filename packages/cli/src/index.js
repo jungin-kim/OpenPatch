@@ -44,6 +44,78 @@ const MIN_PYTHON_MAJOR = 3;
 const MIN_PYTHON_MINOR = 11;
 const PYTHON_CANDIDATES = ["python3.13", "python3.12", "python3.11", "python3", "python"];
 const OLLAMA_RECOMMENDED_MODEL = "qwen2.5-coder:7b";
+
+// Coding-focused Ollama models with approximate memory needs (Q4_K_M weights
+// plus a modest context window). Used to recommend models that fit the host.
+const OLLAMA_MODEL_CATALOG = [
+  { name: "qwen2.5-coder:1.5b", params: "1.5B", approxGiB: 2, note: "Tiny & fast; light autocomplete-style help" },
+  { name: "qwen2.5-coder:3b", params: "3B", approxGiB: 3, note: "Small & quick; basic repo Q&A" },
+  { name: "qwen2.5-coder:7b", params: "7B", approxGiB: 6, note: "Well-rounded coding default" },
+  { name: "qwen2.5-coder:14b", params: "14B", approxGiB: 10, note: "Stronger reasoning; great balance" },
+  { name: "qwen2.5-coder:32b", params: "32B", approxGiB: 20, note: "Best local coding quality" },
+  { name: "llama3.3:70b", params: "70B", approxGiB: 42, note: "Top general reasoning; memory-hungry" },
+];
+
+function detectHardware() {
+  const totalMemGiB = os.totalmem() / 1024 ** 3;
+  const isAppleSilicon = process.platform === "darwin" && process.arch === "arm64";
+  let chip = os.cpus()?.[0]?.model || `${process.platform}/${process.arch}`;
+  if (process.platform === "darwin") {
+    try {
+      const brand = require("node:child_process")
+        .execFileSync("sysctl", ["-n", "machdep.cpu.brand_string"], { encoding: "utf-8", timeout: 3000 })
+        .trim();
+      if (brand) chip = brand;
+    } catch {
+      /* fall back to os.cpus model */
+    }
+  }
+  let gpuVramGiB = null;
+  if (!isAppleSilicon) {
+    try {
+      const out = require("node:child_process").execFileSync(
+        "nvidia-smi",
+        ["--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+        // shell:true on Windows so PATH/PATHEXT resolves nvidia-smi.exe.
+        { encoding: "utf-8", timeout: 3000, shell: process.platform === "win32" },
+      );
+      const perGpu = out.split("\n").map((line) => parseInt(line.trim(), 10)).filter(Number.isFinite);
+      if (perGpu.length) gpuVramGiB = Math.max(...perGpu) / 1024;
+    } catch {
+      /* no NVIDIA GPU / driver, or non-NVIDIA GPU — fall back to the RAM heuristic */
+    }
+  }
+  // Memory a model can realistically use:
+  //  - Apple Silicon: unified memory, Metal budgets ~72% by default
+  //  - Discrete NVIDIA GPU: ~90% of VRAM
+  //  - CPU-only: ~60% of RAM, leaving room for the OS and app
+  let budgetGiB;
+  if (isAppleSilicon) budgetGiB = totalMemGiB * 0.72;
+  else if (gpuVramGiB) budgetGiB = gpuVramGiB * 0.9;
+  else budgetGiB = totalMemGiB * 0.6;
+  return { platform: process.platform, arch: process.arch, isAppleSilicon, chip, totalMemGiB, gpuVramGiB, budgetGiB };
+}
+
+function recommendOllamaModels(hardware) {
+  return OLLAMA_MODEL_CATALOG.map((model) => ({ ...model, fits: model.approxGiB <= hardware.budgetGiB }));
+}
+
+function recommendedOllamaModel(hardware) {
+  const coder = OLLAMA_MODEL_CATALOG.filter((model) => model.name.includes("coder"));
+  const fitting = coder.filter((model) => model.approxGiB <= hardware.budgetGiB);
+  return (fitting.length ? fitting[fitting.length - 1] : coder[0]).name;
+}
+
+function describeHardware(hardware) {
+  const lines = [
+    `Chip: ${hardware.chip}`,
+    `Memory: ${hardware.totalMemGiB.toFixed(1)} GiB total${
+      hardware.isAppleSilicon ? " (unified)" : hardware.gpuVramGiB ? ` · GPU ${hardware.gpuVramGiB.toFixed(1)} GiB VRAM` : ""
+    }`,
+    `Model memory budget: ~${hardware.budgetGiB.toFixed(1)} GiB`,
+  ];
+  return lines;
+}
 const MODEL_CONNECTION_MODES = [
   "local-runtime",
   "remote-api",
@@ -1816,7 +1888,11 @@ async function runInteractiveCommand(command, args, options = {}) {
     const child = spawn(command, args, {
       cwd: options.cwd || process.cwd(),
       env: options.env || process.env,
-      stdio: "inherit",
+      // Default fully interactive. Callers that do not need to read stdin (e.g.
+      // `ollama pull`, which only streams progress) pass stdin: "ignore" so the
+      // child never grabs the TTY and the parent readline stays responsive
+      // (otherwise the next prompt swallows an Enter keypress to wake up).
+      stdio: [options.stdin || "inherit", "inherit", "inherit"],
     });
 
     child.once("error", reject);
@@ -1890,7 +1966,9 @@ async function startOllamaServer(baseUrl) {
 
 async function pullOllamaModel(modelName) {
   console.log(`Pulling Ollama model: ${modelName}`);
-  await runInteractiveCommand("ollama", ["pull", modelName]);
+  // stdin: "ignore" — the pull only streams progress; keeping the TTY with the
+  // parent means the next prompt appears immediately (no stray Enter needed).
+  await runInteractiveCommand("ollama", ["pull", modelName], { stdin: "ignore" });
 }
 
 async function checkOllamaServer(baseUrl, timeoutMs) {
@@ -2490,10 +2568,25 @@ async function promptRemoteApiModelConfig(rl, existingModelConfig = null) {
 }
 
 async function promptOllamaModelConfig(rl, existingModelConfig = null) {
+  const hardware = detectHardware();
+  const recommendedModel = recommendedOllamaModel(hardware);
+
   term.summaryBox("Local model runtime: Ollama", [
-    "RepoOperator will detect the Ollama command, check the local server, and list available models.",
-    `Recommended coding model: ${OLLAMA_RECOMMENDED_MODEL}`,
+    "RepoOperator detected this machine and will recommend models that fit.",
+    ...describeHardware(hardware),
+    `Recommended coding model: ${recommendedModel}`,
   ]);
+
+  term.table(
+    ["Model", "Params", "~Memory", "Fits", "Notes"],
+    recommendOllamaModels(hardware).map((model) => [
+      model.name === recommendedModel ? `★ ${model.name}` : model.name,
+      model.params,
+      `${model.approxGiB} GiB`,
+      model.fits ? "yes" : "needs more",
+      model.note,
+    ]),
+  );
 
   const commandInstalled = await term.spinner("Check ollama command", () => commandExists("ollama"));
   if (!commandInstalled) {
@@ -2510,6 +2603,7 @@ async function promptOllamaModelConfig(rl, existingModelConfig = null) {
     rl,
     baseUrl,
     listedModels.length ? listedModels : serverState.models || [],
+    recommendedModel,
   );
 
   return {
@@ -2746,22 +2840,22 @@ async function ensureOllamaServerReady(rl, baseUrl) {
   return startedState;
 }
 
-async function chooseOllamaModel(rl, baseUrl, initialModels) {
+async function chooseOllamaModel(rl, baseUrl, initialModels, recommendedModel = OLLAMA_RECOMMENDED_MODEL) {
   let models = initialModels;
 
   if (models.length === 0) {
     term.summaryBox("No local Ollama models detected", [
-      `Recommended model: ${OLLAMA_RECOMMENDED_MODEL}`,
+      `Recommended model for this machine: ${recommendedModel}`,
       "RepoOperator can pull it now, or you can enter another model name.",
     ]);
     const pullNow = await promptYesNo(
       rl,
-      `Pull the recommended model now (${OLLAMA_RECOMMENDED_MODEL})?`,
+      `Pull the recommended model now (${recommendedModel})?`,
       true,
     );
 
     if (pullNow) {
-      await pullOllamaModel(OLLAMA_RECOMMENDED_MODEL);
+      await pullOllamaModel(recommendedModel);
       const refreshed = await term.spinner("Refresh Ollama model list", () =>
         checkOllamaServer(baseUrl, DEFAULT_OLLAMA_TIMEOUT_MS),
       );
@@ -2771,7 +2865,7 @@ async function chooseOllamaModel(rl, baseUrl, initialModels) {
 
   if (models.length === 0) {
     term.line("warning", "No local models detected", "Enter a model name manually.");
-    return promptWithDefault(rl, "Model name", OLLAMA_RECOMMENDED_MODEL);
+    return promptWithDefault(rl, "Model name", recommendedModel);
   }
 
   term.summaryBox("Detected local Ollama models", [
@@ -2781,7 +2875,7 @@ async function chooseOllamaModel(rl, baseUrl, initialModels) {
     ["Choice", "Model"],
     [
       ...models.map((modelName, index) => [String(index + 1), modelName]),
-      [String(models.length + 1), `Pull recommended model (${OLLAMA_RECOMMENDED_MODEL})`],
+      [String(models.length + 1), `Pull recommended model (${recommendedModel})`],
       [String(models.length + 2), "Enter a model name manually"],
     ],
   );
@@ -2794,11 +2888,11 @@ async function chooseOllamaModel(rl, baseUrl, initialModels) {
       return models[choice - 1];
     }
     if (choice === models.length + 1) {
-      await pullOllamaModel(OLLAMA_RECOMMENDED_MODEL);
-      return OLLAMA_RECOMMENDED_MODEL;
+      await pullOllamaModel(recommendedModel);
+      return recommendedModel;
     }
     if (choice === models.length + 2) {
-      return promptWithDefault(rl, "Model name", OLLAMA_RECOMMENDED_MODEL);
+      return promptWithDefault(rl, "Model name", recommendedModel);
     }
     console.log(`Please choose a number from 1 to ${models.length + 2}.`);
   }
@@ -3651,4 +3745,9 @@ function printHelp() {
 
 module.exports = {
   runCli,
+  detectHardware,
+  recommendOllamaModels,
+  recommendedOllamaModel,
+  describeHardware,
+  OLLAMA_MODEL_CATALOG,
 };
