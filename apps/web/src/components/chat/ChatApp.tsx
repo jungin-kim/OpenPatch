@@ -227,6 +227,40 @@ export function ChatApp() {
     // Clear transient stream state only after the run is fully finalized.
     setProgressSteps([]);
     setStreamedAnswer("");
+    // Name the chat from the completed work (Codex / Claude Code style), once.
+    window.setTimeout(() => void maybeGenerateThreadTitle(threadId), 0);
+  }
+
+  function setThreadTitle(threadId: string, title: string) {
+    const existing = threadsRef.current.find((thread) => thread.id === threadId);
+    if (!existing) return;
+    const updated: ChatThread = { ...existing, title, updatedAt: new Date() };
+    threadsRef.current = threadsRef.current.map((thread) => (thread.id === threadId ? updated : thread));
+    setThreads((prev) => prev.map((thread) => (thread.id === threadId ? updated : thread)));
+    void persistThread(updated);
+  }
+
+  async function maybeGenerateThreadTitle(threadId: string) {
+    const thread = threadsRef.current.find((item) => item.id === threadId);
+    if (!thread) return;
+    const repoDefault = buildThreadTitle(thread.repoResult);
+    const current = (thread.title || "").trim();
+    if (current && current !== repoDefault && current !== "New chat") return; // already named
+    const firstUser = thread.messages.find((m) => m.role === "user" && m.content.trim());
+    if (!firstUser) return;
+    const lastAssistant = [...thread.messages].reverse().find((m) => m.role === "assistant" && (m.content || "").trim());
+    try {
+      const res = await fetch("/api/worker/thread/title", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task: firstUser.content, answer: lastAssistant?.content || "" }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { title?: string };
+      if (data.title && data.title.trim()) setThreadTitle(threadId, data.title.trim());
+    } catch {
+      /* leave the heuristic title in place */
+    }
   }
 
   function activeRunStorageKey(threadId: string) {

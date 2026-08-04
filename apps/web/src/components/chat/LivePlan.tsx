@@ -68,9 +68,9 @@ export function LivePlan({ items }: { items: LivePlanItem[] }) {
             >
               <span
                 aria-hidden
-                style={{ color: STATUS_COLOR[item.status] || "currentColor", width: 14, flexShrink: 0 }}
+                style={{ color: STATUS_COLOR[item.status] || "currentColor", width: 14, flexShrink: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
               >
-                {STATUS_ICON[item.status] || STATUS_ICON.pending}
+                {running ? <span className="live-plan-spinner" /> : STATUS_ICON[item.status] || STATUS_ICON.pending}
               </span>
               <span
                 style={{

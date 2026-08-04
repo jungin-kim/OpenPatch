@@ -61,6 +61,45 @@ def list_threads() -> ThreadListResponse:
     return ThreadListResponse(threads=threads)
 
 
+def generate_thread_title(task: str, answer: str = "") -> str:
+    """Generate a concise chat title from the work (Codex / Claude Code style).
+
+    Returns a short title, or "" on any failure so the caller can fall back to a
+    heuristic. Uses the configured model via a single short completion.
+    """
+
+    task = (task or "").strip()
+    if not task:
+        return ""
+    from repooperator_worker.services.model_client import (
+        ModelGenerationRequest,
+        build_model_client,
+        split_visible_reasoning,
+    )
+
+    prompt = ModelGenerationRequest(
+        system_prompt=(
+            "You name chat sessions. Given the user's request (and optionally the assistant's answer), "
+            "return a concise title of 3 to 6 words that captures the task. Use the same language as the "
+            "request. No surrounding quotes, no trailing punctuation, no prefix like 'Title:'. "
+            "Return ONLY the title text."
+        ),
+        user_prompt=json.dumps({"request": task[:2000], "answer": (answer or "")[:800]}, ensure_ascii=False),
+    )
+    try:
+        raw = build_model_client().generate_text(prompt)
+    except Exception:
+        return ""
+    _reasoning, visible = split_visible_reasoning(raw or "")
+    title = (visible or raw or "").strip()
+    # Take the first non-empty line and strip common wrappers.
+    for line in title.splitlines():
+        line = line.strip().strip("\"'").removeprefix("Title:").removeprefix("제목:").strip()
+        if line:
+            return line[:60]
+    return ""
+
+
 def upsert_thread(request: ThreadUpsertRequest) -> ThreadSummary:
     thread = ThreadSummary(**request.model_dump())
     path = _thread_path(thread.id)
