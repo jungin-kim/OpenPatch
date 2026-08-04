@@ -1,11 +1,24 @@
 # RepoOperator
 
-[![CI](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/ci.yml?branch=main&label=CI)](https://github.com/jungin-kim/RepoOperator/actions)
-[![Web E2E](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/web-e2e.yml?branch=main&label=Web%20E2E)](https://github.com/jungin-kim/RepoOperator/actions)
-[![npm](https://img.shields.io/npm/v/repooperator?label=npm)](https://www.npmjs.com/package/repooperator)
-[![License](https://img.shields.io/github/license/jungin-kim/RepoOperator)](LICENSE)
-[![GitHub repo](https://img.shields.io/badge/GitHub-RepoOperator-181717?logo=github)](https://github.com/jungin-kim/RepoOperator)
-[![Issues](https://img.shields.io/github/issues/jungin-kim/RepoOperator)](https://github.com/jungin-kim/RepoOperator/issues)
+<!-- Build & release -->
+[![CI](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/jungin-kim/RepoOperator/actions/workflows/ci.yml)
+[![Web E2E](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/web-e2e.yml?branch=main&style=flat-square&logo=playwright&logoColor=white&label=Web%20E2E)](https://github.com/jungin-kim/RepoOperator/actions/workflows/web-e2e.yml)
+[![npm version](https://img.shields.io/npm/v/repooperator?style=flat-square&logo=npm&logoColor=white&color=CB3837&label=npm)](https://www.npmjs.com/package/repooperator)
+[![npm downloads](https://img.shields.io/npm/dm/repooperator?style=flat-square&logo=npm&logoColor=white&color=CB3837&label=downloads)](https://www.npmjs.com/package/repooperator)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+
+<!-- Stack -->
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](apps/local-worker/pyproject.toml)
+[![FastAPI](https://img.shields.io/badge/FastAPI-worker-009688?style=flat-square&logo=fastapi&logoColor=white)](apps/local-worker)
+[![Node 20+](https://img.shields.io/badge/Node-20%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](packages/cli/package.json)
+[![Next.js 15](https://img.shields.io/badge/Next.js-15-000000?style=flat-square&logo=nextdotjs&logoColor=white)](apps/web)
+
+<!-- Capabilities & community -->
+[![Autonomous agent](https://img.shields.io/badge/agent-LangGraph%20%C2%B7%20tool--calling-1C3C3C?style=flat-square)](docs/architecture.md)
+[![Plugins: MCP](https://img.shields.io/badge/plugins-MCP-6E56CF?style=flat-square&logo=modelcontextprotocol&logoColor=white)](README.md#plugins-mcp)
+[![Local-first](https://img.shields.io/badge/local--first-privacy-0F9D58?style=flat-square&logo=gnuprivacyguard&logoColor=white)](docs/security.md)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square&logo=github&logoColor=white)](CONTRIBUTING.md)
+[![GitHub stars](https://img.shields.io/github/stars/jungin-kim/RepoOperator?style=flat-square&logo=github&logoColor=white&color=FFD43B)](https://github.com/jungin-kim/RepoOperator/stargazers)
 
 ![RepoOperator CLI Screenshot](/repooperator-screenshot.png)
 
