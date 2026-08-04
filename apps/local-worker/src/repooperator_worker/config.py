@@ -71,6 +71,7 @@ class Settings:
     permission_mode: str
     write_mode: str
     composio_api_key: str | None
+    agentic_tool_calling: bool
 
     def get_provider_settings(self, provider: str) -> ProviderSettings:
         normalized = provider.strip().lower()
@@ -150,6 +151,7 @@ def get_settings() -> Settings:
         permission_mode=_resolve_permission_mode(runtime_config),
         write_mode=_resolve_write_mode(runtime_config),
         composio_api_key=_normalize_optional_value(os.getenv("REPOOPERATOR_COMPOSIO_API_KEY")),
+        agentic_tool_calling=_resolve_agentic_tool_calling(runtime_config),
     )
 
 
@@ -280,6 +282,24 @@ def _resolve_configured_model_connection_mode(runtime_config: dict) -> str | Non
     if provider:
         return "remote-api"
     return None
+
+
+def _resolve_agentic_tool_calling(runtime_config: dict) -> bool:
+    """Whether the model-driven native tool-calling loop is the primary planner.
+
+    Enabled via the ``REPOOPERATOR_AGENTIC_TOOL_CALLING`` env var or the config
+    ``model.toolCalling`` boolean. Defaults to False so the deterministic planner
+    stays authoritative unless a tool-calling-capable model was set up (onboarding
+    turns this on for new installs).
+    """
+
+    env_value = os.getenv("REPOOPERATOR_AGENTIC_TOOL_CALLING")
+    if env_value is not None:
+        return env_value.strip().lower() in {"1", "true", "yes", "on"}
+    model_config = runtime_config.get("model")
+    if isinstance(model_config, dict) and "toolCalling" in model_config:
+        return bool(model_config.get("toolCalling"))
+    return False
 
 
 def _resolve_configured_model_provider(runtime_config: dict) -> str | None:

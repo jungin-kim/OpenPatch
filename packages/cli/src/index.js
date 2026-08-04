@@ -273,7 +273,9 @@ async function runOnboard() {
         installed: webDetection.installed,
         detectedPath: webDetection.detectedPath,
       },
-      model: modelConfig,
+      model: modelConfig
+        ? { toolCalling: true, ...modelConfig }
+        : modelConfig,
       gitProvider: repositoryConfig.gitProvider,
       repositorySources: repositoryConfig.repositorySources,
       localRepoBaseDir,

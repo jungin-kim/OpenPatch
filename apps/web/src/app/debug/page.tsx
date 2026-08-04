@@ -31,7 +31,15 @@ type RuntimeDebug = {
     configured_sources?: Array<{ provider?: string | null; baseUrl?: string | null; tokenConfigured?: boolean; owner?: string }>;
     effective_sources?: Array<{ provider?: string | null; baseUrl?: string | null; tokenConfigured?: boolean; owner?: string }>;
   };
-  agent?: { orchestration_mode?: string };
+  agent?: {
+    orchestration_mode?: string;
+    planner?: string;
+    planner_label?: string;
+    tool_calling_enabled?: boolean;
+    tool_calling_active?: boolean;
+    model_supports_tool_calls?: boolean;
+    model_endpoint_configured?: boolean;
+  };
   active_runs?: Array<Record<string, unknown>>;
   recent_runs?: Array<Record<string, unknown>>;
 };
@@ -283,6 +291,11 @@ function Dashboard({ runtime }: { runtime: RuntimeDebug | null }) {
   );
 }
 
+function formatBool(value?: boolean): string {
+  if (value === undefined) return "-";
+  return value ? "Yes" : "No";
+}
+
 function formatSource(source: { provider?: string | null; baseUrl?: string | null; tokenConfigured?: boolean; owner?: string }): string {
   const bits = [source.provider || "unknown"];
   if (source.baseUrl) bits.push(source.baseUrl);
@@ -295,6 +308,11 @@ function Agents({ runtime }: { runtime: RuntimeDebug | null }) {
   return (
     <Card title="Agent Orchestration">
       <Row label="Mode" value={runtime?.agent?.orchestration_mode ?? "LangGraph"} />
+      <Row label="Planner" value={runtime?.agent?.planner_label ?? "-"} />
+      <Row label="Tool calling enabled" value={formatBool(runtime?.agent?.tool_calling_enabled)} />
+      <Row label="Tool calling active" value={formatBool(runtime?.agent?.tool_calling_active)} />
+      <Row label="Model supports tool calls" value={formatBool(runtime?.agent?.model_supports_tool_calls)} />
+      <Row label="Model endpoint configured" value={formatBool(runtime?.agent?.model_endpoint_configured)} />
       <Row label="Write router" value="LangGraph intent and proposal flow" />
     </Card>
   );

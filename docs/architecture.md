@@ -32,6 +32,29 @@ Request understanding is not an authoritative workflow router. It may provide
 weak tool hints, but graph routing and planner decisions must stay grounded in
 safe primitive actions, gathered evidence, and validator results.
 
+## Decision Core: model-driven vs. deterministic
+
+RepoOperator supports two planners behind one decision seam
+(`choose_graph_next_action` in `graph_routes.py`):
+
+- **Model-driven agentic loop** (`agent_core/agentic_loop.py`): when native
+  tool calling is enabled (`model.toolCalling`/`REPOOPERATOR_AGENTIC_TOOL_CALLING`
+  with a tool-calling-capable model), the model sees the real tool schemas plus
+  the running think -> act -> observe transcript and emits the next tool call.
+  This is the primary planner and is what makes RepoOperator behave like an
+  autonomous agent rather than a scripted pipeline.
+- **Deterministic choosers**: a priority chain of rule-based proposers
+  (explicit targets, symbols, policy evidence, single-step model proposal,
+  commands, search candidates, edit, project summary) runs as a safety fallback
+  whenever the model is unavailable, declines, or proposes a repeat/ineffective
+  action.
+
+Both planners produce the same `AgentAction` shape, so execution, permission
+gating, secret redaction, and budgets are enforced identically by the tool
+orchestrator regardless of which planner chose the action. Native tool calling
+is provided by `services/model_client.py` (OpenAI-compatible + native Anthropic)
+and `services/model_tools.py` (schema conversion and response parsing).
+
 ## Graph Support Layout
 
 Graph helper behavior is split by responsibility:
@@ -59,6 +82,33 @@ The chat UI uses these current modules for agent activity and rehydration:
 Completed and active runs are reconstructed from persisted run events before
 falling back to final-result activity archives. Debug and secondary events stay
 persisted even when the primary transcript hides them.
+
+## Multi-agent supervisor
+
+Broad, repository-wide requests fan out through the supervisor subgraph. When
+native tool calling is enabled, each work unit runs a real model-backed subagent
+(`agent_core/subagent.py`): a bounded think -> act -> observe loop scoped to a
+role and file group, using only read-only evidence tools through the shared
+ToolOrchestrator, then synthesizing a structured report. When tool calling is
+off, the supervisor falls back to its deterministic worker behavior. Mutation,
+commands, git, and network stay with the parent graph and its approval gates —
+subagents never escalate privileges.
+
+## Plugins via MCP
+
+External tools are provided through the Model Context Protocol. Servers are
+declared in `~/.repooperator/mcp.json` (or a repo `.repooperator/mcp.json`) and
+surfaced as `mcp_<server>_<tool>` tools in the registry. `services/mcp_client.py`
+implements a dependency-free MCP client:
+
+- **stdio**: spawns the server command and exchanges newline-delimited JSON-RPC
+  2.0 messages (initialize handshake, `tools/list`, `tools/call`), reading
+  responses on a background thread so timeouts are reliable.
+- **http/sse**: POSTs JSON-RPC and accepts a JSON body or SSE `data:` frame.
+
+Servers are connected on demand per tool call. MCP tool execution stays behind
+the same approval gate as any networked/mutating tool: `check_permission`
+returns `ask`, and only after approval does the adapter connect and invoke.
 
 ## Safety Boundaries
 

@@ -58,12 +58,34 @@ def detect_model_profile(
         context_window=context_window,
         max_output_tokens=max_output_tokens,
         supports_streaming=bool(metadata.get("supports_streaming", True)),
-        supports_tool_calls=bool(metadata.get("supports_tool_calls", False)),
-        supports_json_schema=bool(metadata.get("supports_json_schema", False)),
+        supports_tool_calls=bool(metadata.get("supports_tool_calls", _default_supports_tool_calls(selected_provider, selected_model))),
+        supports_json_schema=bool(metadata.get("supports_json_schema", _default_supports_tool_calls(selected_provider, selected_model))),
         supports_reasoning_signal=bool(metadata.get("supports_" + "reasoning" + "_delta", False)),
         tokenizer_hint=tokenizer_hint,
         compression_strategy=strategy,
     )
+
+
+# Providers and model families with native tool/function calling support.
+_TOOL_CALLING_PROVIDERS = {"openai", "openai-compatible", "anthropic", "claude", "ollama", "vllm", "azure-openai"}
+_TOOL_CALLING_MODEL_HINTS = (
+    "gpt-4", "gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4",
+    "claude", "llama3", "llama-3", "qwen", "mistral", "mixtral",
+    "command-r", "gemini", "deepseek", "firefunction", "hermes",
+)
+
+
+def _default_supports_tool_calls(provider: str, model_name: str) -> bool:
+    """Best-effort default: assume tool calling unless the model looks legacy.
+
+    Modern OpenAI, Anthropic, and local-runtime (Ollama/vLLM) models all expose
+    native tool calling. This can always be overridden via provider metadata.
+    """
+
+    if (provider or "").strip().lower() in _TOOL_CALLING_PROVIDERS:
+        return True
+    lowered = (model_name or "").lower()
+    return any(hint in lowered for hint in _TOOL_CALLING_MODEL_HINTS)
 
 
 def _known_profile_for(model_name: str) -> dict[str, Any]:

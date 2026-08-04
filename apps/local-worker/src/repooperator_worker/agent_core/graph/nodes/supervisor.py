@@ -159,6 +159,9 @@ def _worker_tasks_from_groups(groups: dict[str, list[str]], *, roles: list[str])
     return tasks[:12]
 
 def _run_worker_task(task: dict[str, Any], *, state: RepoOperatorGraphState) -> dict[str, Any]:
+    subagent_report = _run_worker_subagent(task, state=state)
+    if subagent_report is not None:
+        return subagent_report
     role = str(task.get("role") or task.get("assigned_worker_role") or "AnalysisAgent")
     if role in {"AnalysisAgent", "CodeAnalysisAgent"}:
         return _run_analysis_worker_task(task, state=state)
@@ -211,6 +214,21 @@ def _run_worker_task(task: dict[str, Any], *, state: RepoOperatorGraphState) -> 
     if role == "TestAgent":
         return {"worker": role, "work_unit_id": task.get("id") or task.get("task_id"), "task_id": task.get("task_id"), "role": role, "files": files, "files_analyzed": [], "findings": ["Tests or safe validation commands may be needed after a proposal."], "summary": "Tests or safe validation commands may be needed after a proposal.", "status": "completed"}
     return {"worker": role, "work_unit_id": task.get("id") or task.get("task_id"), "task_id": task.get("task_id"), "role": role, "files": files, "files_analyzed": [], "findings": ["Worker completed bounded scoped analysis."], "summary": "Worker completed bounded scoped analysis.", "status": "completed"}
+
+def _run_worker_subagent(task: dict[str, Any], *, state: RepoOperatorGraphState) -> dict[str, Any] | None:
+    """Run a real model-backed subagent when tool calling is enabled."""
+
+    try:
+        from repooperator_worker.agent_core.subagent import run_worker_subagent
+
+        return run_worker_subagent(
+            task,
+            request=_request(state),
+            run_id=str(state.get("run_id") or "run_controller"),
+        )
+    except Exception:
+        return None
+
 
 def _run_analysis_worker_task(task: dict[str, Any], *, state: RepoOperatorGraphState | None = None) -> dict[str, Any]:
     files = [str(item) for item in task.get("input_files") or task.get("files") or []]

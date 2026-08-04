@@ -1,11 +1,24 @@
 # RepoOperator
 
-[![CI](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/ci.yml?branch=main&label=CI)](https://github.com/jungin-kim/RepoOperator/actions)
-[![Web E2E](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/web-e2e.yml?branch=main&label=Web%20E2E)](https://github.com/jungin-kim/RepoOperator/actions)
-[![npm](https://img.shields.io/npm/v/repooperator?label=npm)](https://www.npmjs.com/package/repooperator)
-[![License](https://img.shields.io/github/license/jungin-kim/RepoOperator)](LICENSE)
-[![GitHub repo](https://img.shields.io/badge/GitHub-RepoOperator-181717?logo=github)](https://github.com/jungin-kim/RepoOperator)
-[![Issues](https://img.shields.io/github/issues/jungin-kim/RepoOperator)](https://github.com/jungin-kim/RepoOperator/issues)
+<!-- Build & release -->
+[![CI](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/jungin-kim/RepoOperator/actions/workflows/ci.yml)
+[![Web E2E](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/web-e2e.yml?branch=main&style=flat-square&logo=playwright&logoColor=white&label=Web%20E2E)](https://github.com/jungin-kim/RepoOperator/actions/workflows/web-e2e.yml)
+[![npm version](https://img.shields.io/npm/v/repooperator?style=flat-square&logo=npm&logoColor=white&color=CB3837&label=npm)](https://www.npmjs.com/package/repooperator)
+[![npm downloads](https://img.shields.io/npm/dm/repooperator?style=flat-square&logo=npm&logoColor=white&color=CB3837&label=downloads)](https://www.npmjs.com/package/repooperator)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+
+<!-- Stack -->
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](apps/local-worker/pyproject.toml)
+[![FastAPI](https://img.shields.io/badge/FastAPI-worker-009688?style=flat-square&logo=fastapi&logoColor=white)](apps/local-worker)
+[![Node 20+](https://img.shields.io/badge/Node-20%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](packages/cli/package.json)
+[![Next.js 15](https://img.shields.io/badge/Next.js-15-000000?style=flat-square&logo=nextdotjs&logoColor=white)](apps/web)
+
+<!-- Capabilities & community -->
+[![Autonomous agent](https://img.shields.io/badge/agent-LangGraph%20%C2%B7%20tool--calling-1C3C3C?style=flat-square)](docs/architecture.md)
+[![Plugins: MCP](https://img.shields.io/badge/plugins-MCP-6E56CF?style=flat-square&logo=modelcontextprotocol&logoColor=white)](README.md#plugins-mcp)
+[![Local-first](https://img.shields.io/badge/local--first-privacy-0F9D58?style=flat-square&logo=gnuprivacyguard&logoColor=white)](docs/security.md)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square&logo=github&logoColor=white)](CONTRIBUTING.md)
+[![GitHub stars](https://img.shields.io/github/stars/jungin-kim/RepoOperator?style=flat-square&logo=github&logoColor=white&color=FFD43B)](https://github.com/jungin-kim/RepoOperator/stargazers)
 
 ![RepoOperator CLI Screenshot](/repooperator-screenshot.png)
 
@@ -25,6 +38,9 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 
 ## Features
 
+- Autonomous agent mode: the model drives a native tool-calling think → act → observe loop (with a deterministic planner as a safety fallback)
+- MCP plugin support: connect external tools over the Model Context Protocol (stdio and HTTP/SSE)
+- Multi-agent supervisor that fans broad requests out to scoped, model-backed subagents
 - One-command local product startup with `repooperator up`
 - Guided onboarding for repository source and model connection setup
 - Local worker that performs repository operations on the developer machine
@@ -285,6 +301,53 @@ http://127.0.0.1:8001/v1
 ```
 
 Only expose unauthenticated vLLM endpoints on trusted local or private networks.
+
+## Autonomous Agent Mode
+
+RepoOperator can run its decision core two ways:
+
+| Planner | Behavior |
+|---|---|
+| Autonomous (native tool calling) | The model sees the real tool schemas and the running think → act → observe transcript and chooses each tool call itself. This is what makes RepoOperator behave like a full agent. |
+| Guided (deterministic) | A priority chain of rule-based proposers picks safe primitive actions. Used as a fallback when a tool-calling model is not configured, or when the model declines. |
+
+Both planners produce the same action shape, so execution, permission gating,
+secret redaction, and budgets are enforced identically regardless of which
+planner chose the action.
+
+Autonomous mode is enabled when a tool-calling-capable model is configured.
+`repooperator onboard` turns it on for new installs (`model.toolCalling: true`).
+You can force it with an environment variable:
+
+```bash
+REPOOPERATOR_AGENTIC_TOOL_CALLING=1 repooperator up
+```
+
+Native tool calling is supported for OpenAI-compatible providers (OpenAI,
+Ollama, vLLM) and for Anthropic's native Messages API. The active planner is
+shown on the Debug page under **Agents**.
+
+## Plugins (MCP)
+
+RepoOperator loads external tools through the Model Context Protocol. Declare
+servers in `~/.repooperator/mcp.json` (or a repo `.repooperator/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+      "enabled": true
+    }
+  }
+}
+```
+
+MCP tools appear as `mcp_<server>_<tool>` and stay behind the same approval gate
+as any networked or mutating tool. Both `stdio` and `http`/`sse` transports are
+supported. No extra Python dependency is required.
 
 ## Web App
 

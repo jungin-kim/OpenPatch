@@ -70,12 +70,30 @@ class MCPServerSpec:
         )
 
 
-class MCPToolAdapter(BaseTool):
-    """Metadata-backed MCP tool adapter.
+# Agent-meta keys injected by agent_action_to_tool_payload that are not part of
+# an MCP tool's own input schema and must be stripped before forwarding.
+_AGENT_META_KEYS = frozenset(
+    {
+        "action_id",
+        "reason_summary",
+        "target_files",
+        "target_symbols",
+        "command",
+        "expected_output",
+        "safety_requirements",
+        "requires_approval",
+        "source",
+        "visible_work_note",
+    }
+)
 
-    This foundation does not start MCP servers or execute external tool code.
-    The adapter exists so execution attempts still pass through ToolOrchestrator
-    and permission policy before any future connector is attached.
+
+class MCPToolAdapter(BaseTool):
+    """MCP tool adapter that executes against a configured MCP server.
+
+    Execution still flows through ToolOrchestrator and permission policy first
+    (``check_permission`` returns ``ask``); only after approval does ``call``
+    connect to the server via the MCP client and invoke the tool.
     """
 
     def __init__(self, *, server: MCPServerSpec, tool_metadata: dict[str, Any]) -> None:
@@ -131,12 +149,39 @@ class MCPToolAdapter(BaseTool):
         )
 
     def call(self, payload: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
-        del payload, context
+        del context
+        from repooperator_worker.services.mcp_client import MCPClientError, call_mcp_tool
+
+        tool_name = str(self.tool_metadata.get("name") or self.tool_metadata.get("id") or "")
+        if not tool_name:
+            return ToolResult(
+                tool_name=self.spec.name,
+                status="failed",
+                observation="MCP tool metadata is missing a tool name.",
+                payload={"server": self.server.model_hint(), "executed": False},
+            )
+        arguments = _mcp_arguments_from_payload(payload)
+        try:
+            result = call_mcp_tool(self.server, tool_name, arguments)
+        except MCPClientError as exc:
+            return ToolResult(
+                tool_name=self.spec.name,
+                status="failed",
+                observation=f"MCP tool execution failed: {exc}",
+                payload={"server": self.server.model_hint(), "tool": tool_name, "executed": False, "errors": [str(exc)]},
+            )
         return ToolResult(
             tool_name=self.spec.name,
-            status="failed",
-            observation="MCP execution is not implemented in this foundation; only metadata is loaded.",
-            payload={"server": self.server.model_hint(), "tool_metadata": self.tool_metadata, "executed": False},
+            status="failed" if result.is_error else "success",
+            observation=result.text or ("MCP tool reported an error." if result.is_error else "MCP tool completed with no textual output."),
+            payload={
+                "server": self.server.model_hint(),
+                "tool": tool_name,
+                "executed": True,
+                "is_error": result.is_error,
+                "arguments": json_safe(arguments),
+                "result": json_safe(result.raw or {}),
+            },
         )
 
 
@@ -338,6 +383,20 @@ def _normalize_tool_metadata(tool: Any, *, server_id: str) -> dict[str, Any]:
             "source": "mcp",
         }
     )
+
+
+def _mcp_arguments_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Extract MCP tool arguments from a tool payload.
+
+    ``agent_action_to_tool_payload`` mixes agent-meta fields into the payload; an
+    explicit ``arguments`` object wins, otherwise the remaining non-meta keys are
+    forwarded as the MCP tool input.
+    """
+
+    explicit = payload.get("arguments")
+    if isinstance(explicit, dict):
+        return json_safe(explicit)
+    return json_safe({key: value for key, value in payload.items() if key not in _AGENT_META_KEYS})
 
 
 def _adapter_tool_name(server_id: str, tool_name: str) -> str:
