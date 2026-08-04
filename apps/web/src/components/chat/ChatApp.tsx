@@ -19,6 +19,7 @@ import {
   listThreads,
   LocalWorkerClientError,
   openRepository,
+  proposeFileEdit,
   streamAgentTask,
   runApprovedCommand,
   saveThread,
@@ -149,6 +150,11 @@ export function ChatApp() {
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [streamedAnswer, setStreamedAnswer] = useState("");
   const [livePlan, setLivePlan] = useState<LivePlanItem[]>([]);
+  const [proposeOpen, setProposeOpen] = useState(false);
+  const [proposePath, setProposePath] = useState("");
+  const [proposeInstruction, setProposeInstruction] = useState("");
+  const [proposeBusy, setProposeBusy] = useState(false);
+  const [proposeError, setProposeError] = useState<string | null>(null);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -1452,6 +1458,61 @@ export function ChatApp() {
     );
   }
 
+  async function handleProposeSubmit() {
+    if (!repoResult || !activeThreadId) {
+      setProposeError("Open a repository first.");
+      return;
+    }
+    const path = proposePath.trim();
+    const instruction = proposeInstruction.trim();
+    if (!path || !instruction) {
+      setProposeError("Enter a file path and a description of the change.");
+      return;
+    }
+    setProposeBusy(true);
+    setProposeError(null);
+    try {
+      const payload = await proposeFileEdit({ project_path: repoResult.project_path, relative_path: path, instruction });
+      const proposal: ChangeProposal = {
+        id: `propose-${Date.now()}`,
+        runId: null,
+        proposalId: null,
+        projectPath: repoResult.project_path,
+        branch: repoResult.branch ?? null,
+        relativePath: payload.relative_path,
+        originalContent: payload.original_content,
+        proposedContent: payload.proposed_content,
+        model: payload.model,
+        status: "proposed",
+      };
+      const userMsg: ChatMessage = {
+        id: `${Date.now()}-propose-req`,
+        role: "user",
+        content: `Propose change to \`${path}\`: ${instruction}`,
+        timestamp: new Date(),
+      };
+      const propMsg: ChatMessage = {
+        id: `${Date.now()}-propose`,
+        role: "assistant",
+        content: `Proposed a change to \`${payload.relative_path}\`. Review the diff, then Apply or Reject.`,
+        timestamp: new Date(),
+        proposal,
+      };
+      setMessages((cur) => {
+        const next = [...cur, userMsg, propMsg];
+        updateThreadMessages(activeThreadId, next);
+        return next;
+      });
+      setProposeOpen(false);
+      setProposePath("");
+      setProposeInstruction("");
+    } catch (err) {
+      setProposeError(err instanceof Error ? err.message : "Failed to generate a proposal.");
+    } finally {
+      setProposeBusy(false);
+    }
+  }
+
   function handleNewChat() {
     setQuestion("");
     if (!repoResult) {
@@ -1798,6 +1859,45 @@ export function ChatApp() {
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
+    <>
+    {proposeOpen ? (
+      <div className="propose-overlay" role="dialog" aria-modal="true" aria-label="Propose a change" onClick={() => !proposeBusy && setProposeOpen(false)}>
+        <div className="propose-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="propose-modal-title">Propose a change</div>
+          <label className="propose-field">
+            <span>File path (relative to repo root)</span>
+            <input
+              className="propose-input"
+              placeholder="e.g. apps/local-worker/src/repooperator_worker/main.py"
+              value={proposePath}
+              onChange={(e) => setProposePath(e.target.value)}
+              disabled={proposeBusy}
+              autoFocus
+            />
+          </label>
+          <label className="propose-field">
+            <span>What should change?</span>
+            <textarea
+              className="propose-textarea"
+              placeholder="Describe the change to make to this file…"
+              value={proposeInstruction}
+              onChange={(e) => setProposeInstruction(e.target.value)}
+              disabled={proposeBusy}
+              rows={4}
+            />
+          </label>
+          {proposeError ? <div className="propose-error">{proposeError}</div> : null}
+          <div className="propose-actions">
+            <button type="button" className="debug-secondary-button" onClick={() => setProposeOpen(false)} disabled={proposeBusy}>
+              Cancel
+            </button>
+            <button type="button" className="composer-send-btn" onClick={() => void handleProposeSubmit()} disabled={proposeBusy}>
+              {proposeBusy ? "Generating…" : "Generate proposal"}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
     <ChatLayout
       sidebarCollapsed={sidebarCollapsed}
       sidebar={
@@ -1886,8 +1986,10 @@ export function ChatApp() {
             .filter((item) => item.threadId === activeThreadId && item.status === "queued")
             .map((item) => ({ id: item.id, text: item.text, status: item.status, error: item.error }))}
           contextSlot={repoResult ? <ContextWindow messageTokens={estimateMessageTokens(messages)} /> : null}
+          onPropose={repoResult ? () => { setProposeError(null); setProposeOpen(true); } : undefined}
         />
       }
     />
+    </>
   );
 }
