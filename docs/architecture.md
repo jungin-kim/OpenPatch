@@ -83,6 +83,22 @@ Completed and active runs are reconstructed from persisted run events before
 falling back to final-result activity archives. Debug and secondary events stay
 persisted even when the primary transcript hides them.
 
+## Plugins via MCP
+
+External tools are provided through the Model Context Protocol. Servers are
+declared in `~/.repooperator/mcp.json` (or a repo `.repooperator/mcp.json`) and
+surfaced as `mcp_<server>_<tool>` tools in the registry. `services/mcp_client.py`
+implements a dependency-free MCP client:
+
+- **stdio**: spawns the server command and exchanges newline-delimited JSON-RPC
+  2.0 messages (initialize handshake, `tools/list`, `tools/call`), reading
+  responses on a background thread so timeouts are reliable.
+- **http/sse**: POSTs JSON-RPC and accepts a JSON body or SSE `data:` frame.
+
+Servers are connected on demand per tool call. MCP tool execution stays behind
+the same approval gate as any networked/mutating tool: `check_permission`
+returns `ask`, and only after approval does the adapter connect and invoke.
+
 ## Safety Boundaries
 
 - File reads and proposal generation stay inside the active repository.
