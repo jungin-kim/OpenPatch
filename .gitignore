@@ -45,3 +45,6 @@ apps/web/playwright-report/
 packages/cli/runtime/
 packages/cli/*.tgz
 docs/implementation-status-report.md
+
+# Python editable-install artifacts
+*.egg-info/
