@@ -20,6 +20,7 @@ import {
   LocalWorkerClientError,
   openRepository,
   proposeFileEdit,
+  revealRepositoryFolder,
   streamAgentTask,
   runApprovedCommand,
   saveThread,
@@ -462,6 +463,10 @@ export function ChatApp() {
         if (isActiveRunStatus(run.status)) {
           setProgressSteps(mergeRunEventsIntoProgressSteps(events, finalResult));
           setStreamedAnswer(assistantTextFromRunEvents(events, null));
+          // Rebuild the live plan from the full event history so the plan panel
+          // survives navigating away (e.g. to the debug dashboard) and back.
+          const restoredPlan = livePlanFromEvents(events);
+          if (restoredPlan) setLivePlan(restoredPlan);
           setQuestionPending(true);
           rememberActiveRun(runId, threadId);
           return;
@@ -1033,6 +1038,15 @@ export function ChatApp() {
   }
 
   // ── Handlers ─────────────────────────────────────────────────────────────
+  async function handleRevealFolder() {
+    if (!repoResult?.project_path) return;
+    try {
+      await revealRepositoryFolder({ project_path: repoResult.project_path });
+    } catch (err) {
+      setRepoError(err instanceof Error ? err.message : "Failed to open the working folder.");
+    }
+  }
+
   async function handleOpenRepo() {
     if (!effectiveProjectPath || (branchRequired && !effectiveBranch)) {
       setRepoError(
@@ -1964,6 +1978,7 @@ export function ChatApp() {
           repositoryOpenProgress={repositoryOpenProgress}
           repoError={repoError}
           onOpenRepo={handleOpenRepo}
+          onRevealFolder={handleRevealFolder}
         />
       }
       messages={

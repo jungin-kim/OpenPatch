@@ -1,6 +1,15 @@
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
-from repooperator_worker.schemas import DirEntry, DirListRequest, DirListResponse
+from repooperator_worker.schemas import (
+    DirEntry,
+    DirListRequest,
+    DirListResponse,
+    RevealFolderRequest,
+    RevealFolderResponse,
+)
 from repooperator_worker.services.common import (
     ensure_relative_to_repo,
     resolve_project_path,
@@ -80,4 +89,50 @@ def list_directory(request: DirListRequest) -> DirListResponse:
         relative_path=relative_path,
         parent_path=parent_path,
         entries=entries,
+    )
+
+
+def reveal_in_file_manager(request: RevealFolderRequest) -> RevealFolderResponse:
+    """Open the repository's working folder in the OS file manager.
+
+    macOS -> Finder (``open``), Windows -> Explorer (``explorer``),
+    Linux -> default handler (``xdg-open``). The path is always the resolved,
+    validated repository root, never arbitrary user input.
+    """
+
+    repo_path = resolve_project_path(request.project_path)
+    target = str(repo_path)
+    platform = sys.platform
+
+    if platform == "darwin":
+        argv = ["open", target]
+    elif platform.startswith("win"):
+        argv = ["explorer", target]
+    else:
+        opener = shutil.which("xdg-open")
+        if not opener:
+            raise RuntimeError(
+                "No file manager opener found (xdg-open is not installed on this system)."
+            )
+        argv = [opener, target]
+
+    try:
+        # Windows explorer returns exit code 1 even on success, so we do not
+        # gate on returncode there; on other platforms a failure raises.
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Failed to launch file manager: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Timed out while opening the file manager.") from exc
+
+    opened = platform.startswith("win") or result.returncode == 0
+    if not opened:
+        detail = (result.stderr or "").strip() or f"exit code {result.returncode}"
+        raise RuntimeError(f"Failed to open folder: {detail}")
+
+    return RevealFolderResponse(
+        project_path=request.project_path,
+        resolved_path=target,
+        platform=platform,
+        opened=True,
     )

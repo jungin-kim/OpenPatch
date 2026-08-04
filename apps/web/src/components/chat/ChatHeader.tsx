@@ -52,6 +52,7 @@ interface ChatHeaderProps {
   repositoryOpenProgress: RepositoryOpenProgress | null;
   repoError: string | null;
   onOpenRepo: () => void;
+  onRevealFolder?: () => void;
 }
 
 const cloneStages = [
@@ -160,6 +161,7 @@ export function ChatHeader({
   repositoryOpenProgress,
   repoError,
   onOpenRepo,
+  onRevealFolder,
 }: ChatHeaderProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showPermissions, setShowPermissions] = useState(false);
@@ -383,6 +385,17 @@ export function ChatHeader({
           >
             {repoPending ? "Open selected repository" : "Open repository"}
           </button>
+
+          {onRevealFolder && openedRepository?.project_path && (
+            <button
+              className="header-icon-btn"
+              type="button"
+              onClick={onRevealFolder}
+              title={`Open the working folder in your file manager\n${openedRepository.project_path}`}
+            >
+              📂 Open folder
+            </button>
+          )}
 
           {gitProvider !== "local" && (
             <button

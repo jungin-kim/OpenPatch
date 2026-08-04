@@ -179,6 +179,13 @@ export type DirListPayload = {
   entries: DirEntryPayload[];
 };
 
+export type RevealFolderPayload = {
+  project_path: string;
+  resolved_path: string;
+  platform: string;
+  opened: boolean;
+};
+
 export type AgentRunPayload = {
   project_path: string;
   git_provider?: string | null;
@@ -784,6 +791,17 @@ export async function listRepositoryDir(input: {
     cache: "no-store",
   });
   return parseWorkerResponse<DirListPayload>(response);
+}
+
+export async function revealRepositoryFolder(input: {
+  project_path: string;
+}): Promise<RevealFolderPayload> {
+  const response = await fetch("/api/worker/fs-reveal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return parseWorkerResponse<RevealFolderPayload>(response);
 }
 
 export async function listLocalBranches(input: {

@@ -11,6 +11,8 @@ from repooperator_worker.schemas import (
     CommandRunResponse,
     DirListRequest,
     DirListResponse,
+    RevealFolderRequest,
+    RevealFolderResponse,
     FileReadRequest,
     FileReadResponse,
     FileWriteRequest,
@@ -44,7 +46,7 @@ from repooperator_worker.schemas import (
     ThreadUpsertRequest,
 )
 from repooperator_worker.services.edit_service import propose_file_edit
-from repooperator_worker.services.fs_service import list_directory
+from repooperator_worker.services.fs_service import list_directory, reveal_in_file_manager
 from repooperator_worker.services.agent_run_coordinator import (
     cancel_queued_message,
     cancel_run,
@@ -508,6 +510,16 @@ def fs_list(project_path: str, relative_path: str = "") -> DirListResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/fs/reveal", response_model=RevealFolderResponse)
+def fs_reveal(request: RevealFolderRequest) -> RevealFolderResponse:
+    try:
+        return reveal_in_file_manager(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/fs/write", response_model=FileWriteResponse)

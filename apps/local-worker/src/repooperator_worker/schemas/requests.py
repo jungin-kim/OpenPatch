@@ -208,6 +208,15 @@ class DirListRequest(BaseModel):
         return value.strip("/")
 
 
+class RevealFolderRequest(BaseModel):
+    project_path: str
+
+    @field_validator("project_path")
+    @classmethod
+    def validate_project_path(cls, value: str) -> str:
+        return _normalize_project_path(value)
+
+
 class CommandRunRequest(BaseModel):
     project_path: str
     command: str = Field(..., description="Command parsed into argv and executed through RepoOperator command policy.")

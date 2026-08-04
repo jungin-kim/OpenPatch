@@ -16,6 +16,7 @@ from repooperator_worker.schemas.requests import (
     PermissionModeRequest,
     GitPushRequest,
     RepoOpenRequest,
+    RevealFolderRequest,
     ThreadUpsertRequest,
 )
 from repooperator_worker.schemas.responses import (
@@ -43,6 +44,7 @@ from repooperator_worker.schemas.responses import (
     RecentProjectsResponse,
     RepoOpenPlanResponse,
     RepoOpenResponse,
+    RevealFolderResponse,
     ThreadListResponse,
     ThreadSummary,
 )
@@ -89,6 +91,8 @@ __all__ = [
     "RepoOpenPlanResponse",
     "RepoOpenRequest",
     "RepoOpenResponse",
+    "RevealFolderRequest",
+    "RevealFolderResponse",
     "ThreadListResponse",
     "ThreadSummary",
     "ThreadUpsertRequest",

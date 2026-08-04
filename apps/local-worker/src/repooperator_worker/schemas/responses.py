@@ -166,6 +166,13 @@ class DirListResponse(BaseModel):
     entries: list[DirEntry]
 
 
+class RevealFolderResponse(BaseModel):
+    project_path: str
+    resolved_path: str
+    platform: str
+    opened: bool
+
+
 class CommandRunResponse(BaseModel):
     project_path: str
     command: str
