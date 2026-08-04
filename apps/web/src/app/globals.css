@@ -3365,20 +3365,55 @@ select {
 .debug-filter-row label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--muted);
   font-size: 0.82rem;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.debug-filter-row label:hover {
+  border-color: var(--border-strong);
+  color: var(--foreground);
+}
+
+.debug-filter-row input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+/* Selected (checked) filter chips read as active in the theme accent. */
+.debug-filter-row label:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-raised));
 }
 
 .memory-graph-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
   gap: 12px;
+}
+
+/* On narrow widths, stack the graph above the details so the graph never
+   collapses into an illegible sliver. */
+@media (max-width: 900px) {
+  .memory-graph-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .memory-graph {
   width: 100%;
   min-height: 420px;
+  aspect-ratio: 3 / 2;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: radial-gradient(circle at center, var(--surface-strong), var(--surface));
@@ -3398,8 +3433,26 @@ select {
 
 .memory-graph-edge {
   stroke: var(--border-strong);
-  stroke-width: 1.4;
-  opacity: 0.75;
+  stroke-width: 1;
+  opacity: 0.16;
+}
+
+/* When a node is selected, fade unrelated edges and light up its own. */
+.memory-graph-edge-dim {
+  opacity: 0.05;
+}
+
+.memory-graph-edge-active {
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  opacity: 0.9;
+}
+
+.memory-graph-cluster-more {
+  fill: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.8;
 }
 
 .memory-graph-node {
