@@ -50,6 +50,8 @@ import {
   finalResultFromRunEvents,
   isActiveRunStatus,
   isTerminalRunStatus,
+  livePlanFromEvent,
+  livePlanFromEvents,
   maxEventSequence,
   mergeProgressStep,
   mergeRunEventsIntoProgressSteps,
@@ -57,6 +59,7 @@ import {
   progressStepsForCompletedRun,
   upsertAssistantMessageForRun,
   type AgentRunEvent,
+  type LivePlanItem,
 } from "./run-event-state";
 import {
   ACTIVE_REPO_IDENTITY_KEY,
@@ -144,6 +147,7 @@ export function ChatApp() {
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>([]);
   const [streamedAnswer, setStreamedAnswer] = useState("");
+  const [livePlan, setLivePlan] = useState<LivePlanItem[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -481,6 +485,8 @@ export function ChatApp() {
             finalizeRunInUi(activeRunId, finalThreadId, finalResult, completedSteps);
           } else {
             setProgressSteps((current) => mergeProgressEvents(current, events));
+            const plan = livePlanFromEvents(events);
+            if (plan) setLivePlan(plan);
           }
         } catch {
           // Keep the current visible state; SSE may still be active.
@@ -1084,6 +1090,7 @@ export function ChatApp() {
     setQuestionPending(true);
     if (activeThreadIdRef.current === runThreadId) setProgressSteps([]);
     setStreamedAnswer("");
+    setLivePlan([]);
 
     const userMessage: ChatMessage = {
       id: `${Date.now()}-user`,
@@ -1148,6 +1155,8 @@ export function ChatApp() {
             capturedProgressSteps = next;
             return next;
           });
+          const plan = livePlanFromEvent(event);
+          if (plan) setLivePlan(plan);
         } else if (event.type === "assistant_delta") {
           if (activeThreadIdRef.current === runThreadId) setStreamedAnswer((prev) => prev + event.delta);
         } else if (event.type === NONPUBLIC_MODEL_DELTA_TYPE) {
@@ -1749,6 +1758,7 @@ export function ChatApp() {
           questionPending={questionPending}
           progressSteps={progressSteps}
           streamedAnswer={streamedAnswer}
+          livePlan={livePlan}
           gitProvider={gitProvider}
           writeMode={writeMode}
           onProposalStatusChange={handleProposalStatusChange}

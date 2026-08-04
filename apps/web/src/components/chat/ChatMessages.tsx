@@ -15,6 +15,8 @@ import {
   type ProposalStatus,
 } from "./ProposalCard";
 import type { ProgressStep } from "./progress-types";
+import type { LivePlanItem } from "./run-event-state";
+import { LivePlan } from "./LivePlan";
 import { AgentActivityTranscript } from "./AgentActivityTranscript";
 import { renderableValidationResult } from "./validation-result";
 
@@ -543,6 +545,7 @@ interface ChatMessagesProps {
   questionPending: boolean;
   progressSteps?: ProgressStep[];
   streamedAnswer?: string;
+  livePlan?: LivePlanItem[];
   gitProvider: string;
   writeMode?: PermissionMode;
   onProposalStatusChange?: (id: string, status: ProposalStatus, message?: string, result?: AgentRunPayload) => void;
@@ -556,6 +559,7 @@ export function ChatMessages({
   questionPending,
   progressSteps = [],
   streamedAnswer = "",
+  livePlan = [],
   gitProvider,
   writeMode = "default",
   onProposalStatusChange,
@@ -796,6 +800,7 @@ export function ChatMessages({
           {questionPending && (
             <div className="message-group message-group-assistant">
               <span className="message-role-label">RepoOperator</span>
+              <LivePlan items={livePlan} />
               {progressSteps.length > 0 ? (
                 <>
                   <AgentActivityTranscript steps={progressSteps} done={false} />

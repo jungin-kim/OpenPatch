@@ -41,6 +41,7 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 - Autonomous agent mode: the model drives a native tool-calling think → act → observe loop (with a deterministic planner as a safety fallback)
 - MCP plugin support: connect external tools over the Model Context Protocol (stdio and HTTP/SSE)
 - Multi-agent supervisor that fans broad requests out to scoped, model-backed subagents
+- Live web UI: streamed tool activity, token-by-token answers, and a live plan/todo checklist
 - One-command local product startup with `repooperator up`
 - Guided onboarding for repository source and model connection setup
 - Local worker that performs repository operations on the developer machine

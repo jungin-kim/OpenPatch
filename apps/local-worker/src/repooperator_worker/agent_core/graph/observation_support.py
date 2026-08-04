@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from repooperator_worker.agent_core.actions import AgentAction, ActionResult
 from repooperator_worker.agent_core.events import append_activity_event
 from repooperator_worker.agent_core.state import AgentCoreState
@@ -86,6 +88,8 @@ def update_plan(state: AgentCoreState, action: AgentAction, result: ActionResult
 
 
 def emit_plan_update(state: AgentCoreState, request: AgentRunRequest, label: str) -> None:
+    plan_items = _structured_plan_items(state)
+    done = sum(1 for item in plan_items if item["status"] in {"completed", "failed"})
     append_activity_event(
         run_id=state.run_id,
         request=request,
@@ -95,8 +99,37 @@ def emit_plan_update(state: AgentCoreState, request: AgentRunRequest, label: str
         label=label,
         status="running",
         observation="; ".join(state.plan[-4:]),
-        aggregate={"plan_steps": list(state.plan), "loop_iteration": state.loop_iteration},
+        aggregate={
+            "plan_steps": list(state.plan),
+            "plan": plan_items,
+            "plan_completed": done,
+            "plan_total": len(plan_items),
+            "loop_iteration": state.loop_iteration,
+        },
     )
+
+
+def _structured_plan_items(state: AgentCoreState) -> list[dict[str, Any]]:
+    """Structured plan for a live todo checklist in the UI.
+
+    Prefers real subtasks (with per-step status); falls back to the flat
+    plan string list when no subtasks exist yet.
+    """
+
+    if state.subtasks:
+        return [
+            {
+                "id": item.id,
+                "title": item.title,
+                "goal": item.goal,
+                "status": item.status,
+            }
+            for item in state.subtasks
+        ]
+    return [
+        {"id": f"plan-{index}", "title": step, "goal": "", "status": "completed" if step.lower().startswith("completed") else "pending"}
+        for index, step in enumerate(state.plan)
+    ]
 
 
 def _safe_observation(action: AgentAction, result: ActionResult) -> str:
