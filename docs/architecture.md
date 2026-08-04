@@ -83,6 +83,17 @@ Completed and active runs are reconstructed from persisted run events before
 falling back to final-result activity archives. Debug and secondary events stay
 persisted even when the primary transcript hides them.
 
+## Multi-agent supervisor
+
+Broad, repository-wide requests fan out through the supervisor subgraph. When
+native tool calling is enabled, each work unit runs a real model-backed subagent
+(`agent_core/subagent.py`): a bounded think -> act -> observe loop scoped to a
+role and file group, using only read-only evidence tools through the shared
+ToolOrchestrator, then synthesizing a structured report. When tool calling is
+off, the supervisor falls back to its deterministic worker behavior. Mutation,
+commands, git, and network stay with the parent graph and its approval gates —
+subagents never escalate privileges.
+
 ## Plugins via MCP
 
 External tools are provided through the Model Context Protocol. Servers are
