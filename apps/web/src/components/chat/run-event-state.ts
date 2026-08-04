@@ -13,6 +13,48 @@ export type AgentRunEvent = AgentActivityEvent & {
   message?: string;
 };
 
+export type LivePlanItem = {
+  id: string;
+  title: string;
+  status: string;
+  goal?: string;
+};
+
+const PLAN_ACTIVITY_ID = "langgraph-plan";
+
+/** Extract the structured live plan from a run event, if it carries one. */
+export function livePlanFromEvent(event: AgentRunEvent): LivePlanItem[] | null {
+  const aggregate = event.aggregate as Record<string, unknown> | null | undefined;
+  if (!aggregate) return null;
+  const raw = aggregate.plan;
+  if (event.activity_id !== PLAN_ACTIVITY_ID && !Array.isArray(raw)) return null;
+  if (!Array.isArray(raw)) return null;
+  const items: LivePlanItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const title = String(record.title ?? "").trim();
+    if (!title) continue;
+    items.push({
+      id: String(record.id ?? `plan-${items.length}`),
+      title,
+      status: String(record.status ?? "pending"),
+      goal: record.goal ? String(record.goal) : undefined,
+    });
+  }
+  return items;
+}
+
+/** Return the most recent live plan across a batch of events, or null. */
+export function livePlanFromEvents(events: AgentRunEvent[]): LivePlanItem[] | null {
+  let latest: LivePlanItem[] | null = null;
+  for (const event of events) {
+    const plan = livePlanFromEvent(event);
+    if (plan) latest = plan;
+  }
+  return latest;
+}
+
 const ACTIVE_RUN_STATUSES = new Set(["pending", "running", "waiting_approval", "cancelling"]);
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "timed_out"]);
 

@@ -83,6 +83,19 @@ Completed and active runs are reconstructed from persisted run events before
 falling back to final-result activity archives. Debug and secondary events stay
 persisted even when the primary transcript hides them.
 
+### Live streaming and plan
+
+The whole run streams over SSE, not just the final answer:
+
+- Tool selection and results stream as `progress_delta` events and render live in
+  `AgentActivityTranscript.tsx`.
+- Final-answer tokens stream as `assistant_delta` events.
+- A live plan/todo checklist (`LivePlan.tsx`) is driven by the structured
+  `aggregate.plan` on the `langgraph-plan` event (emitted by `emit_plan_update`):
+  each subtask renders with a live status (pending/running/completed/failed).
+  `livePlanFromEvent` in `run-event-state.ts` extracts it on both the SSE and the
+  poll/reconnect paths.
+
 ## Multi-agent supervisor
 
 Broad, repository-wide requests fan out through the supervisor subgraph. When
