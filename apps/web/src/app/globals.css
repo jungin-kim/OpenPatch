@@ -675,7 +675,7 @@ select {
 }
 
 .chat-sidebar-collapsed .sidebar-brand-mark {
-  opacity: 0;
+  display: none;
 }
 
 .chat-sidebar-header {
@@ -690,10 +690,14 @@ select {
 
 .sidebar-collapse-toggle {
   margin-left: auto;
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   background: var(--surface);
   color: var(--muted);
   cursor: pointer;
@@ -705,17 +709,14 @@ select {
   border-color: var(--accent);
 }
 
+.chat-sidebar-collapsed .chat-sidebar-header {
+  padding: 0;
+  justify-content: center;
+}
+
 .chat-sidebar-collapsed .sidebar-collapse-toggle {
-  position: fixed;
-  top: 16px;
-  left: 14px;
-  z-index: 140;
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  background: var(--surface);
+  margin: 0 auto;
   color: var(--foreground);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.16);
 }
 
 .sidebar-brand-mark {
@@ -1395,8 +1396,9 @@ select {
 }
 
 .theme-toggle {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
   justify-content: center;
   padding: 0;
   color: var(--muted);
