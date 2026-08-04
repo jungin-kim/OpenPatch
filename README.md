@@ -394,6 +394,8 @@ repo up            # Start worker and web UI (self-heals missing runtime)
 repo down          # Stop worker and web UI
 repo doctor        # Run local diagnostics (reports runtime, worker, web, model state)
 repo status        # Show runtime status
+repo update        # Update the CLI to the latest published version
+repo version       # Show the installed version and check for updates
 repo config show   # Print redacted config
 ```
 

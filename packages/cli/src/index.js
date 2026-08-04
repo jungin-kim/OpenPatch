@@ -11,6 +11,7 @@ const term = require("./terminal");
 
 const PRODUCT_NAME = "RepoOperator";
 const CLI_COMMAND = "repooperator";
+const PACKAGE_NAME = "repooperator";
 const CONFIG_DIR = path.join(os.homedir(), ".repooperator");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 const RUN_DIR = path.join(CONFIG_DIR, "run");
@@ -198,10 +199,20 @@ async function runCli() {
     case "worker":
       await runWorkerCommand(subcommand);
       return;
+    case "update":
+    case "upgrade":
+      await runUpdate();
+      return;
+    case "--version":
+    case "-v":
+    case "version":
+      await runVersion();
+      return;
     case "--help":
     case "-h":
     case undefined:
       printHelp();
+      await maybeNotifyOutdated();
       return;
     default:
       throw new Error(`Unknown command: ${command}`);
@@ -3724,6 +3735,149 @@ function printChecks(checks) {
   );
 }
 
+function getInstalledVersion() {
+  try {
+    return require("../package.json").version;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchLatestVersion(timeoutMs = 4000) {
+  const viaHttps = await fetchLatestVersionHttps(timeoutMs);
+  if (viaHttps) return viaHttps;
+  // Fallback: npm reads the user's registry/proxy config, so it works where a
+  // direct https request may not.
+  return await fetchLatestVersionNpm();
+}
+
+function fetchLatestVersionNpm() {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn("npm", ["view", PACKAGE_NAME, "version"], { stdio: ["ignore", "pipe", "ignore"] });
+      let out = "";
+      child.stdout.on("data", (c) => (out += c.toString()));
+      child.once("error", () => resolve(null));
+      child.once("exit", () => {
+        const v = out.trim().split("\n").pop();
+        resolve(v && /^\d+\.\d+\.\d+/.test(v) ? v : null);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function fetchLatestVersionHttps(timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    const https = require("node:https");
+    let req;
+    try {
+      req = https.get(
+        {
+          host: "registry.npmjs.org",
+          path: `/${PACKAGE_NAME}/latest`,
+          headers: { Accept: "application/vnd.npm.install-v1+json" },
+        },
+        (res) => {
+          if (res.statusCode !== 200) {
+            res.resume();
+            resolve(null);
+            return;
+          }
+          let body = "";
+          res.on("data", (chunk) => (body += chunk));
+          res.on("end", () => {
+            try {
+              resolve(JSON.parse(body).version || null);
+            } catch {
+              resolve(null);
+            }
+          });
+        },
+      );
+    } catch {
+      resolve(null);
+      return;
+    }
+    req.on("error", () => resolve(null));
+    req.setTimeout(timeoutMs, () => {
+      req.destroy();
+      resolve(null);
+    });
+  });
+}
+
+function isNewerVersion(latest, current) {
+  if (!latest || !current) return false;
+  const a = String(latest).split(".").map((n) => parseInt(n, 10) || 0);
+  const b = String(current).split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) > (b[i] || 0)) return true;
+    if ((a[i] || 0) < (b[i] || 0)) return false;
+  }
+  return false;
+}
+
+async function runVersion() {
+  const current = getInstalledVersion();
+  console.log(`${PRODUCT_NAME} v${current || "unknown"}`);
+  const latest = await fetchLatestVersion();
+  if (latest && isNewerVersion(latest, current)) {
+    term.line("warning", "Update available", `v${latest} is out. Run \`${CLI_COMMAND} update\` (or \`repo update\`).`);
+  } else if (latest) {
+    term.line("success", "Up to date", `v${current} is the latest published version.`);
+  }
+}
+
+async function maybeNotifyOutdated() {
+  try {
+    const current = getInstalledVersion();
+    const latest = await fetchLatestVersion(2500);
+    if (latest && isNewerVersion(latest, current)) {
+      term.summaryBox("Update available", [
+        `A newer version is available: v${current} → v${latest}`,
+        `Update with:  ${CLI_COMMAND} update   (or:  repo update)`,
+      ]);
+    }
+  } catch {
+    /* best-effort; never block the command */
+  }
+}
+
+async function runUpdate() {
+  const current = getInstalledVersion();
+  term.heading("Update", `${PRODUCT_NAME} self-update`);
+  const latest = await term.spinner("Check latest version", () => fetchLatestVersion());
+  if (!latest) {
+    term.line(
+      "warning",
+      "Version check failed",
+      `Could not reach the npm registry. You can still update manually:\n  npm install -g ${PACKAGE_NAME}@latest`,
+    );
+  } else if (!isNewerVersion(latest, current)) {
+    term.line("success", "Already up to date", `v${current} is the latest version.`);
+    return;
+  } else {
+    term.line("info", "Update available", `v${current} → v${latest}`);
+  }
+  term.line("info", "Updating", `Running: npm install -g ${PACKAGE_NAME}@latest`);
+  try {
+    await runInteractiveCommand("npm", ["install", "-g", `${PACKAGE_NAME}@latest`], { stdin: "ignore" });
+    term.line(
+      "success",
+      "Update complete",
+      `Installed ${PACKAGE_NAME}@${latest || "latest"}. Restart any running \`${CLI_COMMAND} up\` to use the new version.`,
+    );
+  } catch (err) {
+    term.line(
+      "error",
+      "Update failed",
+      `${err instanceof Error ? err.message : String(err)}\nTry manually (may need sudo depending on your npm setup):\n  npm install -g ${PACKAGE_NAME}@latest`,
+    );
+  }
+}
+
 function printHelp() {
   console.log(term.banner());
   term.summaryBox("Usage", [
@@ -3733,6 +3887,8 @@ function printHelp() {
     [`${CLI_COMMAND} doctor`, "Run local diagnostics"],
     [`${CLI_COMMAND} status`, "Show runtime status"],
     [`${CLI_COMMAND} config show`, "Print redacted config"],
+    [`${CLI_COMMAND} update`, "Update to the latest published version"],
+    [`${CLI_COMMAND} version`, "Show version + check for updates"],
   ]);
   term.summaryBox("Worker maintenance", [
     [`${CLI_COMMAND} worker start`, "Start only the local worker"],
