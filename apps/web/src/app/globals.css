@@ -936,17 +936,23 @@ select {
   color: var(--foreground);
 }
 
+/* Rendered in a portal with inline position:fixed; keep only visuals here. */
 .sidebar-more-menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
-  z-index: 40;
+  z-index: 1000;
   min-width: 160px;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface-strong);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme="light"] .sidebar-more-menu {
+  background: #ffffff;
+}
+
+:root[data-theme="dark"] .sidebar-more-menu {
+  background: #1d241f;
 }
 
 .sidebar-more-item {

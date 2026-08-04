@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { createPortal } from "react-dom";
 import type { ProviderProjectSummary } from "@/lib/local-worker-client";
 import type { ChatThread } from "./ChatApp";
 import Link from "next/link";
@@ -22,59 +23,89 @@ interface ChatSidebarProps {
 
 type MenuItem = { label: string; danger?: boolean; onClick: () => void };
 
-/** A hover "…" trigger that opens a small actions menu (delete, etc.). */
+const MENU_WIDTH = 190;
+
+/** A hover "…" trigger that opens a small actions menu. The menu is rendered in
+ *  a portal (position: fixed) so it is always opaque and on top of other rows. */
 function MoreMenu({ items, label }: { items: MenuItem[]; label: string }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     if (!open) return;
+    const close = () => setOpen(false);
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
     };
   }, [open]);
+
+  const toggle = (e: ReactMouseEvent) => {
+    e.stopPropagation();
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      const left = Math.max(8, Math.min(r.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8));
+      setPos({ top: r.bottom + 4, left });
+    }
+    setOpen((v) => !v);
+  };
+
   return (
-    <div className={`sidebar-more${open ? " sidebar-more-open" : ""}`} ref={ref}>
+    <div className={`sidebar-more${open ? " sidebar-more-open" : ""}`}>
       <button
+        ref={btnRef}
         type="button"
         className="sidebar-more-btn"
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
+        onClick={toggle}
       >
         ⋯
       </button>
-      {open && (
-        <div className="sidebar-more-menu" role="menu">
-          {items.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              className={`sidebar-more-item${item.danger ? " sidebar-more-item-danger" : ""}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-                item.onClick();
-              }}
+      {open && pos && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={menuRef}
+              className="sidebar-more-menu"
+              role="menu"
+              style={{ position: "fixed", top: pos.top, left: pos.left, width: MENU_WIDTH }}
             >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
+              {items.map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  role="menuitem"
+                  className={`sidebar-more-item${item.danger ? " sidebar-more-item-danger" : ""}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpen(false);
+                    item.onClick();
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
