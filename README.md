@@ -283,6 +283,10 @@ RepoOperator supports two model connection modes:
 | Local self-served runtime | Ollama, vLLM | Ollama is first-class for laptop use. vLLM uses an OpenAI-compatible endpoint on this machine or a trusted LAN host. |
 | Remote model API | OpenAI-compatible, OpenAI, Anthropic, Gemini | Intended for enterprise API gateways and hosted model providers. |
 
+Onboarding detects this machine (chip, memory, and — outside Apple Silicon — GPU
+VRAM) and recommends Ollama coding models that actually fit, marking the best
+default with a ★ and flagging models that need more memory.
+
 For a local Ollama setup, onboarding uses:
 
 ```text
