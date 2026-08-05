@@ -107,6 +107,31 @@ type QueuedMessage = {
 
 const NONPUBLIC_MODEL_DELTA_TYPE = ["reasoning", "delta"].join("_");
 
+// Slash commands expand to natural-language tasks that flow through the
+// (intent-aware) agent — /help surfaces capabilities, /fetch pulls a URL, etc.
+function expandSlashCommand(text: string): string {
+  if (!text.startsWith("/")) return text;
+  const [cmd, ...rest] = text.slice(1).split(/\s+/);
+  const arg = rest.join(" ").trim();
+  switch (cmd.toLowerCase()) {
+    case "help":
+      return "What can you do? List your capabilities.";
+    case "fetch":
+    case "web":
+      return arg ? `Fetch ${arg} and summarize its contents.` : "Which URL should I fetch?";
+    case "commit":
+      return arg ? `Commit the current changes: ${arg}` : "Commit the current changes with a clear message.";
+    case "review":
+      return "Review the recent changes for bugs, risks, and improvements.";
+    case "compact":
+      return "Compact and summarize the conversation context so far to free up the context window.";
+    case "test":
+      return "Run the project's tests and report the results.";
+    default:
+      return text;
+  }
+}
+
 export function ChatApp() {
   // ── Worker / model connection state ──────────────────────────────────────
   const [connectionState, setConnectionState] = useState<ConnectionState>("checking");
@@ -1339,7 +1364,7 @@ export function ChatApp() {
   async function handleQuestionSubmit() {
     if (!question.trim() || !repoResult) return;
 
-    const taskText = question.trim();
+    const taskText = expandSlashCommand(question.trim());
     setQuestion("");
 
     if (questionPending) {

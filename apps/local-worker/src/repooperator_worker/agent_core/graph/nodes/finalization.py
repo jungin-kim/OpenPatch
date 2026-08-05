@@ -102,6 +102,15 @@ def final_repair_answer_node(state: RepoOperatorGraphState) -> dict[str, Any]:
 def final_build_response_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     request = _request(state)
     core = _core_state_from_graph(state)
+    # Meta / capability question ("what can you do?") — answer about the agent
+    # itself instead of forcing a repository summary.
+    if not core.final_response:
+        from repooperator_worker.agent_core.intent import capability_answer, is_meta_request
+
+        task_text = str(getattr(request, "task", "") or "")
+        if is_meta_request(task_text) and not getattr(core, "files_changed", None):
+            repo_name = str(getattr(request, "project_path", "") or "").rstrip("/").split("/")[-1] or None
+            core.final_response = capability_answer(repo_name)
     proposal = state.get("change_set_proposal") if isinstance(state.get("change_set_proposal"), dict) else None
     if proposal and proposal.get("changes") and proposal.get("status") in {"invalid", "repairable", "blocked"}:
         validation = proposal.get("validation") if isinstance(proposal.get("validation"), dict) else {}

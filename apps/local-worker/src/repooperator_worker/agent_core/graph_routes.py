@@ -54,6 +54,8 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
                 return recovery
 
     for chooser in (
+        _next_meta_answer_action,
+        _next_web_fetch_action,
         _next_tool_calling_action,
         _next_explicit_target_action,
         _next_symbol_action,
@@ -69,6 +71,42 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
             return action
 
     return AgentAction(type="final_answer", reason_summary="Enough evidence is available for a grounded answer.")
+
+
+def _next_meta_answer_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """Meta / capability question ("what can you do?") — answer immediately about
+    the agent instead of running the repo-analysis loop. Finalization fills the
+    text via intent.capability_answer."""
+    from repooperator_worker.agent_core.intent import is_meta_request
+
+    if getattr(state, "actions_taken", None) or getattr(state, "files_read", None):
+        return None
+    if is_meta_request(getattr(request, "task", "") or ""):
+        return AgentAction(
+            type="final_answer",
+            reason_summary="Meta/capability question — describe what the agent can do.",
+        )
+    return None
+
+
+def _next_web_fetch_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """If the task contains a URL, fetch it (once) instead of defaulting to
+    reading local repo files. Approval-gated by the fetch_url tool policy."""
+    from repooperator_worker.agent_core.intent import extract_urls
+
+    urls = extract_urls(getattr(request, "task", "") or "")
+    if not urls:
+        return None
+    for action in getattr(state, "actions_taken", []) or []:
+        if getattr(action, "type", None) == "fetch_url":
+            return None
+    url = urls[0]
+    return AgentAction(
+        type="fetch_url",
+        reason_summary=f"Fetch the URL the user asked about: {url}",
+        expected_output="Fetched page content as untrusted evidence.",
+        payload={"url": url},
+    )
 
 
 def _next_tool_calling_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:

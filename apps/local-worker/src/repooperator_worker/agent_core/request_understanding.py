@@ -132,16 +132,23 @@ def request_understanding_to_classifier_result(ru: RequestUnderstanding, request
 
 def _build_understanding(payload: dict[str, Any], request: AgentRunRequest) -> RequestUnderstanding:
     # Always extract file tokens deterministically so a malformed model response
-    # does not lose explicit file mentions.
-    deterministic_files = extract_file_tokens(request.task)
+    # does not lose explicit file mentions. @path references are treated as
+    # explicit, high-priority targets (like qwen-code / claude-code @-mentions).
+    from repooperator_worker.agent_core.intent import extract_at_file_refs, extract_urls
+
+    at_refs = extract_at_file_refs(request.task)
+    deterministic_files = _dedupe([*at_refs, *extract_file_tokens(request.task)])
     model_files = [_safe_public_text(f, limit=240).lstrip("/") for f in payload.get("mentioned_files") or [] if _safe_public_text(f, limit=240)]
-    mentioned_files = _dedupe([*model_files, *deterministic_files])
+    mentioned_files = _dedupe([*deterministic_files, *model_files])
 
     model_symbols = _safe_public_list(payload.get("mentioned_symbols"), limit=120)
     tool_hints = [
         str(t).strip() for t in payload.get("likely_needed_tools") or []
         if str(t).strip() in _ALLOWED_TOOL_HINTS
     ]
+    # A URL in the task is a strong signal to fetch it rather than read repo files.
+    if extract_urls(request.task) and "fetch_url" not in tool_hints:
+        tool_hints = ["fetch_url", *tool_hints]
     return RequestUnderstanding(
         user_goal=_safe_public_text(payload.get("user_goal") or request.task, limit=200) or request.task[:200],
         mentioned_files=mentioned_files,
