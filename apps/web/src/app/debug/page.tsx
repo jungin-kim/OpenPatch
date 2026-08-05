@@ -74,6 +74,11 @@ type ToolsDebug = {
   permissions: Record<string, string>;
 };
 
+type ToolCatalog = {
+  count: number;
+  tools: Array<{ name: string; description: string; category: string; read_only: boolean; requires_approval: boolean; side_effect_level: string }>;
+};
+
 type ContextPackDebug = {
   run_id?: string;
   timestamp?: string;
@@ -178,18 +183,20 @@ export default function DebugPage() {
   const [skills, setSkills] = useState<SkillsDebug | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationsDebug | null>(null);
   const [tools, setTools] = useState<ToolsDebug | null>(null);
+  const [toolCatalog, setToolCatalog] = useState<ToolCatalog | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function load() {
       try {
         setError(null);
-        const [runtimePayload, contextPayload, memoryPayload, skillsPayload, integrationsPayload, toolsPayload] = await Promise.all([
+        const [runtimePayload, contextPayload, memoryPayload, skillsPayload, integrationsPayload, toolsPayload, catalogPayload] = await Promise.all([
           loadJson<RuntimeDebug>("/api/worker/debug/runtime"),
           loadJson<ContextDebug>("/api/worker/debug/context"),
           loadJson<MemoryDebug>("/api/worker/debug/memory"),
           loadJson<SkillsDebug>("/api/worker/debug/skills"),
           loadJson<IntegrationsDebug>("/api/worker/debug/integrations"),
           loadJson<ToolsDebug>("/api/worker/tools"),
+          loadJson<ToolCatalog>("/api/worker/tools/catalog"),
         ]);
         setRuntime(runtimePayload);
         setContext(contextPayload);
@@ -197,6 +204,7 @@ export default function DebugPage() {
         setSkills(skillsPayload);
         setIntegrations(integrationsPayload);
         setTools(toolsPayload);
+        setToolCatalog(catalogPayload);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to load debug data.");
       }
@@ -239,7 +247,7 @@ export default function DebugPage() {
         {activeTab === "Memory" && <MemoryPanel memory={memory} />}
         {activeTab === "Skills" && <SkillsPanel skills={skills} />}
         {activeTab === "Integrations" && <IntegrationsPanel integrations={integrations} />}
-        {activeTab === "Tools" && <ToolsPanel tools={tools} />}
+        {activeTab === "Tools" && <ToolsPanel tools={tools} catalog={toolCatalog} />}
         {activeTab === "Events / Runs" && <RunsPanel runtime={runtime} />}
         {activeTab === "Settings" && <SettingsPanel runtime={runtime} />}
       </main>
@@ -654,10 +662,46 @@ function IntegrationsPanel({ integrations }: { integrations: IntegrationsDebug |
   );
 }
 
-function ToolsPanel({ tools }: { tools: ToolsDebug | null }) {
+const TOOL_CATEGORY_LABELS: Record<string, string> = {
+  read: "Read & search",
+  edit: "Edit files",
+  git: "Git & PRs",
+  command: "Run commands",
+  web: "Web research",
+  context: "Context",
+  control: "Control",
+};
+
+function ToolsPanel({ tools, catalog }: { tools: ToolsDebug | null; catalog: ToolCatalog | null }) {
+  const grouped = (catalog?.tools ?? []).reduce<Record<string, ToolCatalog["tools"]>>((acc, t) => {
+    (acc[t.category] ??= []).push(t);
+    return acc;
+  }, {});
+  const order = ["read", "edit", "git", "command", "web", "context", "control"];
+  const categories = Object.keys(grouped).sort((a, b) => order.indexOf(a) - order.indexOf(b));
   return (
     <>
-      <Card title="Local Tools">
+      <Card title={`Agent tools (built-in)${catalog ? ` — ${catalog.count}` : ""}`}>
+        {catalog ? (
+          categories.map((cat) => (
+            <div key={cat} className="debug-list-item">
+              <strong>{TOOL_CATEGORY_LABELS[cat] ?? cat} · {grouped[cat].length}</strong>
+              {grouped[cat].map((t) => (
+                <div key={t.name} style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap", margin: "2px 0" }}>
+                  <code>{t.name}</code>
+                  <span style={{ opacity: 0.6, fontSize: "0.85em" }}>
+                    {t.read_only ? "read-only" : "writes"}{t.requires_approval ? " · needs approval" : ""}
+                  </span>
+                  <span style={{ opacity: 0.75 }}>{t.description}</span>
+                </div>
+              ))}
+            </div>
+          ))
+        ) : (
+          <div className="debug-placeholder">Tool catalog is not loaded yet.</div>
+        )}
+      </Card>
+      <Card title="External CLI tools">
         {tools?.tools.map((tool) => (
           <div className="debug-list-item" key={tool.name}>
             <strong>{tool.name}</strong>

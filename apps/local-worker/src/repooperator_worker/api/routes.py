@@ -320,6 +320,44 @@ def tools_status() -> dict:
     return get_tools_status()
 
 
+@router.get("/tools/catalog")
+def tools_catalog() -> dict:
+    """The agent's built-in tool set (what the model can actually call), grouped
+    by category — read/search, edit, git, web, command, context, control."""
+    from repooperator_worker.agent_core.tools.registry import get_default_tool_registry
+
+    def _category(name: str, operation: str) -> str:
+        if name in {"create_file", "modify_file", "delete_file", "rename_file", "generate_edit", "generate_change_set", "apply_change_set", "validate_change_set"}:
+            return "edit"
+        if name in {"search_web", "fetch_url", "summarize_web_evidence"}:
+            return "web"
+        if name.startswith("git") or name in {"inspect_git_state", "github_create_pr", "gitlab_create_mr"}:
+            return "git"
+        if name in {"run_approved_command", "run_validation_command", "preview_command"}:
+            return "command"
+        if name in {"refresh_context_pack", "compact_thread_context"}:
+            return "context"
+        if name in {"final_answer", "ask_clarification"}:
+            return "control"
+        return "read"
+
+    registry = get_default_tool_registry()
+    specs = registry.specs_for_model(include_deferred=True)
+    tools = [
+        {
+            "name": s.get("name"),
+            "description": s.get("description") or s.get("prompt_summary") or "",
+            "category": _category(str(s.get("name")), str(s.get("operation") or "")),
+            "read_only": bool(s.get("read_only")),
+            "requires_approval": bool(s.get("requires_approval_by_default")),
+            "side_effect_level": s.get("side_effect_level") or "none",
+        }
+        for s in specs
+    ]
+    tools.sort(key=lambda t: (t["category"], t["name"]))
+    return {"count": len(tools), "tools": tools}
+
+
 @router.post("/tools/run-preview")
 def tools_run_preview(request: dict) -> dict:
     argv = request.get("argv")
