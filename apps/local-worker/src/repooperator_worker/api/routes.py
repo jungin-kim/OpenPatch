@@ -198,10 +198,10 @@ def debug_context() -> dict:
 
 
 @router.get("/context/window")
-def context_window() -> dict:
+def context_window(thread_id: str | None = None) -> dict:
     from repooperator_worker.services.context_window_service import context_window_snapshot
 
-    return context_window_snapshot()
+    return context_window_snapshot(thread_id)
 
 
 @router.post("/thread/title")

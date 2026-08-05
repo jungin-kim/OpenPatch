@@ -104,6 +104,17 @@ def refresh_context_pack_update(
         "prior_target_candidates": report.get("prior_target_candidates") or [],
         "prior_evidence_reused": bool(report.get("prior_evidence_reused")),
     }
+    try:
+        from repooperator_worker.services.context_usage_service import record_context_usage
+
+        record_context_usage(
+            getattr(request, "thread_id", None),
+            input_tokens=int(summary.get("estimated_input_tokens") or 0),
+            usage_ratio=(summary.get("budget_usage") or {}).get("usage_ratio"),
+        )
+    except Exception:
+        pass
+
     update = {
         "context_packet": json_safe(merged_packet),
         "ide_context": packet.get("ide_context"),

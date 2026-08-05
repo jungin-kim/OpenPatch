@@ -9,6 +9,7 @@ type Snapshot = {
   max_output_tokens: number;
   components: { system_prompt: number; system_tools: number; mcp_tools: number; skills: number; repo_context?: number };
   deferred: { system_tools: number; mcp_tools: number };
+  repo_context_actual?: boolean;
 };
 
 type Segment = { key: string; label: string; tokens: number; color: string };
@@ -37,7 +38,7 @@ function usageColor(pct: number): string {
  * inline chip (mini bar + %) meant to sit left of the send button; click to pop
  * the full breakdown upward.
  */
-export function ContextWindow({ messageTokens }: { messageTokens: number }) {
+export function ContextWindow({ messageTokens, threadId }: { messageTokens: number; threadId?: string | null }) {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -46,7 +47,8 @@ export function ContextWindow({ messageTokens }: { messageTokens: number }) {
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/worker/context/window");
+        const qs = threadId ? `?thread_id=${encodeURIComponent(threadId)}` : "";
+        const res = await fetch(`/api/worker/context/window${qs}`);
         if (!res.ok) return;
         const data = (await res.json()) as Snapshot;
         if (!cancelled) setSnap(data);
@@ -57,7 +59,7 @@ export function ContextWindow({ messageTokens }: { messageTokens: number }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [threadId, messageTokens]);
 
   useEffect(() => {
     if (!open) return;
@@ -86,7 +88,7 @@ export function ContextWindow({ messageTokens }: { messageTokens: number }) {
 
   const segments: Segment[] = [
     { key: "messages", label: "Messages", tokens: messageTokens, color: COLORS.messages },
-    { key: "repo_context", label: "Repo context (max)", tokens: repoContext, color: COLORS.repo_context },
+    { key: "repo_context", label: snap.repo_context_actual ? "Repo context" : "Repo context (max)", tokens: repoContext, color: COLORS.repo_context },
     { key: "system_tools", label: "System tools", tokens: cmp.system_tools, color: COLORS.system_tools },
     { key: "mcp_tools", label: "MCP tools", tokens: cmp.mcp_tools, color: COLORS.mcp_tools },
     { key: "system_prompt", label: "System prompt", tokens: cmp.system_prompt, color: COLORS.system_prompt },

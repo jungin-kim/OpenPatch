@@ -24,7 +24,7 @@ def _tokens(value: Any) -> int:
     return max(0, round(len(text) / 4))
 
 
-def context_window_snapshot() -> dict[str, Any]:
+def context_window_snapshot(thread_id: str | None = None) -> dict[str, Any]:
     settings = get_settings()
     profile = detect_model_profile(settings=settings)
 
@@ -32,13 +32,22 @@ def context_window_snapshot() -> dict[str, Any]:
     system_tools_tokens, system_tools_deferred = _tool_tokens()
     mcp_tools_tokens, mcp_tools_deferred = _mcp_tokens()
     skills_tokens = _skills_tokens()
+
+    # Prefer the actual repo-context tokens from this chat's most recent run;
+    # fall back to the per-model budget (max) before any run has packed context.
     repo_context_tokens = _repo_context_budget_tokens(profile)
+    repo_context_actual = False
+    usage = _thread_context_usage(thread_id)
+    if usage and usage.get("input_tokens"):
+        repo_context_tokens = int(usage["input_tokens"])
+        repo_context_actual = True
 
     return {
         "model_name": profile.model_name,
         "provider": profile.provider,
         "context_window": profile.context_window,
         "max_output_tokens": profile.max_output_tokens,
+        "repo_context_actual": repo_context_actual,
         "components": {
             "system_prompt": system_prompt_tokens,
             "system_tools": system_tools_tokens,
@@ -51,6 +60,15 @@ def context_window_snapshot() -> dict[str, Any]:
             "mcp_tools": mcp_tools_deferred,
         },
     }
+
+
+def _thread_context_usage(thread_id: str | None) -> dict[str, Any] | None:
+    try:
+        from repooperator_worker.services.context_usage_service import get_context_usage
+
+        return get_context_usage(thread_id)
+    except Exception:
+        return None
 
 
 def _repo_context_budget_tokens(profile: Any) -> int:

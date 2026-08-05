@@ -2027,7 +2027,7 @@ export function ChatApp() {
           queuedMessages={queuedMessages
             .filter((item) => item.threadId === activeThreadId && item.status === "queued")
             .map((item) => ({ id: item.id, text: item.text, status: item.status, error: item.error }))}
-          contextSlot={repoResult ? <ContextWindow messageTokens={estimateMessageTokens(messages)} /> : null}
+          contextSlot={repoResult ? <ContextWindow messageTokens={estimateMessageTokens(messages)} threadId={activeThreadId} /> : null}
           onPropose={repoResult ? () => { setProposeError(null); setProposeOpen(true); } : undefined}
           connectionState={connectionState}
           configuredModelName={configuredModelName}
