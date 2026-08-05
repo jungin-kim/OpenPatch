@@ -659,6 +659,7 @@ type McpServerRow = {
   configured?: boolean;
   tool_count?: number;
   env_keys?: string[];
+  overlap?: string;
 };
 
 function McpPanel() {
@@ -757,6 +758,7 @@ function McpPanel() {
         </strong>
         {row.description && <span>{row.description}</span>}
         <code>{row.transport === "http" || row.url ? row.url : [row.command, ...(row.args ?? [])].join(" ")}</code>
+        {row.overlap && <span style={{ color: "var(--muted)", fontSize: "0.8em" }}>↔ {row.overlap}</span>}
         {row.runtime && row.runtime_available === false && (
           <span style={{ color: "#c58b22" }}>Requires {row.runtime} (not installed on this machine).</span>
         )}

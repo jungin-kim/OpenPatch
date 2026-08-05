@@ -43,18 +43,15 @@ def _workspace_dir() -> str:
 
 
 def bundled_catalog() -> list[dict[str, Any]]:
-    """The standard coding-agent MCP set, ready to enable with one click."""
-    workspace = _workspace_dir()
+    """The standard coding-agent MCP set, ready to enable with one click.
+
+    Ordered complementary-first: servers that add capabilities the built-in
+    tools don't have come before ones that overlap built-ins (those carry an
+    ``overlap`` note so users enable them knowingly — built-in tools stay the
+    default path). ``{workspace}`` is stored as a placeholder and resolved to
+    the active checkout at connect time, so switching repos stays correct.
+    """
     return [
-        {
-            "id": "filesystem",
-            "name": "Filesystem",
-            "description": "Read/write files under the active workspace (official server-filesystem).",
-            "transport": "stdio",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", workspace],
-            "runtime": "npx",
-        },
         {
             "id": "memory",
             "name": "Memory",
@@ -76,12 +73,23 @@ def bundled_catalog() -> list[dict[str, Any]]:
         {
             "id": "github",
             "name": "GitHub",
-            "description": "Issues, PRs, and repo operations via the GitHub API (needs GITHUB_PERSONAL_ACCESS_TOKEN).",
+            "description": "Issues, PRs, code search and repo operations via the GitHub API (needs GITHUB_PERSONAL_ACCESS_TOKEN).",
             "transport": "stdio",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-github"],
             "runtime": "npx",
             "env_keys": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+            "overlap": "Overlaps with built-in github_create_pr for PR creation — enable for the broader API (issues, code search, reviews).",
+        },
+        {
+            "id": "filesystem",
+            "name": "Filesystem",
+            "description": "Read/write files under the active workspace (official server-filesystem).",
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "{workspace}"],
+            "runtime": "npx",
+            "overlap": "Overlaps with built-in read_file / modify_file / create_file — the built-ins are approval-gated and repo-scoped, so enable this only if you need raw FS access.",
         },
         {
             "id": "fetch",
@@ -91,6 +99,7 @@ def bundled_catalog() -> list[dict[str, Any]]:
             "command": "uvx",
             "args": ["mcp-server-fetch"],
             "runtime": "uvx",
+            "overlap": "Overlaps with built-in fetch_url / search_web — enable only if you prefer the official fetcher's markdown extraction.",
         },
         {
             "id": "git",
@@ -98,8 +107,9 @@ def bundled_catalog() -> list[dict[str, Any]]:
             "description": "Rich git operations on the active workspace (official mcp-server-git, needs uvx).",
             "transport": "stdio",
             "command": "uvx",
-            "args": ["mcp-server-git", "--repository", workspace],
+            "args": ["mcp-server-git", "--repository", "{workspace}"],
             "runtime": "uvx",
+            "overlap": "Overlaps with built-in git_status / git_diff / git_log / git_commit / git_push — built-ins are approval-gated; enable for extras like blame or worktrees.",
         },
     ]
 
@@ -134,6 +144,7 @@ def list_mcp_status() -> dict[str, Any]:
     from repooperator_worker.agent_core.mcp import list_configured_mcp_servers
 
     configured = {str(s.get("id")): s for s in list_configured_mcp_servers()}
+    workspace = _workspace_dir()
     bundled_rows: list[dict[str, Any]] = []
     for entry in bundled_catalog():
         server = configured.get(entry["id"])
@@ -141,6 +152,9 @@ def list_mcp_status() -> dict[str, Any]:
             json_safe(
                 {
                     **entry,
+                    # Resolve the placeholder for display so the row shows the
+                    # real directory the server would operate on right now.
+                    "args": [str(a).replace("{workspace}", workspace) for a in entry.get("args") or []],
                     "bundled": True,
                     "enabled": bool(server and server.get("enabled")),
                     "configured": bool(server),

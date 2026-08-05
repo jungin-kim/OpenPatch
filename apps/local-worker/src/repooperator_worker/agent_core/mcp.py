@@ -276,13 +276,42 @@ def list_configured_mcp_servers(*, enabled_only: bool = False) -> list[dict[str,
     return get_default_mcp_registry().list_configured_servers(enabled_only=enabled_only)
 
 
+def _resolve_workspace_placeholder(value: str) -> str:
+    """Resolve the ``{workspace}`` placeholder to the active checkout.
+
+    Bundled servers like filesystem/git store ``{workspace}`` in mcp.json so the
+    served directory follows the currently opened repository instead of being
+    frozen to whatever was open when the server was enabled.
+    """
+    if "{workspace}" not in value:
+        return value
+    workspace: str | None = None
+    try:
+        from repooperator_worker.services.active_repository import get_active_repository
+
+        active = get_active_repository()
+        candidate = getattr(active, "local_repo_path", None)
+        if candidate and Path(str(candidate)).is_dir():
+            workspace = str(candidate)
+    except Exception:
+        workspace = None
+    if not workspace:
+        try:
+            from repooperator_worker.services.common import get_repo_base_dir
+
+            workspace = str(get_repo_base_dir())
+        except Exception:
+            workspace = str(Path.home())
+    return value.replace("{workspace}", workspace)
+
+
 def mcp_server_spec_from_dict(item: dict[str, Any]) -> MCPServerSpec:
     return MCPServerSpec(
         id=str(item.get("id") or item.get("name") or ""),
         name=str(item.get("name") or item.get("id") or ""),
         transport=str(item.get("transport") or "stdio"),
         command=str(item.get("command")) if item.get("command") is not None else None,
-        args=[str(arg) for arg in item.get("args") or []],
+        args=[_resolve_workspace_placeholder(str(arg)) for arg in item.get("args") or []],
         url=str(item.get("url") or item.get("endpoint")) if (item.get("url") or item.get("endpoint")) else None,
         tools=_list_of_dicts(item.get("tools") or []),
         permissions=[str(value) for value in item.get("permissions") or [] if str(value).strip()],
