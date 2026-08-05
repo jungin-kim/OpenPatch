@@ -2919,6 +2919,25 @@ async function ensureOllamaServerReady(rl, baseUrl) {
   return startedState;
 }
 
+// When a model is entered manually (not in the local list), offer to pull it
+// now so onboarding doesn't finish pointing at a model Ollama can't serve.
+async function ensureOllamaModelAvailable(rl, modelName, localModels) {
+  const name = String(modelName || "").trim();
+  if (!name || (localModels || []).includes(name)) return name;
+  term.line("warning", "Model not downloaded", `"${name}" is not in your local Ollama models yet.`);
+  const pullNow = await promptYesNo(rl, `Pull ${name} now?`, true);
+  if (pullNow) {
+    try {
+      await pullOllamaModel(name);
+    } catch (error) {
+      term.line("warning", "Pull failed", `${error.message || error}. Check the model name at ollama.com/library.`);
+    }
+  } else {
+    term.line("info", "Heads up", `RepoOperator will use "${name}", but pull it before running: ollama pull ${name}`);
+  }
+  return name;
+}
+
 async function chooseOllamaModel(rl, baseUrl, initialModels, recommendedModel = OLLAMA_RECOMMENDED_MODEL) {
   let models = initialModels;
 
@@ -2944,7 +2963,8 @@ async function chooseOllamaModel(rl, baseUrl, initialModels, recommendedModel = 
 
   if (models.length === 0) {
     term.line("warning", "No local models detected", "Enter a model name manually.");
-    return promptWithDefault(rl, "Model name", recommendedModel);
+    const manual = await promptWithDefault(rl, "Model name", recommendedModel);
+    return ensureOllamaModelAvailable(rl, manual, models);
   }
 
   term.summaryBox("Detected local Ollama models", [
@@ -2971,7 +2991,8 @@ async function chooseOllamaModel(rl, baseUrl, initialModels, recommendedModel = 
       return recommendedModel;
     }
     if (choice === models.length + 2) {
-      return promptWithDefault(rl, "Model name", recommendedModel);
+      const manual = await promptWithDefault(rl, "Model name", recommendedModel);
+      return ensureOllamaModelAvailable(rl, manual, models);
     }
     console.log(`Please choose a number from 1 to ${models.length + 2}.`);
   }
