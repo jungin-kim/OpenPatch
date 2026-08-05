@@ -17,7 +17,12 @@ from repooperator_worker.agent_core.tools.registry import get_default_tool_regis
 
 class CapabilityRegistryTests(unittest.TestCase):
     def test_all_default_tools_map_to_capability(self) -> None:
-        tools = get_default_tool_registry()
+        # Isolate from the developer's real ~/.repooperator/mcp.json — user-enabled
+        # MCP servers add mcp_* adapters outside the stable builtin capability map.
+        from unittest.mock import patch
+
+        with patch("repooperator_worker.agent_core.mcp.configured_mcp_tool_adapters", return_value=[]):
+            tools = get_default_tool_registry()
         missing = [name for name in tools.allowed_action_types() if not tools.capabilities_for_tool(name)]
         self.assertEqual(missing, [])
 

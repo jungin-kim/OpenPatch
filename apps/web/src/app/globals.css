@@ -2531,7 +2531,7 @@ select {
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-raised);
+  background: var(--surface-strong);
 }
 
 .changed-files-title {
@@ -2609,15 +2609,22 @@ select {
   z-index: 80;
   padding: 18px;
   border-left: 1px solid var(--border);
-  background: var(--surface);
-  box-shadow: -20px 0 55px rgba(0, 0, 0, 0.16);
+  /* Opaque — the drawer is a docked panel, not a translucent overlay. */
+  background: var(--surface-strong);
   overflow-y: auto;
+}
+
+/* While the drawer is open, the main chat column yields space to it (pushed
+   aside like the left sidebar) instead of being covered. */
+:root.changed-file-drawer-open .chat-main {
+  padding-right: min(620px, 94vw);
+  transition: padding-right 0.18s ease;
 }
 
 .changed-file-drawer-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--surface-raised);
+  background: var(--surface-strong);
   overflow: hidden;
 }
 
@@ -2634,7 +2641,7 @@ select {
 .changed-file-drawer-actions button {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-raised);
+  background: var(--surface-strong);
   color: var(--foreground);
   cursor: pointer;
   padding: 6px 9px;
@@ -2919,7 +2926,7 @@ select {
   margin-bottom: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-raised);
+  background: var(--surface-strong);
 }
 
 .composer-queue-title {
@@ -4019,6 +4026,17 @@ select {
   color: var(--muted);
 }
 
+.debug-input {
+  width: 100%;
+  max-width: 460px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 0.82rem;
+}
+
 .debug-button-active {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -4041,7 +4059,7 @@ select {
   padding: 4px 10px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  background: var(--surface-raised);
+  background: var(--surface-strong);
   cursor: pointer;
   user-select: none;
   transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
@@ -4063,7 +4081,7 @@ select {
 .debug-filter-row label:has(input:checked) {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   color: var(--foreground);
-  background: color-mix(in srgb, var(--accent) 12%, var(--surface-raised));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-strong));
 }
 
 .memory-graph-layout {
@@ -4170,7 +4188,7 @@ select {
 .memory-graph-details {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--surface-raised);
+  background: var(--surface-strong);
   padding: 12px;
   display: grid;
   gap: 8px;

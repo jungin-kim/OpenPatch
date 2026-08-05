@@ -166,7 +166,7 @@ type ContextDebug = {
   }>;
 };
 
-const tabs = ["Dashboard", "Agents", "Context", "Memory", "Skills", "Integrations", "Tools", "Events / Runs", "Settings"] as const;
+const tabs = ["Dashboard", "Agents", "Context", "Memory", "Skills", "Integrations", "MCP", "Tools", "Events / Runs", "Settings"] as const;
 type DebugTab = typeof tabs[number];
 
 async function loadJson<T>(url: string): Promise<T> {
@@ -248,6 +248,7 @@ export default function DebugPage() {
         {activeTab === "Memory" && <MemoryPanel memory={memory} />}
         {activeTab === "Skills" && <SkillsPanel skills={skills} />}
         {activeTab === "Integrations" && <IntegrationsPanel integrations={integrations} />}
+        {activeTab === "MCP" && <McpPanel />}
         {activeTab === "Tools" && <ToolsPanel tools={tools} catalog={toolCatalog} />}
         {activeTab === "Events / Runs" && <RunsPanel runtime={runtime} />}
         {activeTab === "Settings" && <SettingsPanel runtime={runtime} />}
@@ -643,6 +644,202 @@ function SkillsPanel({ skills }: { skills: SkillsDebug | null }) {
   );
 }
 
+type McpServerRow = {
+  id: string;
+  name: string;
+  description?: string;
+  transport?: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  runtime?: string;
+  runtime_available?: boolean;
+  bundled: boolean;
+  enabled?: boolean;
+  configured?: boolean;
+  tool_count?: number;
+  env_keys?: string[];
+};
+
+function McpPanel() {
+  const [status, setStatus] = useState<{ bundled: McpServerRow[]; custom: McpServerRow[] } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [envInputs, setEnvInputs] = useState<Record<string, string>>({});
+  const [custom, setCustom] = useState({ name: "", transport: "stdio", command: "", args: "", url: "" });
+
+  async function refresh() {
+    try {
+      const res = await fetch("/api/worker/mcp/servers");
+      if (res.ok) setStatus(await res.json());
+    } catch {
+      /* worker offline */
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function act(id: string, action: "enable" | "disable" | "test", body?: unknown) {
+    setBusy(id);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/worker/mcp/servers/${encodeURIComponent(id)}/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body ?? {}),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.detail || `${action} failed`);
+      setNotice(
+        action === "disable"
+          ? `${id} disabled.`
+          : `${id}: ${payload.tool_count ?? 0} tools ${action === "test" ? "reachable" : "enabled"}${payload.tools ? ` — ${payload.tools.slice(0, 6).map((t: { name?: string }) => t.name).join(", ")}${payload.tools.length > 6 ? "…" : ""}` : ""}`,
+      );
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `${action} failed`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function addCustom() {
+    setBusy("__custom__");
+    setError(null);
+    setNotice(null);
+    try {
+      const body: Record<string, unknown> = { name: custom.name, transport: custom.transport };
+      if (custom.transport === "stdio") {
+        body.command = custom.command;
+        body.args = custom.args.split(/\s+/).filter(Boolean);
+      } else {
+        body.url = custom.url;
+      }
+      const res = await fetch("/api/worker/mcp/servers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.detail || "Failed to add the MCP server.");
+      setNotice(`${payload.id}: ${payload.tool_count ?? 0} tools enabled.`);
+      setCustom({ name: "", transport: "stdio", command: "", args: "", url: "" });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add the MCP server.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeCustom(id: string) {
+    setBusy(id);
+    try {
+      await fetch(`/api/worker/mcp/servers/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function renderRow(row: McpServerRow) {
+    const needsEnv = (row.env_keys ?? []).length > 0 && !row.enabled;
+    return (
+      <div className="debug-list-item" key={row.id}>
+        <strong>
+          {row.name} {row.enabled ? "· enabled" : row.configured ? "· disabled" : ""}
+          {typeof row.tool_count === "number" && row.tool_count > 0 ? ` · ${row.tool_count} tools` : ""}
+        </strong>
+        {row.description && <span>{row.description}</span>}
+        <code>{row.transport === "http" || row.url ? row.url : [row.command, ...(row.args ?? [])].join(" ")}</code>
+        {row.runtime && row.runtime_available === false && (
+          <span style={{ color: "#c58b22" }}>Requires {row.runtime} (not installed on this machine).</span>
+        )}
+        {needsEnv &&
+          (row.env_keys ?? []).map((key) => (
+            <input
+              key={key}
+              className="debug-input"
+              placeholder={key}
+              value={envInputs[`${row.id}:${key}`] ?? ""}
+              onChange={(e) => setEnvInputs((prev) => ({ ...prev, [`${row.id}:${key}`]: e.target.value }))}
+            />
+          ))}
+        <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+          {row.enabled ? (
+            <>
+              <button type="button" className="debug-secondary-button" disabled={busy !== null} onClick={() => void act(row.id, "disable")}>
+                Disable
+              </button>
+              <button type="button" className="debug-secondary-button" disabled={busy !== null} onClick={() => void act(row.id, "test")}>
+                {busy === row.id ? "Testing…" : "Test"}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="debug-secondary-button"
+              disabled={busy !== null || row.runtime_available === false}
+              onClick={() => {
+                const env: Record<string, string> = {};
+                for (const key of row.env_keys ?? []) {
+                  const value = envInputs[`${row.id}:${key}`];
+                  if (value) env[key] = value;
+                }
+                void act(row.id, "enable", Object.keys(env).length ? { env } : {});
+              }}
+            >
+              {busy === row.id ? "Enabling…" : "Enable"}
+            </button>
+          )}
+          {!row.bundled && (
+            <button type="button" className="debug-secondary-button" disabled={busy !== null} onClick={() => void removeCustom(row.id)}>
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <Card title="MCP servers (bundled)">
+        <span>Standard coding-agent MCP set. Enabling a server connects to it, discovers its tools, and exposes them to the agent (approval-gated).</span>
+        {error && <span style={{ color: "#DB4437" }}>{error}</span>}
+        {notice && <span style={{ color: "var(--accent)" }}>{notice}</span>}
+        {status ? status.bundled.map(renderRow) : <div className="debug-placeholder">Loading MCP status…</div>}
+      </Card>
+      <Card title="Custom MCP servers">
+        {status?.custom.length ? status.custom.map(renderRow) : <div className="debug-placeholder">No custom servers yet.</div>}
+        <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+          <input className="debug-input" placeholder="name (e.g. my-server)" value={custom.name} onChange={(e) => setCustom({ ...custom, name: e.target.value })} />
+          <select className="debug-input" value={custom.transport} onChange={(e) => setCustom({ ...custom, transport: e.target.value })}>
+            <option value="stdio">stdio (command)</option>
+            <option value="http">http / sse (url)</option>
+          </select>
+          {custom.transport === "stdio" ? (
+            <>
+              <input className="debug-input" placeholder="command (e.g. npx)" value={custom.command} onChange={(e) => setCustom({ ...custom, command: e.target.value })} />
+              <input className="debug-input" placeholder="args (space separated)" value={custom.args} onChange={(e) => setCustom({ ...custom, args: e.target.value })} />
+            </>
+          ) : (
+            <input className="debug-input" placeholder="url (e.g. http://127.0.0.1:8080/mcp)" value={custom.url} onChange={(e) => setCustom({ ...custom, url: e.target.value })} />
+          )}
+          <button type="button" className="debug-secondary-button" disabled={busy !== null || !custom.name} onClick={() => void addCustom()}>
+            {busy === "__custom__" ? "Connecting…" : "Add & discover tools"}
+          </button>
+        </div>
+      </Card>
+    </>
+  );
+}
+
 function IntegrationsPanel({ integrations }: { integrations: IntegrationsDebug | null }) {
   return (
     <Card title="Integration Status">
@@ -665,6 +862,7 @@ function IntegrationsPanel({ integrations }: { integrations: IntegrationsDebug |
 
 const TOOL_CATEGORY_LABELS: Record<string, string> = {
   read: "Read & search",
+  mcp: "MCP (external)",
   edit: "Edit files",
   git: "Git & PRs",
   command: "Run commands",

@@ -256,6 +256,14 @@ function CommitSummaryCard({ metadata }: { metadata: AgentRunPayload }) {
 
 function ChangedFilesArchive({ records }: { records?: EditArchiveRecord[] }) {
   const [selected, setSelected] = useState<EditArchiveRecord | null>(null);
+  // Push the chat column aside while the drawer is open (sidebar-style), and
+  // always clean the flag up on close/unmount.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (selected) root.classList.add("changed-file-drawer-open");
+    else root.classList.remove("changed-file-drawer-open");
+    return () => root.classList.remove("changed-file-drawer-open");
+  }, [selected]);
   if (!records?.length) return null;
   return (
     <>

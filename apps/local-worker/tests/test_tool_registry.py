@@ -21,7 +21,12 @@ from repooperator_worker.agent_core.tools.builtin import ReadFileTool  # noqa: E
 
 class ToolRegistryTests(unittest.TestCase):
     def test_default_registry_contains_stable_unique_tools(self) -> None:
-        registry = get_default_tool_registry()
+        # Isolate from the developer's real ~/.repooperator/mcp.json — enabled
+        # MCP servers add mcp_* adapters that would break this stable-set check.
+        from unittest.mock import patch
+
+        with patch("repooperator_worker.agent_core.mcp.configured_mcp_tool_adapters", return_value=[]):
+            registry = get_default_tool_registry()
         self.assertEqual(
             registry.allowed_action_types(),
             [

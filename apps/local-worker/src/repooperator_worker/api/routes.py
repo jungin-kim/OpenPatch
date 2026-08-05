@@ -320,6 +320,69 @@ def tools_status() -> dict:
     return get_tools_status()
 
 
+@router.get("/mcp/servers")
+def mcp_servers() -> dict:
+    from repooperator_worker.services.mcp_service import list_mcp_status
+
+    return list_mcp_status()
+
+
+@router.post("/mcp/servers")
+def mcp_add_server(payload: dict) -> dict:
+    from repooperator_worker.services.mcp_client import MCPClientError
+    from repooperator_worker.services.mcp_service import add_custom_mcp_server
+
+    try:
+        return add_custom_mcp_server(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MCPClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not connect to the MCP server: {exc}") from exc
+
+
+@router.post("/mcp/servers/{server_id}/enable")
+def mcp_enable(server_id: str, payload: dict | None = None) -> dict:
+    from repooperator_worker.services.mcp_client import MCPClientError
+    from repooperator_worker.services.mcp_service import enable_mcp_server
+
+    try:
+        env = (payload or {}).get("env") if isinstance((payload or {}).get("env"), dict) else None
+        return enable_mcp_server(server_id, env=env)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MCPClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not connect to the MCP server: {exc}") from exc
+
+
+@router.post("/mcp/servers/{server_id}/disable")
+def mcp_disable(server_id: str) -> dict:
+    from repooperator_worker.services.mcp_service import disable_mcp_server
+
+    return disable_mcp_server(server_id)
+
+
+@router.delete("/mcp/servers/{server_id}")
+def mcp_remove(server_id: str) -> dict:
+    from repooperator_worker.services.mcp_service import remove_mcp_server
+
+    return remove_mcp_server(server_id)
+
+
+@router.post("/mcp/servers/{server_id}/test")
+def mcp_test(server_id: str) -> dict:
+    from repooperator_worker.services.mcp_client import MCPClientError
+    from repooperator_worker.services.mcp_service import test_mcp_server
+
+    try:
+        return test_mcp_server(server_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MCPClientError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not connect to the MCP server: {exc}") from exc
+
+
 @router.get("/tools/catalog")
 def tools_catalog() -> dict:
     """The agent's built-in tool set (what the model can actually call), grouped
@@ -327,6 +390,8 @@ def tools_catalog() -> dict:
     from repooperator_worker.agent_core.tools.registry import get_default_tool_registry
 
     def _category(name: str, operation: str) -> str:
+        if name.startswith("mcp_"):
+            return "mcp"
         if name in {"create_file", "modify_file", "delete_file", "rename_file", "generate_edit", "generate_change_set", "apply_change_set", "validate_change_set"}:
             return "edit"
         if name in {"search_web", "fetch_url", "summarize_web_evidence"}:

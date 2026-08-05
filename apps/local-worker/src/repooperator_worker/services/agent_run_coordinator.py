@@ -203,6 +203,7 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
     def generate() -> Iterator[str]:
         last_sequence = 0
         saw_final = False
+        active_stream_statuses = {"pending", "running", "waiting_approval", "cancelling"}
         while True:
             events = list_run_events(run_id, after_sequence=last_sequence)
             for event in events:
@@ -211,10 +212,15 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
                     saw_final = True
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             if saw_final:
-                # The final result (possibly a waiting-for-approval proposal) is
-                # delivered; close the stream instead of polling forever while
-                # the run sits in waiting_approval.
-                break
+                # The final result is delivered. Close the stream once the run
+                # settles: immediately for waiting_approval (the user's turn —
+                # don't poll forever), otherwise only after the worker records
+                # the terminal status (completed/cancelled/failed) so clients
+                # and tests observe the settled state at [DONE].
+                run = get_run(run_id)
+                status = str((run or {}).get("status") or "")
+                if not run or status == "waiting_approval" or status not in active_stream_statuses:
+                    break
             if not events:
                 deferred = take_deferred_stream_finalization()
                 if deferred is not None:
@@ -226,7 +232,6 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
                     )
                     break
             run = get_run(run_id)
-            active_stream_statuses = {"pending", "running", "waiting_approval", "cancelling"}
             if run and run.get("status") not in active_stream_statuses and not events:
                 break
             # Poll frequently so streamed answer deltas reach the client
