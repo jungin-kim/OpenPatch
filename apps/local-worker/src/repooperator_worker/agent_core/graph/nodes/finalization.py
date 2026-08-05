@@ -126,6 +126,15 @@ def final_build_response_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     core.final_response = validate_or_repair_final_answer(core.final_response, core, request)
     if _is_explanation_only_edit_request(state) and not state.get("files_changed") and "no files were modified" not in core.final_response.lower():
         core.final_response = core.final_response.rstrip() + "\n\nNo files were modified."
+    # Honesty backstop: never let the answer claim an edit was applied when no
+    # file actually changed. This catches the failure mode where the model
+    # narrates a change ("the docstring has been added") without applying it.
+    elif not state.get("files_changed") and _claims_edit_applied(core.final_response):
+        core.final_response = (
+            core.final_response.rstrip()
+            + "\n\n⚠️ Note: no files were actually modified on disk. "
+            "The change above was drafted but not applied — re-run the request or use Propose change to apply it."
+        )
     source_notes = _web_source_notes_for_final(state)
     if source_notes and "Source notes:" not in core.final_response:
         core.final_response = core.final_response.rstrip() + "\n\nSource notes:\n" + "\n".join(source_notes)
@@ -370,6 +379,21 @@ def _is_explanation_only_edit_request(state: RepoOperatorGraphState) -> bool:
     asks_how = bool(re.search(r"\bhow\s+(would|do|can|should)\b", lowered)) or any(term in text for term in ("어떻게", "어떤 식으로"))
     mentions_change = bool(re.search(r"\b(change|edit|add|fix|implement|refactor|update)\b", lowered)) or any(term in text for term in ("추가", "고쳐", "구현", "수정"))
     return asks_how and mentions_change
+
+def _claims_edit_applied(text: str) -> bool:
+    """Whether the answer asserts a file change was actually applied/completed."""
+    if not text:
+        return False
+    lowered = text.lower()
+    english = bool(
+        re.search(
+            r"\b(has been|have been|i(?:'ve| have)|successfully)\b.*\b(added|modified|updated|changed|created|edited|applied|implemented|removed|deleted|fixed)\b",
+            lowered,
+        )
+    ) or bool(re.search(r"\b(added|updated|modified|created|edited|applied|implemented)\b.*\bto\b.*\.(py|js|ts|tsx|jsx|java|go|rs|rb|c|cpp|css|md|json|yml|yaml)\b", lowered))
+    korean = any(term in text for term in ("추가했습니다", "수정했습니다", "변경했습니다", "적용했습니다", "구현했습니다", "생성했습니다", "삭제했습니다", "반영했습니다"))
+    return english or korean
+
 
 def _ensure_final_evidence_grounding(text: str, state: RepoOperatorGraphState) -> str:
     if not text.strip():

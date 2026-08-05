@@ -14,11 +14,11 @@ type Snapshot = {
 type Segment = { key: string; label: string; tokens: number; color: string };
 
 const COLORS = {
-  messages: "#4C7EF3",
-  system_tools: "#6E9BF5",
-  mcp_tools: "#8FB4F7",
-  system_prompt: "#5B8DEF",
-  skills: "#A9C6FA",
+  messages: "#4F46E5",
+  system_tools: "#6D5EFC",
+  mcp_tools: "#8B5CF6",
+  system_prompt: "#5B4FF0",
+  skills: "#A78BFA",
   free: "var(--border-strong, #3a3f4b)",
 };
 
@@ -28,7 +28,7 @@ function fmt(n: number): string {
 }
 
 function usageColor(pct: number): string {
-  return pct >= 90 ? "#DB4437" : pct >= 75 ? "#F4B400" : "#4C7EF3";
+  return pct >= 90 ? "#DB4437" : pct >= 75 ? "#F4B400" : "#5B4FF0";
 }
 
 /**

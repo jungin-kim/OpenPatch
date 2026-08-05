@@ -118,7 +118,50 @@ def propose_next_action_with_tool_calling(
     # gets another turn once real evidence is in the transcript.
     if action is not None and action.type in {"final_answer", "ask_clarification"} and not _has_min_evidence(state):
         return None
+    # Edit gate: a change/edit request must actually apply a change before it is
+    # allowed to answer, ask to clarify, or keep re-reading. Without this, the
+    # model tends to *narrate* an edit it never made ("the docstring has been
+    # added"), or dodge via ask_clarification, while the file stays untouched.
+    # Once evidence exists and no change has been applied, defer any non-edit
+    # action to the deterministic edit planner in choose_graph_next_action,
+    # which drives generate_change_set -> apply.
+    if (
+        action is not None
+        and action.type not in _EDIT_PRODUCING_ACTION_TYPES
+        and _is_change_request(task_frame)
+        and _has_min_evidence(state)
+        and not _change_applied(state)
+    ):
+        return None
     return action
+
+
+_EDIT_PRODUCING_ACTION_TYPES = frozenset(
+    {
+        "generate_change_set",
+        "generate_edit",
+        "modify_file",
+        "create_file",
+        "delete_file",
+        "rename_file",
+        "apply_change_set",
+    }
+)
+
+
+def _is_change_request(task_frame: Any) -> bool:
+    """Whether the task asks to modify the repository (vs. only explain/read)."""
+    try:
+        from repooperator_worker.agent_core.planner import edit_requested
+
+        return bool(edit_requested(task_frame))
+    except Exception:
+        return False
+
+
+def _change_applied(state: AgentCoreState) -> bool:
+    """Whether a file change has actually been applied to the working tree."""
+    return bool(getattr(state, "files_changed", None))
 
 
 _EVIDENCE_ACTION_TYPES = frozenset(
