@@ -30,6 +30,7 @@ const RUNTIME_DIR = path.join(CONFIG_DIR, "runtime");
 const RUNTIME_WORKER_DIR = path.join(RUNTIME_DIR, "local-worker");
 const RUNTIME_VENV_DIR = path.join(RUNTIME_DIR, "worker-venv");
 const RUNTIME_WEB_DIR = path.join(RUNTIME_DIR, "web");
+const RUNTIME_VERSION_FILE = path.join(RUNTIME_DIR, ".runtime-version");
 const DEFAULT_WORKER_HEALTH_TIMEOUT_MS = 1500;
 const DEFAULT_WORKER_START_TIMEOUT_MS = 8000;
 const DEFAULT_WEB_HEALTH_TIMEOUT_MS = 2000;
@@ -1644,8 +1645,36 @@ async function installWebRuntime() {
   }
 }
 
+async function readRuntimeVersion() {
+  try {
+    return (await fsp.readFile(RUNTIME_VERSION_FILE, "utf8")).trim();
+  } catch {
+    return null;
+  }
+}
+
+async function writeRuntimeVersion(version) {
+  try {
+    await fsp.mkdir(RUNTIME_DIR, { recursive: true });
+    await fsp.writeFile(RUNTIME_VERSION_FILE, String(version || ""));
+  } catch {
+    // A missing version stamp only means the next `repo up` re-copies the
+    // runtime — never fatal.
+  }
+}
+
 async function ensureRuntimeInstalled() {
   await ensureBaseDirectories();
+
+  // If the CLI has been updated since the runtime was prepared, the bundled
+  // worker/web sources in ~/.repooperator/runtime are stale. Force a fresh
+  // copy so `repo update` followed by `repo up` actually ships the new code.
+  const packageVersion = getInstalledVersion();
+  const runtimeVersion = await readRuntimeVersion();
+  if (runtimeVersion !== packageVersion) {
+    await fsp.rm(RUNTIME_WORKER_DIR, { recursive: true, force: true });
+    await fsp.rm(RUNTIME_WEB_DIR, { recursive: true, force: true });
+  }
 
   const workerPackageExists = await fileExists(path.join(RUNTIME_WORKER_DIR, "pyproject.toml"));
   const workerInstalled = workerPackageExists && await isWorkerRuntimeInstalled();
@@ -1653,6 +1682,7 @@ async function ensureRuntimeInstalled() {
   const webInstalled = await isWebRuntimeInstalled();
 
   if (workerInstalled && webInstalled) {
+    await writeRuntimeVersion(packageVersion);
     return;
   }
 
@@ -1677,6 +1707,8 @@ async function ensureRuntimeInstalled() {
     }
     term.line("success", "Web runtime ready", RUNTIME_WEB_DIR);
   }
+
+  await writeRuntimeVersion(packageVersion);
 }
 
 async function runSetupRuntime() {
