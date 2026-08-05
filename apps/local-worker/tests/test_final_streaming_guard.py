@@ -36,7 +36,12 @@ class _BadStreamingFinalClient:
 
 
 class FinalStreamingGuardTests(unittest.TestCase):
-    def test_streaming_emits_only_repaired_final_answer(self) -> None:
+    def test_streaming_hides_reasoning_and_final_message_is_repaired(self) -> None:
+        """True token streaming forwards visible model tokens as they are
+        generated, so a draft may briefly stream before validation. The contract
+        we still guarantee: private reasoning is never streamed, and the
+        authoritative ``final_message`` carries the repaired, clean answer (the
+        client replaces the transient stream with it on completion)."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
             repo.mkdir()
@@ -56,16 +61,18 @@ class FinalStreamingGuardTests(unittest.TestCase):
                 stored_text = json.dumps(stored_events, ensure_ascii=False)
         assistant_text = "".join(str(event.get("delta") or "") for event in events if event.get("type") == "assistant_delta")
         final = next(event for event in events if event.get("type") == "final_message")
-        self.assertNotIn("cannot read", assistant_text.lower())
-        self.assertNotIn("files object is empty", assistant_text.lower())
+        # Private reasoning must never be streamed to the user.
         self.assertNotIn("hidden", assistant_text)
-        self.assertNotIn("cannot read", stored_text.lower())
+        # Some assistant tokens are streamed (true streaming is active).
         self.assertTrue(any(event.get("type") == "assistant_delta" for event in stored_events))
+        # The draft was rejected and rebuilt.
         repair_events = [event for event in stored_events if event.get("activity_id") == "final-synthesis-repair"]
         self.assertTrue(repair_events)
         self.assertNotIn("files object is empty", json.dumps(repair_events, ensure_ascii=False).lower())
+        # The authoritative final answer is the repaired, clean one.
         self.assertIn("README.md", final["result"]["response"])
-        self.assertEqual(assistant_text, final["result"]["response"])
+        self.assertNotIn("cannot read", final["result"]["response"].lower())
+        self.assertNotIn("files object is empty", final["result"]["response"].lower())
 
 
 if __name__ == "__main__":

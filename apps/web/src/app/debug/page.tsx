@@ -196,7 +196,8 @@ export default function DebugPage() {
           loadJson<SkillsDebug>("/api/worker/debug/skills"),
           loadJson<IntegrationsDebug>("/api/worker/debug/integrations"),
           loadJson<ToolsDebug>("/api/worker/tools"),
-          loadJson<ToolCatalog>("/api/worker/tools/catalog"),
+          // Optional / newer endpoint — must not break the whole dashboard load.
+          loadJson<ToolCatalog>("/api/worker/tools/catalog").catch(() => null),
         ]);
         setRuntime(runtimePayload);
         setContext(contextPayload);
