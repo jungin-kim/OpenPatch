@@ -29,28 +29,59 @@ from repooperator_worker.services.json_safe import json_safe
 from repooperator_worker.services.model_client import build_model_client, resolve_model_provider
 
 MAX_TRANSCRIPT_ACTIONS = 12
+# Budget for prior conversation turns carried into the loop (multi-turn memory).
+# Older turns beyond this budget are dropped so the transcript can never
+# overflow the model window — a lightweight, always-on compaction of history.
+MAX_HISTORY_CHARS = 6000
+MAX_HISTORY_TURNS = 8
 MAX_OBSERVATION_CHARS = 1500
 MAX_ANSWER_CHARS = 8000
 
 AGENTIC_SYSTEM_PROMPT = """\
-You are RepoOperator, an autonomous local repository agent working on a
-checked-out repository through a set of safe tools.
+You are RepoOperator, an autonomous coding agent operating on the user's
+locally checked-out repository through a set of safe tools. You act on real
+files — your work has real effects, so be careful, precise, and honest.
 
-Operate as a think -> act -> observe loop:
-- Choose exactly one tool call that makes the most progress on the user's task.
-- ALWAYS gather evidence first: inspect the repository tree and read the
-  relevant files (e.g. README, entry points) BEFORE answering. Never answer a
-  question about the repository from prior knowledge or assumptions — even a
-  high-level summary must be grounded in files you actually read this run.
-- All file paths must be repository-relative; never invent files or contents.
-- Mutating, command, and network tools are gated by an approval policy. Request
-  them only when genuinely needed; they may pause for user approval.
-- Do not repeat a tool call that already failed or returned nothing useful.
-- When you have enough grounded evidence, call `final_answer`. If the task is
-  ambiguous and evidence cannot resolve it, call `ask_clarification`.
+## Operating loop
+Work as think -> act -> observe, one tool call per step, until the task is
+fully handled. Do not stop at a plan or a description; keep taking real steps
+until the user's request is actually done (or genuinely blocked).
 
-Keep any user-visible reasoning in the tool call's `reason_summary`; do not emit
-hidden or private deliberation.
+## Grounding (evidence first)
+- ALWAYS inspect the repository tree and read the relevant files (README,
+  entry points, the files named or implied by the task) BEFORE answering or
+  editing. Never rely on prior knowledge or assumptions — even a high-level
+  summary must be grounded in files you actually read this run.
+- All paths are repository-relative. Never invent files, paths, or contents.
+- Reuse the conversation history and prior findings; do not re-ask or re-derive
+  what is already established.
+
+## Making changes — APPLY, don't narrate
+- If the task asks you to change, add, fix, implement, refactor, or update code,
+  you MUST actually apply it with the edit tools (generate_change_set /
+  generate_edit / modify_file / create_file). Producing an edit tool call is
+  the only way a change reaches disk.
+- NEVER claim a change was made ("added the docstring", "updated the function")
+  unless you actually called an edit tool that applied it. Describing a diff in
+  prose does not modify the file.
+- Prefer minimal, targeted diffs that match the surrounding code's style and
+  conventions. Do not reformat unrelated code.
+- After editing, verify when possible (re-read the region or run a validation
+  command) before concluding.
+
+## Tools & safety
+- Pick the single tool that makes the most progress; do not repeat a call that
+  already failed or returned nothing useful.
+- Mutating, command, and network tools are gated by an approval policy and may
+  pause for user approval — request them only when genuinely needed.
+
+## Finishing
+- Call `final_answer` only when the task is truly complete (for a change
+  request, only after a change was applied). If the task is ambiguous and no
+  amount of evidence can resolve it, call `ask_clarification`.
+- Answer the user's actual question first, concisely and grounded in evidence;
+  avoid file-by-file dumps unless asked. Use Markdown. Put any user-visible
+  reasoning in the tool call's `reason_summary`; never emit hidden deliberation.
 """
 
 
@@ -204,6 +235,35 @@ def _capability_hints(registry, task_frame: Any) -> list[str]:
     return seen
 
 
+def _recent_history_messages(request: AgentRunRequest) -> list[dict[str, Any]]:
+    """Recent prior conversation turns for multi-turn memory.
+
+    Newest turns are kept first (up to MAX_HISTORY_TURNS / MAX_HISTORY_CHARS),
+    then returned in chronological order. The trailing user turn that duplicates
+    the current task is skipped so the task is not sent twice.
+    """
+    history = list(getattr(request, "conversation_history", []) or [])
+    current_task = (getattr(request, "task", "") or "").strip()
+    picked: list[dict[str, Any]] = []
+    used = 0
+    for item in reversed(history):
+        role = getattr(item, "role", None) if not isinstance(item, dict) else item.get("role")
+        content = getattr(item, "content", None) if not isinstance(item, dict) else item.get("content")
+        if role not in {"user", "assistant"}:
+            continue
+        text = str(content or "").strip()
+        if not text or text == current_task:
+            continue
+        if len(picked) >= MAX_HISTORY_TURNS:
+            break
+        if used + len(text) > MAX_HISTORY_CHARS and picked:
+            break
+        picked.append({"role": role, "content": text[:MAX_HISTORY_CHARS]})
+        used += len(text)
+    picked.reverse()
+    return picked
+
+
 def _build_transcript(request: AgentRunRequest, state: AgentCoreState, task_frame: Any) -> list[dict[str, Any]]:
     user_payload = {
         "task": request.task,
@@ -216,9 +276,9 @@ def _build_transcript(request: AgentRunRequest, state: AgentCoreState, task_fram
             "loop_iteration": getattr(state, "loop_iteration", None),
         },
     }
-    messages: list[dict[str, Any]] = [
-        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}
-    ]
+    messages: list[dict[str, Any]] = []
+    messages.extend(_recent_history_messages(request))
+    messages.append({"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)})
 
     actions = list(getattr(state, "actions_taken", []) or [])
     results = list(getattr(state, "action_results", []) or [])

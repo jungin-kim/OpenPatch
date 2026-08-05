@@ -7,7 +7,7 @@ type Snapshot = {
   provider: string;
   context_window: number;
   max_output_tokens: number;
-  components: { system_prompt: number; system_tools: number; mcp_tools: number; skills: number };
+  components: { system_prompt: number; system_tools: number; mcp_tools: number; skills: number; repo_context?: number };
   deferred: { system_tools: number; mcp_tools: number };
 };
 
@@ -15,6 +15,7 @@ type Segment = { key: string; label: string; tokens: number; color: string };
 
 const COLORS = {
   messages: "#4F46E5",
+  repo_context: "#7C3AED",
   system_tools: "#6D5EFC",
   mcp_tools: "#8B5CF6",
   system_prompt: "#5B4FF0",
@@ -78,12 +79,14 @@ export function ContextWindow({ messageTokens }: { messageTokens: number }) {
 
   const windowSize = Math.max(1, snap.context_window);
   const cmp = snap.components;
-  const used = messageTokens + cmp.system_tools + cmp.mcp_tools + cmp.system_prompt + cmp.skills;
+  const repoContext = cmp.repo_context ?? 0;
+  const used = messageTokens + repoContext + cmp.system_tools + cmp.mcp_tools + cmp.system_prompt + cmp.skills;
   const free = Math.max(0, windowSize - used);
   const pct = Math.min(100, Math.round((used / windowSize) * 100));
 
   const segments: Segment[] = [
     { key: "messages", label: "Messages", tokens: messageTokens, color: COLORS.messages },
+    { key: "repo_context", label: "Repo context (max)", tokens: repoContext, color: COLORS.repo_context },
     { key: "system_tools", label: "System tools", tokens: cmp.system_tools, color: COLORS.system_tools },
     { key: "mcp_tools", label: "MCP tools", tokens: cmp.mcp_tools, color: COLORS.mcp_tools },
     { key: "system_prompt", label: "System prompt", tokens: cmp.system_prompt, color: COLORS.system_prompt },

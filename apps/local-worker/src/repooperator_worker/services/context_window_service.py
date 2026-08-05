@@ -32,6 +32,7 @@ def context_window_snapshot() -> dict[str, Any]:
     system_tools_tokens, system_tools_deferred = _tool_tokens()
     mcp_tools_tokens, mcp_tools_deferred = _mcp_tokens()
     skills_tokens = _skills_tokens()
+    repo_context_tokens = _repo_context_budget_tokens(profile)
 
     return {
         "model_name": profile.model_name,
@@ -43,12 +44,29 @@ def context_window_snapshot() -> dict[str, Any]:
             "system_tools": system_tools_tokens,
             "mcp_tools": mcp_tools_tokens,
             "skills": skills_tokens,
+            "repo_context": repo_context_tokens,
         },
         "deferred": {
             "system_tools": system_tools_deferred,
             "mcp_tools": mcp_tools_deferred,
         },
     }
+
+
+def _repo_context_budget_tokens(profile: Any) -> int:
+    """Tokens the packer reserves for repository file context (the dominant real
+    input). Mirrors context_packer._budget_for so the gauge reflects what a run
+    actually sends, not just fixed overhead. Auto-compaction keeps runs within
+    this budget (files beyond it are summarized/omitted)."""
+    window = int(getattr(profile, "context_window", 0) or 0)
+    strategy = getattr(profile, "compression_strategy", "") or ""
+    if strategy == "aggressive" or (window and window <= 32_000):
+        max_chars = 24_000
+    elif strategy == "generous" or window >= 200_000:
+        max_chars = 160_000
+    else:
+        max_chars = 72_000
+    return _tokens("x" * max_chars)
 
 
 def _system_prompt_tokens() -> int:
