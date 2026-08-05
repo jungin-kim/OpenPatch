@@ -77,7 +77,13 @@ def _answer_with_model(
                 continue
             elif delta.get("type") == "assistant_delta":
                 text = str(delta.get("delta") or "")
+                if not text:
+                    continue
                 pieces.append(text)
+                # TRUE streaming: forward each token to the UI as the model
+                # produces it, instead of animating the finished answer later.
+                if on_delta:
+                    on_delta(text)
         raw = "".join(pieces) or client.generate_text(prompt)
         _reasoning, visible = split_visible_reasoning(raw)
         cleaned, _ = clean_user_visible_response(visible, user_task=request.task)
@@ -110,7 +116,10 @@ def _answer_with_model(
                     observation="Final answer repaired without storing the rejected draft text.",
                     safety_note="Rejected draft text is not exposed in events.",
                 )
-        if on_delta and accepted:
+        # Only paced-emit the validated answer when we did NOT already stream it
+        # live (i.e. the non-streaming generate_text fallback was used). This
+        # avoids emitting the answer twice.
+        if on_delta and accepted and not pieces:
             for chunk in _chunk_text(accepted):
                 on_delta(chunk)
         return accepted
