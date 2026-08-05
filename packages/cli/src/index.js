@@ -102,6 +102,39 @@ function recommendOllamaModels(hardware) {
   return OLLAMA_MODEL_CATALOG.map((model) => ({ ...model, fits: model.approxGiB <= hardware.budgetGiB }));
 }
 
+// Recommend a context window (num_ctx) that fits in the memory left after the
+// model weights load. KV-cache grows with num_ctx, so this scales the window to
+// available RAM/VRAM instead of blindly using the model's max.
+function autoContextWindow(hardware, modelName) {
+  const model = OLLAMA_MODEL_CATALOG.find((m) => m.name === modelName);
+  const modelGiB = model ? model.approxGiB : 8;
+  const kvBudgetGiB = Math.max(0, (hardware.budgetGiB || 0) - modelGiB);
+  let ctx;
+  if (kvBudgetGiB >= 16) ctx = 131072;
+  else if (kvBudgetGiB >= 10) ctx = 65536;
+  else if (kvBudgetGiB >= 5) ctx = 32768;
+  else if (kvBudgetGiB >= 2) ctx = 16384;
+  else ctx = 8192;
+  return ctx;
+}
+
+async function promptContextWindow(rl, hardware, modelName, existing = null) {
+  const auto = autoContextWindow(hardware, modelName);
+  term.summaryBox("Context window (num_ctx)", [
+    "How many tokens the model keeps in context. Larger = more capable, more memory.",
+    `Auto pick for this machine: ${auto.toLocaleString()} tokens`,
+  ]);
+  const choice = await promptWithDefault(rl, "Context window — 1) Auto (from RAM)  2) Manual", existing ? "2" : "1");
+  if (String(choice).trim().startsWith("2")) {
+    const raw = await promptWithDefault(rl, "Context window tokens", String(existing || auto));
+    const n = parseInt(String(raw).replace(/[^0-9]/g, ""), 10);
+    if (Number.isFinite(n) && n >= 1024) return n;
+    term.line("warning", "Invalid value", `Using auto: ${auto.toLocaleString()} tokens.`);
+    return auto;
+  }
+  return auto;
+}
+
 function recommendedOllamaModel(hardware) {
   const coder = OLLAMA_MODEL_CATALOG.filter((model) => model.name.includes("coder"));
   const fitting = coder.filter((model) => model.approxGiB <= hardware.budgetGiB);
@@ -2649,12 +2682,15 @@ async function promptOllamaModelConfig(rl, existingModelConfig = null) {
     recommendedModel,
   );
 
+  const contextWindow = await promptContextWindow(rl, hardware, selectedModel, existingModelConfig?.contextWindow);
+
   return {
     connectionMode: "local-runtime",
     provider: "ollama",
     baseUrl,
     apiKey: "ollama",
     model: selectedModel,
+    contextWindow,
   };
 }
 

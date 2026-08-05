@@ -66,6 +66,7 @@ class Settings:
     configured_model_connection_mode: str | None
     configured_model_provider: str | None
     configured_model_name: str | None
+    configured_context_window: int | None
     config_loaded_at: str
     config_hash: str
     permission_mode: str
@@ -144,6 +145,7 @@ def get_settings() -> Settings:
         configured_model_connection_mode=_resolve_configured_model_connection_mode(runtime_config),
         configured_model_provider=_resolve_configured_model_provider(runtime_config),
         configured_model_name=_resolve_configured_model_name(runtime_config),
+        configured_context_window=_resolve_configured_context_window(runtime_config),
         config_loaded_at=_config_loaded_at(repooperator_config_path),
         config_hash=_safe_config_hash(runtime_config),
         permission_mode=_resolve_permission_mode(runtime_config),
@@ -333,6 +335,22 @@ def _resolve_configured_model_name(runtime_config: dict) -> str | None:
     if not isinstance(model_config, dict):
         return None
     return _normalize_optional_value(model_config.get("model"))
+
+
+def _resolve_configured_context_window(runtime_config: dict) -> int | None:
+    env_value = os.getenv("REPOOPERATOR_CONTEXT_WINDOW")
+    if env_value and str(env_value).strip().isdigit():
+        return int(str(env_value).strip())
+    model_config = runtime_config.get("model")
+    if isinstance(model_config, dict):
+        raw = model_config.get("contextWindow") or model_config.get("context_window")
+        try:
+            value = int(raw)
+            if value >= 1024:
+                return value
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _resolve_model_base_url(runtime_config: dict) -> str | None:

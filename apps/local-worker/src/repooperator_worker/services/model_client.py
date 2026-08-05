@@ -186,6 +186,7 @@ class OpenAICompatibleModelClient:
             payload["tool_choice"] = tool_choice or "auto"
         if max_output_tokens:
             payload["max_tokens"] = int(max_output_tokens)
+        payload.update(self._ollama_options())
         response_payload = _post_json(
             url=self._chat_completions_url,
             payload=payload,
@@ -216,13 +217,26 @@ class OpenAICompatibleModelClient:
         return headers
 
     def _build_payload(self, prompt: ModelGenerationRequest) -> dict:
-        return {
+        payload = {
             "model": self.model_name,
             "messages": [
                 {"role": "system", "content": prompt.system_prompt},
                 {"role": "user", "content": prompt.user_prompt},
             ],
         }
+        payload.update(self._ollama_options())
+        return payload
+
+    def _ollama_options(self) -> dict:
+        """For Ollama, pass the configured context window as num_ctx so the model
+        actually allocates that much KV cache. Only for Ollama — vLLM/remote
+        OpenAI endpoints reject an unknown ``options`` field."""
+        if (self._settings.configured_model_provider or "").lower() != "ollama":
+            return {}
+        window = getattr(self._settings, "configured_context_window", None)
+        if not window:
+            return {}
+        return {"options": {"num_ctx": int(window)}}
 
 
 def _extract_response_text(response_payload: dict) -> str:

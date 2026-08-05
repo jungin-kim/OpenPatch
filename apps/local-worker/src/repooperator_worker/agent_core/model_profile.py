@@ -48,7 +48,15 @@ def detect_model_profile(
     selected_model = model_name or settings.configured_model_name or settings.openai_model or "unknown-model"
     metadata = provider_metadata or {}
     known = _known_profile_for(selected_model)
-    context_window = int(metadata.get("context_window") or known.get("context_window") or _fallback_context_window(selected_model))
+    # An explicit user-configured window (onboarding auto/manual) wins over
+    # provider metadata and built-in profiles.
+    configured_window = getattr(settings, "configured_context_window", None)
+    context_window = int(
+        configured_window
+        or metadata.get("context_window")
+        or known.get("context_window")
+        or _fallback_context_window(selected_model)
+    )
     max_output_tokens = int(metadata.get("max_output_tokens") or known.get("max_output_tokens") or min(8_192, max(1_024, context_window // 8)))
     tokenizer_hint = str(metadata.get("tokenizer_hint") or known.get("tokenizer_hint") or _tokenizer_hint(selected_provider, selected_model))
     strategy = str(metadata.get("compression_strategy") or known.get("compression_strategy") or _compression_strategy(context_window))
