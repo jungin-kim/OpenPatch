@@ -62,13 +62,21 @@ export type EditDetailItem = {
   proposalId?: string | null;
 };
 
+export type ThinkingDetailItem = {
+  kind: "thinking";
+  id: string;
+  label: string;
+  status: string;
+};
+
 export type AgentActivityDetailItem =
   | SearchDetailItem
   | ReadFileDetailItem
   | ListFilesDetailItem
   | CommandDetailItem
   | WebResearchDetailItem
-  | EditDetailItem;
+  | EditDetailItem
+  | ThinkingDetailItem;
 
 export type ActivityGroupItem = {
   kind: "activity_group";

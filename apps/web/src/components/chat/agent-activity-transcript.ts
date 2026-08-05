@@ -414,6 +414,7 @@ export function buildAgentActivityTranscript(
 ): AgentTranscriptSection[] {
   const sections: AgentTranscriptSection[] = [];
   let currentSection: AgentTranscriptSection | null = null;
+  let lastThinking = "";
 
   for (const step of steps) {
     const actionType = getActionType(step);
@@ -433,6 +434,23 @@ export function buildAgentActivityTranscript(
     if (!actionType || !isPrimaryActionStep(step)) continue;
 
     currentSection = ensureSection(currentSection, sections, step, options);
+    // Claude Code / Codex style: surface the reasoning attached to a real
+    // action as an italic "thinking" row right above it. Rationale-only status
+    // notes stay hidden (unchanged contract); consecutive duplicates collapse.
+    const thinking = (step.safeReasoningSummary || "").trim();
+    if (thinking && thinking !== lastThinking) {
+      lastThinking = thinking;
+      upsertDetailItem(
+        currentSection,
+        {
+          kind: "thinking",
+          id: `thinking:${step.activityId || step.id || step.sequence || thinking.slice(0, 24)}`,
+          label: thinking,
+          status: "completed",
+        },
+        step,
+      );
+    }
     appendActionToSection(currentSection, step, actionType, options);
   }
 

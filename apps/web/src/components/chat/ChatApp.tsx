@@ -247,11 +247,23 @@ export function ChatApp() {
     rememberActiveRun(null, threadId);
     setQuestionPending(false);
     if (finalResult) {
+      // A change-set proposal must render as a ProposalCard (Apply / Reject),
+      // including after reload while the run waits for approval.
+      const proposal =
+        finalResult.response_type === "change_proposal" &&
+        (finalResult.change_set_proposal?.changes?.length || finalResult.proposal_relative_path) &&
+        repoResultRef.current
+          ? proposalFromRunPayload(finalResult, {
+              projectPath: repoResultRef.current.project_path,
+              branch: repoResultRef.current.branch,
+            })
+          : undefined;
       setMessages((current) => {
         const next = upsertAssistantMessageForRun(current, finalResult.run_id || runId, {
           content: finalResult.response,
           timestamp: new Date(),
           metadata: finalResult,
+          proposal,
           progressSteps: completedSteps.length > 0 ? completedSteps : undefined,
         });
         updateThreadMessages(threadId, next);
@@ -509,6 +521,14 @@ export function ChatApp() {
         }
         lastRehydratedRef.current = { repoIdentity, threadId, runId, maxSequence, status };
         activeRunLastSequenceRef.current[runId] = maxSequence;
+        // A run paused for approval already has its final result (the proposal).
+        // Finalize the UI so the ProposalCard (Apply / Reject) shows instead of
+        // an endless pending state.
+        if (status === "waiting_approval" && finalResult) {
+          const completedSteps = progressStepsForCompletedRun(events, finalResult);
+          finalizeRunInUi(runId, threadId, finalResult, completedSteps);
+          return;
+        }
         if (isActiveRunStatus(run.status)) {
           setProgressSteps(mergeRunEventsIntoProgressSteps(events, finalResult));
           setStreamedAnswer(assistantTextFromRunEvents(events, null));
@@ -563,8 +583,13 @@ export function ChatApp() {
           if (cancelled) return;
           const events = eventPayload.events as AgentRunEvent[];
           activeRunLastSequenceRef.current[activeRunId] = Math.max(afterSequence, maxEventSequence(events));
-          if (!isActiveRunStatus(run.status)) {
-            const completedEventPayload = run.final_result
+          // waiting_approval = a proposal awaiting the user. The run record's
+          // final_result is not set while paused, but the final_message event
+          // exists — refetch the full event history and finalize so the
+          // ProposalCard renders instead of polling forever.
+          const pausedForApproval = String(run.status || "") === "waiting_approval";
+          if (!isActiveRunStatus(run.status) || pausedForApproval) {
+            const completedEventPayload = run.final_result || pausedForApproval
               ? await getAgentRunEvents(activeRunId, 0)
               : eventPayload;
             const completedEvents = completedEventPayload.events as AgentRunEvent[];
@@ -609,6 +634,9 @@ export function ChatApp() {
         if (cancelled) return;
         const nextActiveRunByThread: Record<string, string> = {};
         for (const run of activeRunsPayload.runs) {
+          // waiting_approval is the *user's* turn (ProposalCard is showing) —
+          // don't mark the thread as running/pending for it.
+          if (String(run.status || "") === "waiting_approval") continue;
           if (run.thread_id && isActiveRunStatus(run.status)) nextActiveRunByThread[run.thread_id] = run.id;
         }
         if (Object.keys(nextActiveRunByThread).length > 0) {
@@ -1271,6 +1299,10 @@ export function ChatApp() {
         } else if (event.type === "final_message") {
           payload = event.result;
           rememberActiveRun(null, runThreadId);
+          // A run that pauses for approval (e.g. a change-set proposal) keeps
+          // its SSE stream open ([DONE] never arrives), so stop reading here —
+          // the payload below renders the ProposalCard with Apply/Reject.
+          break;
         } else if (event.type === "error") {
           throw new Error(event.message);
         }

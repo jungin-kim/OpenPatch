@@ -2407,6 +2407,10 @@ select {
 /* Detail items */
 .agent-detail-item {
   display: flex;
+  /* Allow the full-width safety note (flex-basis: 100%) to wrap onto its own
+     line — without this it crushes the file label to ~1ch and renders it
+     vertically. */
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 7px;
   padding: 4px 10px 4px 26px;
@@ -2444,6 +2448,17 @@ select {
   font-size: 0.68rem;
   color: #c58b22;
   overflow-wrap: anywhere;
+}
+
+/* Intermediate reasoning ("thinking") rows — italic, muted, no status column */
+.agent-detail-thinking .agent-detail-icon {
+  color: var(--accent);
+}
+
+.agent-detail-thinking-text {
+  font-family: inherit;
+  font-style: italic;
+  color: var(--muted);
 }
 
 .agent-detail-search .agent-detail-desc,

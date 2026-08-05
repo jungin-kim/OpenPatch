@@ -283,8 +283,11 @@ describe("buildAgentActivityTranscript sections", () => {
 
     expect(sections).toHaveLength(1);
     expect(sections[0].statusText).toBe("Working");
-    expect(sections[0].details).toHaveLength(1);
-    expect(sections[0].details[0]).toMatchObject({ kind: "read_file", files: ["README.md"] });
+    // Reasoning attached to a real action surfaces as a "thinking" row above it
+    // (Claude Code / Codex style), followed by the concrete detail row.
+    expect(sections[0].details).toHaveLength(2);
+    expect(sections[0].details[0]).toMatchObject({ kind: "thinking", label: "I will read the README before answering." });
+    expect(sections[0].details[1]).toMatchObject({ kind: "read_file", files: ["README.md"] });
   });
 
   it("low-value repository inspection becomes list detail but not a status note", () => {

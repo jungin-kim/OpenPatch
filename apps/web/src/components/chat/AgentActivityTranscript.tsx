@@ -70,6 +70,14 @@ function DetailItemRow({ item }: { item: AgentActivityDetailItem }) {
   } else if (item.kind === "edit") {
     icon = "✎";
     desc = item.files.length > 0 ? item.files.join(", ") : item.label;
+  } else if (item.kind === "thinking") {
+    // Intermediate reasoning line (Claude Code / Codex style) — italic, no status.
+    return (
+      <li className="agent-detail-item agent-detail-thinking">
+        <span className="agent-detail-icon" aria-hidden="true">✳</span>
+        <span className="agent-detail-desc agent-detail-thinking-text">{item.label}</span>
+      </li>
+    );
   } else {
     icon = "·";
     desc = item.path ? `list: ${item.path}` : item.label;

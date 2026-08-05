@@ -202,11 +202,19 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
 
     def generate() -> Iterator[str]:
         last_sequence = 0
+        saw_final = False
         while True:
             events = list_run_events(run_id, after_sequence=last_sequence)
             for event in events:
                 last_sequence = int(event.get("sequence") or last_sequence)
+                if event.get("type") == "final_message":
+                    saw_final = True
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if saw_final:
+                # The final result (possibly a waiting-for-approval proposal) is
+                # delivered; close the stream instead of polling forever while
+                # the run sits in waiting_approval.
+                break
             if not events:
                 deferred = take_deferred_stream_finalization()
                 if deferred is not None:
