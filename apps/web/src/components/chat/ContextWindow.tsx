@@ -14,15 +14,10 @@ type Snapshot = {
 
 type Segment = { key: string; label: string; tokens: number; color: string };
 
-const COLORS = {
-  messages: "#4F46E5",
-  repo_context: "#7C3AED",
-  system_tools: "#6D5EFC",
-  mcp_tools: "#8B5CF6",
-  system_prompt: "#5B4FF0",
-  skills: "#A78BFA",
-  free: "var(--border-strong, #3a3f4b)",
-};
+// Saturation ramp, darkest/most-saturated first. Assigned by rank so the
+// largest component is the most saturated and shares fade lighter going down.
+const RAMP = ["#4338CA", "#4F46E5", "#6D28D9", "#7C3AED", "#8B5CF6", "#A78BFA"];
+const FREE_COLOR = "var(--border-strong, #3a3f4b)";
 
 function fmt(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
@@ -86,14 +81,22 @@ export function ContextWindow({ messageTokens, threadId }: { messageTokens: numb
   const free = Math.max(0, windowSize - used);
   const pct = Math.min(100, Math.round((used / windowSize) * 100));
 
+  // Content components sorted by share (descending); color assigned by rank so
+  // the biggest is the most saturated. Free space always sits last, in grey.
+  const contentSegments = [
+    { key: "messages", label: "Messages", tokens: messageTokens },
+    { key: "repo_context", label: "Repo context", tokens: repoContext },
+    { key: "system_tools", label: "System tools", tokens: cmp.system_tools },
+    { key: "mcp_tools", label: "MCP tools", tokens: cmp.mcp_tools },
+    { key: "system_prompt", label: "System prompt", tokens: cmp.system_prompt },
+    { key: "skills", label: "Skills", tokens: cmp.skills },
+  ]
+    .sort((a, b) => b.tokens - a.tokens)
+    .map((s, i) => ({ ...s, color: RAMP[Math.min(i, RAMP.length - 1)] }));
+
   const segments: Segment[] = [
-    { key: "messages", label: "Messages", tokens: messageTokens, color: COLORS.messages },
-    { key: "repo_context", label: snap.repo_context_actual ? "Repo context" : "Repo context (max)", tokens: repoContext, color: COLORS.repo_context },
-    { key: "system_tools", label: "System tools", tokens: cmp.system_tools, color: COLORS.system_tools },
-    { key: "mcp_tools", label: "MCP tools", tokens: cmp.mcp_tools, color: COLORS.mcp_tools },
-    { key: "system_prompt", label: "System prompt", tokens: cmp.system_prompt, color: COLORS.system_prompt },
-    { key: "skills", label: "Skills", tokens: cmp.skills, color: COLORS.skills },
-    { key: "free", label: "Free space", tokens: free, color: COLORS.free },
+    ...contentSegments,
+    { key: "free", label: "Free space", tokens: free, color: FREE_COLOR },
   ];
   const deferred = [
     { key: "mcp_deferred", label: "MCP tools (deferred)", tokens: snap.deferred.mcp_tools },

@@ -33,9 +33,10 @@ def context_window_snapshot(thread_id: str | None = None) -> dict[str, Any]:
     mcp_tools_tokens, mcp_tools_deferred = _mcp_tokens()
     skills_tokens = _skills_tokens()
 
-    # Prefer the actual repo-context tokens from this chat's most recent run;
-    # fall back to the per-model budget (max) before any run has packed context.
-    repo_context_tokens = _repo_context_budget_tokens(profile)
+    # Show the ACTUAL repo-context tokens from this chat's most recent run.
+    # Before any run has packed context there is no real usage yet, so we show
+    # 0 (Claude Code / Codex style — measured usage only, not a reserved budget).
+    repo_context_tokens = 0
     repo_context_actual = False
     usage = _thread_context_usage(thread_id)
     if usage and usage.get("input_tokens"):
@@ -69,22 +70,6 @@ def _thread_context_usage(thread_id: str | None) -> dict[str, Any] | None:
         return get_context_usage(thread_id)
     except Exception:
         return None
-
-
-def _repo_context_budget_tokens(profile: Any) -> int:
-    """Tokens the packer reserves for repository file context (the dominant real
-    input). Mirrors context_packer._budget_for so the gauge reflects what a run
-    actually sends, not just fixed overhead. Auto-compaction keeps runs within
-    this budget (files beyond it are summarized/omitted)."""
-    window = int(getattr(profile, "context_window", 0) or 0)
-    strategy = getattr(profile, "compression_strategy", "") or ""
-    if strategy == "aggressive" or (window and window <= 32_000):
-        max_chars = 24_000
-    elif strategy == "generous" or window >= 200_000:
-        max_chars = 160_000
-    else:
-        max_chars = 72_000
-    return _tokens("x" * max_chars)
 
 
 def _system_prompt_tokens() -> int:
