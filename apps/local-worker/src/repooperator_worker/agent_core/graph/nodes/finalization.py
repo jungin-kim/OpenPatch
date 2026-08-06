@@ -455,6 +455,20 @@ def _task_is_korean(request: Any) -> bool:
 
 
 _QUESTION_MARKERS = ("?", "까요", "나요", "주시겠어요", "해주세요", "알려주세요", "please confirm", "could you")
+# A concrete question ("…은 어떻게 동작해?", "where is X handled?") — clear
+# enough to answer or to say honestly that it isn't in the repository.
+_SPECIFIC_QUESTION_RE = re.compile(
+    r"어떻게\s*(동작|작동|처리|구현)|어디에?\s*(있|구현|처리)|무엇을\s*하|뭘\s*하|왜\s|"
+    r"how (does|do|is|are)\b|where (is|are|does)\b|what (does|do|is|are)\b",
+    re.IGNORECASE,
+)
+_VAGUE_REFERENT_RE = re.compile(r"^\s*(그거|저거|이거|그것|it|that|this)\b")
+
+
+def _is_specific_question(text: str) -> bool:
+    if not text or _VAGUE_REFERENT_RE.match(text):
+        return False
+    return bool(_SPECIFIC_QUESTION_RE.search(text))
 # Meta-narration about asking, without actually asking ("…질문합니다").
 _ASKING_NARRATION_RE = re.compile(r"질문합니다|질문해야|질문을 던져|clarifying question|명확히 하기 위해|묻겠습니다")
 
@@ -492,6 +506,22 @@ def _ensure_actual_question(text: str, request: Any, *, korean: bool) -> str:
     if any(marker in text or marker in lowered for marker in _QUESTION_MARKERS):
         return text
     goal = str(getattr(request, "task", "") or "").strip()
+    # A specific question about something that isn't in the repo ("음성채팅 녹음
+    # 기능은 어떻게 동작해?") deserves an honest "that isn't here", not a
+    # clarification prompt — the request itself was perfectly clear.
+    if _is_specific_question(goal):
+        if korean:
+            return (
+                f'"{goal[:80]}"에 해당하는 기능은 이 저장소에서 찾지 못했습니다. '
+                "현재 코드에 구현되어 있지 않은 것으로 보입니다.\n\n"
+                "제가 확인한 범위에서 관련 있어 보이는 부분을 알려드리거나, 이 기능을 새로 추가하는 계획을 세워드릴 수 있어요. "
+                "어느 쪽을 원하시나요?"
+            )
+        return (
+            f'I could not find anything matching "{goal[:80]}" in this repository — it does not appear to be '
+            "implemented in the current code.\n\nI can point you at the closest related code, or draft a plan to add it. "
+            "Which would you prefer?"
+        )
     goal_part = f' "{goal[:80]}"' if goal else ""
     if korean:
         return (
