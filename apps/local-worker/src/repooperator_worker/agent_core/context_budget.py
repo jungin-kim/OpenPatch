@@ -40,6 +40,34 @@ def estimate_chars(value: Any) -> int:
         return len(str(value))
 
 
+def _head_and_tail(text: str, keep: int) -> str:
+    """Keep the start AND end of an over-budget file.
+
+    Head-only truncation hid everything at the bottom of a file — module-level
+    constants, __main__ blocks, exports, late class definitions — so questions
+    about them looked unanswerable even though the file had been "read".
+    """
+    if keep <= 0:
+        return ""
+    if len(text) <= keep:
+        return text
+    marker_template = "\n\n… [truncated {n} chars of {path_hint}] …\n\n"
+    marker = marker_template.format(n=len(text) - keep, path_hint="this file")
+    if keep <= len(marker) + 40:
+        return text[:keep]
+    budget = keep - len(marker)
+    head_chars = (budget * 2) // 3
+    tail_chars = budget - head_chars
+    head = text[:head_chars]
+    tail = text[-tail_chars:] if tail_chars > 0 else ""
+    # Snap to line boundaries so we don't split tokens mid-identifier.
+    if "\n" in head:
+        head = head[: head.rfind("\n") + 1]
+    if "\n" in tail:
+        tail = tail[tail.find("\n") + 1 :]
+    return head + marker + tail
+
+
 def compact_file_contents(
     file_contents: dict[str, str],
     budget: ContextBudget,
@@ -66,7 +94,7 @@ def compact_file_contents(
             summary = summarize_large_text_deterministic(path, text)
             summaries[path] = summary
             keep = max(0, min(per_file, available - total))
-            included[path] = text[:keep]
+            included[path] = _head_and_tail(text, keep)
             total += len(included[path])
             omitted.append({"path": path, "reason": "file_truncated", "chars": len(text), "included_chars": keep})
             compacted = True

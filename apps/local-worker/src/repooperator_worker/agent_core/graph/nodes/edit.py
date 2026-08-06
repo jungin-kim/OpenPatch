@@ -330,7 +330,9 @@ def edit_validate_change_set_node(state: RepoOperatorGraphState) -> dict[str, An
         ) or "skipped",
         "proposal_status": (proposal.get("status") if proposal else None) or (latest.status if latest else "skipped"),
         "action_id": latest.action_id if latest else None,
-        "errors": list((proposal.get("validation") or {}).get("errors") or []),
+        # proposal is None when the model produced no usable edit — this line
+        # used to crash the whole run with "'NoneType' has no attribute 'get'".
+        "errors": list(((proposal.get("validation") if proposal else None) or {}).get("errors") or []),
     }
     return {
         "change_set_proposal": proposal or state.get("change_set_proposal"),
