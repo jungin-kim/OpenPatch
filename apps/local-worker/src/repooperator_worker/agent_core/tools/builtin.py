@@ -1945,6 +1945,12 @@ def common_proposal_validation_error(relative_path: str, original: str, proposed
     original_declarations = primary_declarations(relative_path, original)
     proposed_declarations = primary_declarations(relative_path, proposed)
     missing = sorted(set(original_declarations) - set(proposed_declarations))
+    added = sorted(set(proposed_declarations) - set(original_declarations))
+    if missing and added and mentions_rename_intent(task):
+        # A rename legitimately removes the old declaration and adds a new one
+        # ("add 함수 이름을 plus로 바꿔줘") — do not veto it as an unjustified
+        # removal. The proposal is still user-approved before anything applies.
+        missing = []
     if missing and not mentions_removal_justification(task, "", missing):
         return "proposal removes primary declarations without justification: " + ", ".join(missing[:6])
     original_lines = max(1, len(original.splitlines()))
@@ -2156,6 +2162,13 @@ def extract_source_structure(relative_path: str, content: str) -> dict[str, list
         "public_members": _dedupe_strings([*public_methods, *public_fields]),
         "serialized_or_public_fields": _dedupe_strings(serialized_or_public),
     }
+
+
+_RENAME_INTENT_RE = re.compile(r"rename|이름|바꿔|바꾸|변경", re.IGNORECASE)
+
+
+def mentions_rename_intent(task: str) -> bool:
+    return bool(_RENAME_INTENT_RE.search(task or ""))
 
 
 def mentions_removal_justification(task: str, risk_text: str, names: list[str]) -> bool:

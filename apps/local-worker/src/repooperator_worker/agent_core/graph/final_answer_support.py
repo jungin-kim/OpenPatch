@@ -51,6 +51,16 @@ def build_final_answer_text(
         return _format_edit_proposal(edit_proposal)
     proposal_error = _latest_proposal_error(state)
     if proposal_error:
+        try:
+            from repooperator_worker.services.response_quality_service import user_prefers_korean
+
+            if user_prefers_korean(str(getattr(request, "task", "") or "")):
+                return (
+                    "검증을 통과한 제안 패치를 만들지 못했습니다. "
+                    f"사유: {proposal_error}. 파일은 수정되지 않았습니다."
+                )
+        except Exception:
+            pass
         return (
             "I could not prepare a validated proposal-only patch. "
             f"Reason: {proposal_error}. No files were modified."
@@ -60,7 +70,13 @@ def build_final_answer_text(
         return _format_command_result(command_result, pending_commit=pending_commit_context(build_task_frame(request, state)))
     if _is_broad_analysis_request(build_task_frame(request, state)) and state.files_read:
         return _format_broad_analysis_answer(state, request)
-    if state.stop_reason in {"failed", "timed_out", "max_loop_iterations", "max_file_reads", "max_commands"}:
+    if state.stop_reason in {"failed", "timed_out"}:
+        return _build_evidence_limited_answer(state, request)
+    if state.stop_reason in {"max_loop_iterations", "max_file_reads", "max_commands"} and not state.files_read and not state.commands_run:
+        # Budget exhausted with nothing gathered — be honest about it. But when
+        # files WERE read before the cap, fall through to model synthesis: a
+        # budget cap is not a reason to discard real evidence ("read calc.py,
+        # big_module.py" followed by "근거가 부족합니다" reads as a malfunction).
         return _build_evidence_limited_answer(state, request)
     contents: dict[str, str] = {}
     for result in state.action_results:
