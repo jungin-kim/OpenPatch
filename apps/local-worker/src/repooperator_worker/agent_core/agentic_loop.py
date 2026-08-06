@@ -186,15 +186,17 @@ def propose_next_action_with_tool_calling(
     ):
         return None
     # Run-command gate: "python calc.py 실행해줘" must reach the command
-    # approval flow, not end as a description of the file. Defer final_answer
-    # to the deterministic command chooser while the requested command has
-    # neither run nor been gated for approval.
-    if action is not None and action.type == "final_answer":
+    # approval flow — not end as a description of the file, and not detour
+    # into edit generation (the model sometimes "checks" a script by editing
+    # it). While the requested command has neither run nor been gated, defer
+    # everything except command actions to the deterministic command chooser.
+    if action is not None and action.type not in {"preview_command", "run_approved_command", "run_validation_command", "request_command_approval", "inspect_git_state"}:
         try:
-            from repooperator_worker.agent_core.planner import command_needed_for_text
+            from repooperator_worker.agent_core.planner import command_needed_for_text, edit_requested_text
 
-            needed = command_needed_for_text(str(getattr(task_frame, "user_goal", "") or ""))
-            if needed and not _has_command_evidence(state, needed):
+            goal = str(getattr(task_frame, "user_goal", "") or "")
+            needed = command_needed_for_text(goal)
+            if needed and not edit_requested_text(goal) and not _has_command_evidence(state, needed):
                 return None
         except Exception:
             pass
