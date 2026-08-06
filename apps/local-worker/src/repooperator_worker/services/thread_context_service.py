@@ -43,11 +43,46 @@ class ThreadContext:
     last_target_candidates: list[dict[str, Any]] = field(default_factory=list)
     last_evidence_basis: list[dict[str, Any]] = field(default_factory=list)
     last_user_understanding_context: dict[str, Any] | None = None
+    last_user_task: str | None = None
     context_source: str = "retrieval"
 
     @property
     def symbol_names(self) -> list[str]:
         return sorted(self.symbols)
+
+
+_ANAPHORIC_TASK_RE = re.compile(
+    r"똑같이|마찬가지|같은\s*(?:거|것|방식|작업)|그대로\s*(?:해|적용)|do the same|same thing|likewise",
+    re.IGNORECASE,
+)
+
+
+def expand_anaphoric_task(request: AgentRunRequest) -> AgentRunRequest:
+    """Resolve "이제 multiply에도 똑같이 해줘"-style tasks before the run starts.
+
+    "똑같이/마찬가지로" refers to the PREVIOUS user request, which lives in the
+    conversation history (web client) or the durable thread context (API
+    callers). Without this the run has no idea what "the same" means and asks
+    the user to repeat themselves.
+    """
+    task = str(request.task or "")
+    if not _ANAPHORIC_TASK_RE.search(task):
+        return request
+    previous = ""
+    for message in reversed(request.conversation_history or []):
+        content = (getattr(message, "content", "") or "").strip()
+        if getattr(message, "role", "") == "user" and content and content != task.strip():
+            previous = content
+            break
+    if not previous:
+        durable = _load_durable_context(request)
+        candidate = (durable.last_user_task or "").strip() if durable else ""
+        if candidate and candidate != task.strip():
+            previous = candidate
+    if not previous:
+        return request
+    merged = f"{task}\n(참고: '똑같이'는 직전 요청과 같은 작업을 뜻합니다. 직전 요청: {previous[:300]})"
+    return request.model_copy(update={"task": merged})
 
 
 def build_thread_context(request: AgentRunRequest) -> ThreadContext:
@@ -134,6 +169,8 @@ def update_thread_context(request: AgentRunRequest, response: Any) -> None:
     for symbol in getattr(response, "resolved_symbols", []) or []:
         if context.recent_files:
             context.symbols.setdefault(str(symbol), context.recent_files[0])
+    if (request.task or "").strip():
+        context.last_user_task = request.task.strip()[:500]
     context.context_source = "durable_thread"
     _save_durable_context(request.thread_id, context)
 
@@ -218,6 +255,7 @@ def _load_durable_context(request: AgentRunRequest) -> ThreadContext | None:
         last_target_candidates=[item for item in payload.get("last_target_candidates", []) if isinstance(item, dict)],
         last_evidence_basis=[item for item in evidence_basis or [] if isinstance(item, dict)],
         last_user_understanding_context=payload.get("last_user_understanding_context") if isinstance(payload.get("last_user_understanding_context"), dict) else None,
+        last_user_task=payload.get("last_user_task") if isinstance(payload.get("last_user_task"), str) else None,
         context_source="durable_thread",
     )
 
@@ -237,6 +275,7 @@ def _save_durable_context(thread_id: str, context: ThreadContext) -> None:
         "last_target_candidates": context.last_target_candidates[:20],
         "last_evidence_basis": context.last_evidence_basis[:20],
         "last_user_understanding_context": context.last_user_understanding_context,
+        "last_user_task": context.last_user_task,
     }
     _thread_context_path(thread_id).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

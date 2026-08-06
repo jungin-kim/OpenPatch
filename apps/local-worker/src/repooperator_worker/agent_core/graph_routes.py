@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -106,6 +107,12 @@ def _next_missing_file_action(state: AgentCoreState, request: AgentRunRequest, f
     from repooperator_worker.agent_core.intent import extract_urls
 
     if extract_urls(getattr(request, "task", "") or ""):
+        return None
+    # A create request ("utils.py 파일을 새로 만들어서 …", "create a new config.json")
+    # names a file that SHOULD NOT exist yet — that is not a missing file, it is
+    # the edit flow's job. Don't hijack it with "utils.py 파일을 찾지 못했어요".
+    task_text = str(getattr(request, "task", "") or "")
+    if re.search(r"만들어|만들 |생성해|생성하|새로 |새 파일|create|new file", task_text, re.IGNORECASE):
         return None
     mentioned = [str(f).strip().lstrip("/") for f in getattr(frame, "mentioned_files", []) or [] if str(f).strip()]
     # Only treat tokens that look like real filenames (have an extension) as

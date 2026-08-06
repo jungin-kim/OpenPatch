@@ -2173,7 +2173,10 @@ def mentions_rename_intent(task: str) -> bool:
 
 def mentions_removal_justification(task: str, risk_text: str, names: list[str]) -> bool:
     lowered_task = (task or "").lower()
-    if "remove" in lowered_task or "delete" in lowered_task or "\uc81c\uac70" in task:
+    if "remove" in lowered_task or "delete" in lowered_task:
+        return True
+    # Korean removal verbs: \uc81c\uac70, \uc0ad\uc81c, \uc9c0\uc6cc/\uc9c0\uc6b0 ("subtract \ud568\uc218 \uc9c0\uc6cc\uc918").
+    if any(marker in task for marker in ("\uc81c\uac70", "\uc0ad\uc81c", "\uc9c0\uc6cc", "\uc9c0\uc6b0")):
         return True
     return any(name.lower() in risk_text for name in names) and any(word in risk_text for word in ("remove", "rename", "delete", "drop"))
 
