@@ -148,6 +148,23 @@ def _build_evidence_limited_answer(state: AgentCoreState, request: AgentRunReque
     elif not state.files_read and not state.commands_run:
         missing.append("no repository file or command evidence was gathered")
 
+    korean = False
+    try:
+        from repooperator_worker.services.response_quality_service import user_prefers_korean
+
+        korean = user_prefers_korean(str(getattr(request, "task", "") or ""))
+    except Exception:
+        korean = False
+    if korean:
+        lines = ["아직 근거가 충분히 확보되지 않아 확정적인 답을 드리기 어렵습니다."]
+        lines.append("확인한 것: " + (("; ".join(checked)) if checked else "완료된 저장소 근거가 없습니다."))
+        if missing:
+            lines.append("부족한 근거: " + "; ".join(_dedupe_text(missing)) + ".")
+        if edit_requested(frame):
+            lines.append("다음 단계: 수정할 파일을 확정해 주시거나, 제가 엔트리포인트를 읽고 제안용 패치를 준비하도록 계속 진행 여부를 알려주세요.")
+        else:
+            lines.append("다음 단계: 살펴볼 파일이나 작업을 알려주시면 이어서 조사하겠습니다.")
+        return "\n".join(lines)
     lines = ["I do not have enough confirmed evidence to give a final implementation answer yet."]
     lines.append("Checked: " + (("; ".join(checked)) if checked else "no completed repository evidence."))
     if missing:

@@ -216,13 +216,21 @@ def _looks_read_only(task_frame: Any) -> bool:
 
 
 def _is_change_request(task_frame: Any) -> bool:
-    """Whether the task asks to modify the repository (vs. only explain/read)."""
+    """Whether the task asks to modify the repository (vs. only explain/read).
+
+    Gate on the USER'S OWN WORDS only (edit_requested_text). The broader
+    edit_requested(frame) also fires from weak model tool-hints, which kept
+    misclassifying plain questions ("관리자 명령어 뭐 있어?") as change requests
+    — the gate then blocked final_answer until the loop budget ran out and the
+    user got an "insufficient evidence" template.
+    """
     try:
-        from repooperator_worker.agent_core.planner import edit_requested
+        from repooperator_worker.agent_core.planner import edit_requested_text
 
         if _looks_read_only(task_frame):
             return False
-        return bool(edit_requested(task_frame))
+        text = str(getattr(task_frame, "user_goal", "") or "")
+        return bool(edit_requested_text(text))
     except Exception:
         return False
 

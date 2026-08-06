@@ -163,10 +163,17 @@ def final_build_response_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     core.final_response = validate_or_repair_final_answer(core.final_response, core, request)
     if _is_explanation_only_edit_request(state) and not state.get("files_changed") and "no files were modified" not in core.final_response.lower():
         core.final_response = core.final_response.rstrip() + "\n\nNo files were modified."
+    # Clarification backstop: if the answer *narrates* that it should ask a
+    # question ("…질문합니다") without actually asking one, replace it with a
+    # real question the user can answer.
+    if _ASKING_NARRATION_RE.search(core.final_response) and not any(
+        m in core.final_response or m in core.final_response.lower() for m in _QUESTION_MARKERS
+    ):
+        core.final_response = _ensure_actual_question("", request, korean=_task_is_korean(request))
     # Honesty backstop: never let the answer claim an edit was applied when no
     # file actually changed. This catches the failure mode where the model
     # narrates a change ("the docstring has been added") without applying it.
-    elif not state.get("files_changed") and _claims_edit_applied(core.final_response):
+    if not state.get("files_changed") and _claims_edit_applied(core.final_response):
         core.final_response = (
             core.final_response.rstrip()
             + "\n\n⚠️ Note: no files were actually modified on disk. "
@@ -426,7 +433,9 @@ def _task_is_korean(request: Any) -> bool:
         return False
 
 
-_QUESTION_MARKERS = ("?", "까요", "나요", "ㄹ까요", "주시겠어요", "어떤", "which", "what", "please confirm", "could you")
+_QUESTION_MARKERS = ("?", "까요", "나요", "주시겠어요", "해주세요", "알려주세요", "please confirm", "could you")
+# Meta-narration about asking, without actually asking ("…질문합니다").
+_ASKING_NARRATION_RE = re.compile(r"질문합니다|질문해야|질문을 던져|clarifying question|명확히 하기 위해|묻겠습니다")
 
 
 def _ensure_actual_question(text: str, request: Any, *, korean: bool) -> str:
