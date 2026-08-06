@@ -100,7 +100,7 @@ def _next_missing_file_action(state: AgentCoreState, request: AgentRunRequest, f
     fires when resolution finds nothing at all for the named files.
     """
     mentioned = [str(f).strip().lstrip("/") for f in getattr(frame, "mentioned_files", []) or [] if str(f).strip()]
-    if not mentioned or getattr(state, "actions_taken", None):
+    if not mentioned:
         return None
     try:
         resolved = resolve_target_files(request, mentioned, preferred=known_context_files(request, state))
@@ -108,6 +108,17 @@ def _next_missing_file_action(state: AgentCoreState, request: AgentRunRequest, f
         return None
     if resolved:
         return None
+    # Contract: search the repository for the missing names first (the file may
+    # exist under another path); only ask once the search came up empty.
+    searched = any(getattr(a, "type", None) == "search_files" for a in getattr(state, "actions_taken", []) or [])
+    if not searched:
+        from pathlib import Path as _Path
+
+        return AgentAction(
+            type="search_files",
+            reason_summary="Search for the named files before concluding they are missing.",
+            payload={"queries": [_Path(f).name for f in mentioned]},
+        )
     return AgentAction(
         type="ask_clarification",
         reason_summary="Named files do not exist in this repository.",
