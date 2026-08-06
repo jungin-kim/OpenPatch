@@ -32,16 +32,29 @@ def ask_clarification_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     action = _pending_action(state)
     request = _request(state)
     core = _core_state_from_graph(state)
+    korean = _task_is_korean(request)
     missing = ", ".join(action.payload.get("missing_files") or []) if action else ""
     final_response = (
         action.payload.get("question")
         if action
         else None
     ) or core.classifier_result.clarification_question or (
-        f"I could not find {missing}. Please confirm the repo-relative path or choose one of the candidates I found."
+        (
+            f"{missing} 파일을 찾지 못했어요. 정확한 경로를 알려주시거나 제가 찾은 후보 중에서 골라주시겠어요?"
+            if korean
+            else f"I could not find {missing}. Please confirm the repo-relative path or choose one of the candidates I found."
+        )
         if missing
-        else "Could you clarify which files or workflow you want me to inspect?"
+        else (
+            "어떤 파일이나 작업을 원하시는지 조금 더 구체적으로 알려주시겠어요?"
+            if korean
+            else "Could you clarify which files or workflow you want me to inspect?"
+        )
     )
+    # The model sometimes puts its *reasoning* in the question slot ("구체적인
+    # 설명이 부족하여 clarifying question를 던져야 합니다"). A clarification the
+    # user sees must actually ask something — if it doesn't, ask a real question.
+    final_response = _ensure_actual_question(str(final_response), request, korean=korean)
     del request
     update = {
             "stop_reason": "needs_clarification",
@@ -115,10 +128,26 @@ def final_build_response_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     if proposal and proposal.get("changes") and proposal.get("status") in {"invalid", "repairable", "blocked"}:
         validation = proposal.get("validation") if isinstance(proposal.get("validation"), dict) else {}
         errors = "; ".join(str(item) for item in validation.get("errors") or [proposal.get("proposal_error")] if item)
-        core.final_response = (
-            "I could not prepare a valid ChangeSetProposal. "
-            f"Validation failed: {errors or 'unknown validation error'}. No files were modified."
-        )
+        # Speak the user's language and propose the next step instead of dumping
+        # an internal validation error.
+        attempted = [str(c.get("path")) for c in proposal.get("changes") or [] if isinstance(c, dict) and c.get("path")]
+        real_files = [str(item) for item in (state.get("files_read") or [])][:5]
+        if _task_is_korean(request):
+            core.final_response = (
+                "제안한 변경을 검증하는 과정에서 문제가 있어 파일을 수정하지 않았습니다.\n\n"
+                + (f"- 시도한 대상: {', '.join(attempted[:5])}\n" if attempted else "")
+                + (f"- 이 저장소에서 확인된 파일: {', '.join(real_files)}\n" if real_files else "")
+                + f"- 원인: {errors or '알 수 없는 검증 오류'}\n\n"
+                "수정할 파일을 지정해서 다시 요청해 주시겠어요? (예: \"main.py에 실명 메시지 명령어 추가해줘\")"
+            )
+        else:
+            core.final_response = (
+                "I prepared a change but its validation failed, so no files were modified.\n\n"
+                + (f"- Attempted targets: {', '.join(attempted[:5])}\n" if attempted else "")
+                + (f"- Files that exist here: {', '.join(real_files)}\n" if real_files else "")
+                + f"- Reason: {errors or 'unknown validation error'}\n\n"
+                "Could you point me at the file to change and ask again? (e.g. \"add the command to main.py\")"
+            )
     if not core.final_response:
         on_delta = _stream_final_delta(core.run_id) if state.get("stream_final_answer") else None
         packet_context = ""
@@ -387,6 +416,37 @@ def _is_explanation_only_edit_request(state: RepoOperatorGraphState) -> bool:
     asks_how = bool(re.search(r"\bhow\s+(would|do|can|should)\b", lowered)) or any(term in text for term in ("어떻게", "어떤 식으로"))
     mentions_change = bool(re.search(r"\b(change|edit|add|fix|implement|refactor|update)\b", lowered)) or any(term in text for term in ("추가", "고쳐", "구현", "수정"))
     return asks_how and mentions_change
+
+def _task_is_korean(request: Any) -> bool:
+    try:
+        from repooperator_worker.services.response_quality_service import user_prefers_korean
+
+        return user_prefers_korean(str(getattr(request, "task", "") or ""))
+    except Exception:
+        return False
+
+
+_QUESTION_MARKERS = ("?", "까요", "나요", "ㄹ까요", "주시겠어요", "어떤", "which", "what", "please confirm", "could you")
+
+
+def _ensure_actual_question(text: str, request: Any, *, korean: bool) -> str:
+    """Guarantee the clarification shown to the user actually asks something."""
+    lowered = text.lower()
+    if any(marker in text or marker in lowered for marker in _QUESTION_MARKERS):
+        return text
+    goal = str(getattr(request, "task", "") or "").strip()
+    goal_part = f' "{goal[:80]}"' if goal else ""
+    if korean:
+        return (
+            f"요청하신 내용{goal_part}을 진행하기 전에 확인이 필요해요. "
+            "어떤 동작을 원하시는지 조금 더 구체적으로 알려주시겠어요? "
+            "(예: 어떤 명령어 이름으로, 어떤 사용자에게, 어떤 형식으로 동작해야 하는지)"
+        )
+    return (
+        f"Before I proceed with{goal_part or ' this request'}, could you describe the expected behavior "
+        "a bit more concretely? (e.g. command name, target users, exact behavior)"
+    )
+
 
 def _claims_edit_applied(text: str) -> bool:
     """Whether the answer asserts a file change was actually applied/completed."""

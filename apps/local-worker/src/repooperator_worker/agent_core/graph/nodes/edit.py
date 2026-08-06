@@ -97,10 +97,64 @@ def generate_change_set_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     )
     return _with_checkpoint_bump(_merge_updates(context_update, update))
 
+def _ground_change_paths(proposal: dict[str, Any], repo_root: Any) -> dict[str, Any]:
+    """Remap hallucinated edit targets onto real repository files.
+
+    The model regularly invents conventional layouts (src/main.py,
+    src/database.py) for repos that are actually flat, which used to fail
+    validation with "modify target does not exist" and end the run. When a
+    modify/delete/rename target does not exist but its basename matches exactly
+    one real file, rewrite the path to that file and record the remap.
+    """
+    from pathlib import Path
+
+    try:
+        root = Path(str(repo_root))
+        if not root.is_dir():
+            return proposal
+    except Exception:
+        return proposal
+    changes = proposal.get("changes")
+    if not isinstance(changes, list):
+        return proposal
+    remaps: list[str] = []
+    for change in changes:
+        if not isinstance(change, dict):
+            continue
+        operation = str(change.get("operation") or "modify").lower()
+        if operation == "create":
+            continue
+        raw_path = str(change.get("path") or "").strip().lstrip("/")
+        if not raw_path or (root / raw_path).exists():
+            continue
+        basename = Path(raw_path).name
+        try:
+            candidates = [
+                p for p in root.rglob(basename)
+                if p.is_file() and ".git" not in p.parts and "node_modules" not in p.parts
+            ][:3]
+        except OSError:
+            candidates = []
+        if len(candidates) == 1:
+            real = str(candidates[0].relative_to(root))
+            remaps.append(f"{raw_path} -> {real}")
+            change["path"] = real
+    if remaps:
+        notes = list(proposal.get("notes") or [])
+        notes.append("Remapped edit targets to real files: " + "; ".join(remaps))
+        proposal["notes"] = notes
+    return proposal
+
+
 def validate_change_set_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     latest = _latest_result(state)
     proposal = _change_set_from_latest_result(state, latest) or state.get("change_set_proposal") or {}
     if isinstance(proposal, dict) and proposal.get("changes"):
+        try:
+            repo_root = resolve_project_path(str(state.get("repo") or _request(state).project_path))
+        except Exception:
+            repo_root = str(state.get("repo") or "")
+        proposal = _ground_change_paths(dict(proposal), repo_root)
         typed = change_set_from_payload(proposal)
         validation_model = validate_change_set_model(typed, repo=str(state.get("repo") or _request(state).project_path))
         typed.validation = validation_model

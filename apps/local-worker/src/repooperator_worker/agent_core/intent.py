@@ -45,6 +45,11 @@ _META_KO = (
     "어떤 기능",
 )
 
+# Identity questions aimed at the agent ("넌 누구야?"). The subject must be the
+# agent (너/넌/너는/네가/당신) so questions about the repo's own actors
+# ("이 봇은 누구한테 보내?") stay untouched.
+_META_KO_IDENTITY_RE = re.compile(r"(?:^|\s)(?:너는|넌|너|네가|당신은|당신)\s*(?:는|이|가)?\s*누구")
+
 
 def extract_urls(text: str) -> list[str]:
     urls: list[str] = []
@@ -71,6 +76,8 @@ def is_meta_request(text: str) -> bool:
         return False
     lowered = text.lower()
     if any(p in lowered for p in _META_EN):
+        return True
+    if _META_KO_IDENTITY_RE.search(text):
         return True
     return any(p in text for p in _META_KO)
 
