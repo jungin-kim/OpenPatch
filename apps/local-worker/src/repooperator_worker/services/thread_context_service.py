@@ -56,6 +56,9 @@ _ANAPHORIC_TASK_RE = re.compile(
     re.IGNORECASE,
 )
 
+_REFERENT_TASK_RE = re.compile(r"아까|이전에|앞서|다시\s*알려|그\s*(?:파일|거기|계산)", re.IGNORECASE)
+_FILE_TOKEN_RE = re.compile(r"\b[\w./-]+\.[A-Za-z]{1,8}\b")
+
 
 def expand_anaphoric_task(request: AgentRunRequest) -> AgentRunRequest:
     """Resolve "이제 multiply에도 똑같이 해줘"-style tasks before the run starts.
@@ -82,6 +85,26 @@ def expand_anaphoric_task(request: AgentRunRequest) -> AgentRunRequest:
     if not previous:
         return request
     merged = f"{task}\n(참고: '똑같이'는 직전 요청과 같은 작업을 뜻합니다. 직전 요청: {previous[:300]})"
+    return request.model_copy(update={"task": merged})
+
+
+def expand_referent_task(request: AgentRunRequest) -> AgentRunRequest:
+    """Ground "아까 그 계산 파일…"-style referents in the thread's recent files.
+
+    The LLM reference resolver intermittently punts to a generic clarification
+    even when the thread context makes the referent obvious. Appending the
+    recent file list lets the deterministic explicit-file flow take over.
+    """
+    task = str(request.task or "")
+    if not _REFERENT_TASK_RE.search(task):
+        return request
+    if _FILE_TOKEN_RE.search(task):
+        return request  # the task already names a concrete file
+    durable = _load_durable_context(request)
+    recent = [f for f in (durable.recent_files if durable else []) if isinstance(f, str) and f.strip()][:4]
+    if not recent:
+        return request
+    merged = f"{task}\n(참고: 이 대화에서 최근에 다룬 파일: {', '.join(recent)})"
     return request.model_copy(update={"task": merged})
 
 
