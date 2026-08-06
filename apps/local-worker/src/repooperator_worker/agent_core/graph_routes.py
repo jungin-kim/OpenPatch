@@ -415,6 +415,20 @@ def _creation_target_file(request: AgentRunRequest, frame: Any) -> str | None:
     return None
 
 
+def _edit_generation_came_up_empty(state: AgentCoreState) -> bool:
+    """The latest generate_edit attempt produced zero proposals."""
+    actions = list(getattr(state, "actions_taken", []) or [])
+    results = list(getattr(state, "action_results", []) or [])
+    for action, result in zip(reversed(actions[-len(results):] if results else []), reversed(results)):
+        if str(getattr(action, "type", "") or "") not in {"generate_edit", "generate_change_set"}:
+            continue
+        payload = getattr(result, "payload", None) or {}
+        if payload.get("edit_proposals") or (payload.get("change_set_proposal") or {}).get("changes"):
+            return False
+        return getattr(result, "status", "") in {"skipped", "failed"}
+    return False
+
+
 def _next_edit_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
     if not edit_requested(frame):
         return None
@@ -440,6 +454,18 @@ def _next_edit_action(state: AgentCoreState, request: AgentRunRequest, frame: An
                 target_files=edit_targets,
                 expected_output="Validated ChangeSetProposal with before/after diff summary.",
                 payload={"task_frame": json_safe(frame), "current_edit_targets": edit_targets},
+            )
+        if _edit_generation_came_up_empty(state) and not _has_action(state, "generate_change_set"):
+            # generate_edit ran but produced nothing (skipped) — retry through
+            # the change-set pipeline, which has repair + per-file fallback,
+            # before giving up. Answering here narrated an edit that never
+            # happened ("주석을 추가했습니다" with zero proposals).
+            return AgentAction(
+                type="generate_change_set",
+                reason_summary="Retry proposal generation through the change-set pipeline after an empty edit attempt.",
+                target_files=edit_targets,
+                expected_output="Validated ChangeSetProposal with per-file changes.",
+                payload={"target_files": edit_targets, "task_frame": json_safe(frame)},
             )
         return AgentAction(type="final_answer", reason_summary="Report the proposed edit without claiming it was applied.")
     return _clarification_action(state, request, frame)

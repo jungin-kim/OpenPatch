@@ -185,7 +185,28 @@ def propose_next_action_with_tool_calling(
         and not _change_applied(state)
     ):
         return None
+    # Run-command gate: "python calc.py 실행해줘" must reach the command
+    # approval flow, not end as a description of the file. Defer final_answer
+    # to the deterministic command chooser while the requested command has
+    # neither run nor been gated for approval.
+    if action is not None and action.type == "final_answer":
+        try:
+            from repooperator_worker.agent_core.planner import command_needed_for_text
+
+            needed = command_needed_for_text(str(getattr(task_frame, "user_goal", "") or ""))
+            if needed and not _has_command_evidence(state, needed):
+                return None
+        except Exception:
+            pass
     return action
+
+
+def _has_command_evidence(state: Any, command: list[str]) -> bool:
+    joined = " ".join(command)
+    for item in getattr(state, "commands_run", []) or []:
+        if joined in str(item):
+            return True
+    return bool(getattr(state, "pending_approval", None))
 
 
 _EDIT_PRODUCING_ACTION_TYPES = frozenset(

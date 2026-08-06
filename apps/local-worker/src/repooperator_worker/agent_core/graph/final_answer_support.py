@@ -68,6 +68,25 @@ def build_final_answer_text(
             "I could not prepare a validated proposal-only patch. "
             f"Reason: {proposal_error}. No files were modified."
         )
+    frame_for_edit = build_task_frame(request, state)
+    if _unfulfilled_edit_request(state, frame_for_edit):
+        # An edit was asked for, nothing was proposed or applied — say so.
+        # Letting the model synthesize here produced confident narration of
+        # changes that never happened ("주석을 추가했습니다", zero proposals).
+        try:
+            from repooperator_worker.services.response_quality_service import user_prefers_korean
+
+            if user_prefers_korean(str(getattr(request, "task", "") or "")):
+                return (
+                    "요청하신 수정 패치를 이번 실행에서는 준비하지 못했습니다. 파일은 수정되지 않았습니다.\n"
+                    "다시 시도하거나 대상 파일/변경 내용을 조금 더 구체적으로 알려주시면 이어서 준비하겠습니다."
+                )
+        except Exception:
+            pass
+        return (
+            "I was not able to prepare the requested edit in this run — no files were modified. "
+            "Please retry, or narrow down the target file/change and I will prepare the patch."
+        )
     command_result = _latest_command_result(state)
     if command_result:
         return _format_command_result(command_result, pending_commit=pending_commit_context(build_task_frame(request, state)))
@@ -309,6 +328,36 @@ def _response_json_safe(response: AgentRunResponse, request: AgentRunRequest) ->
             activity_events=list(safe_payload.get("activity_events") or []),
             agent_flow="langgraph",
         )
+
+
+def _unfulfilled_edit_request(state: AgentCoreState, frame: Any) -> bool:
+    """True when the user's own words asked for an edit but this run produced
+    no proposal, applied no change, and gated nothing for approval."""
+    try:
+        from repooperator_worker.agent_core.agentic_loop import _is_change_request
+
+        if not _is_change_request(frame):
+            return False
+    except Exception:
+        return False
+    if state.pending_approval:
+        return False
+    if _latest_edit_proposal(state) or _latest_proposal_error(state):
+        return False
+    for result in getattr(state, "action_results", []) or []:
+        payload = getattr(result, "payload", None) or {}
+        if (payload.get("change_set_proposal") or {}).get("changes") or payload.get("edit_proposals"):
+            return False
+        if getattr(result, "files_changed", None):
+            return False
+    return bool(_has_edit_attempt(state))
+
+
+def _has_edit_attempt(state: AgentCoreState) -> bool:
+    return any(
+        str(getattr(action, "type", "") or "") in {"generate_edit", "generate_change_set", "apply_change_set"}
+        for action in getattr(state, "actions_taken", []) or []
+    )
 
 
 def _latest_approved_write_result(state: AgentCoreState) -> str | None:
