@@ -218,8 +218,8 @@ def update_thread_context(request: AgentRunRequest, response: Any) -> None:
     for symbol in getattr(response, "resolved_symbols", []) or []:
         if context.recent_files:
             context.symbols.setdefault(str(symbol), context.recent_files[0])
-    if (request.task or "").strip():
-        context.last_user_task = request.task.strip()[:500]
+    # last_user_task is saved at run START (remember_last_user_task) from the
+    # user's raw words — request.task here may carry expansion annotations.
     context.context_source = "durable_thread"
     _save_durable_context(request.thread_id, context)
 
@@ -243,7 +243,11 @@ def extract_symbols_from_text(content: str) -> list[str]:
 
 
 def _add_recent_file(context: ThreadContext, relative_path: str) -> None:
-    if relative_path and relative_path not in context.recent_files:
+    # Model outputs sometimes leak whole JSON blobs into resolved_files; a
+    # "recent file" must look like a path, not a payload.
+    if not relative_path or len(relative_path) > 260 or any(ch in relative_path for ch in ("\n", "{", '"')):
+        return
+    if relative_path not in context.recent_files:
         context.recent_files.insert(0, relative_path)
     context.recent_files = context.recent_files[:12]
 

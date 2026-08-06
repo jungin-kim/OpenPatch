@@ -251,6 +251,35 @@ def list_activity_states(run_id: str) -> list[dict[str, Any]]:
     return [states[key] for key in order]
 
 
+_WAITING_APPROVAL_TTL_SECONDS = 24 * 3600
+
+
+def _expire_stale_waiting_run(meta_path: Any, meta: dict[str, Any]) -> bool:
+    """Expire waiting_approval runs whose approval nobody answered for a day.
+
+    Dozens of stale gated runs otherwise pile up in the active list forever
+    and make 'approve the pending run' operations ambiguous.
+    """
+    if meta.get("status") != "waiting_approval":
+        return False
+    started = str(meta.get("started_at") or "")
+    try:
+        from datetime import datetime, timezone
+
+        started_at = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        age = (datetime.now(timezone.utc) - started_at).total_seconds()
+    except Exception:
+        return False
+    if age < _WAITING_APPROVAL_TTL_SECONDS:
+        return False
+    meta = {**meta, "status": "cancelled", "error": "Approval request expired without a decision."}
+    try:
+        meta_path.write_text(json.dumps(json_safe(meta), ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def get_active_runs(thread_id: str | None = None) -> list[dict[str, Any]]:
     active: list[dict[str, Any]] = []
     active_statuses = {"pending", "running", "waiting_approval", "cancelling"}
@@ -260,6 +289,8 @@ def get_active_runs(thread_id: str | None = None) -> list[dict[str, Any]]:
         except (OSError, json.JSONDecodeError):
             continue
         if meta.get("status") not in active_statuses:
+            continue
+        if _expire_stale_waiting_run(meta_path, meta):
             continue
         if thread_id and meta.get("thread_id") != thread_id:
             continue
