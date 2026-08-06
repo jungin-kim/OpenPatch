@@ -510,8 +510,8 @@ def edit_requested_text(text: str) -> bool:
     # RequestUnderstanding facts. Do not expand this into language-specific
     # request routing; prefer likely_needed_tools/requested_outputs instead.
     lowered = (text or "").lower()
-    return bool(re.search(r"\b(edit|patch|add|fix|implement|refactor|change|update|support)\b", lowered)) or any(
-        term in text for term in ("추가", "고쳐", "구현", "수정")
+    return bool(re.search(r"\b(edit|patch|add|fix|implement|refactor|change|update|support|rename)\b", lowered)) or any(
+        term in text for term in ("추가", "고쳐", "구현", "수정", "바꿔", "바꾸", "변경해", "으로 변경", "로 변경")
     )
 
 

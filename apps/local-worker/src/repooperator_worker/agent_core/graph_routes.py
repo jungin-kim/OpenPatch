@@ -56,9 +56,10 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
     for chooser in (
         _next_off_topic_answer_action,
         _next_meta_answer_action,
+        _next_web_fetch_action,
         _next_missing_file_action,
         _next_git_commit_action,
-        _next_web_fetch_action,
+        _next_mentioned_files_covered_action,
         _next_tool_calling_action,
         _next_explicit_target_action,
         _next_symbol_action,
@@ -100,6 +101,12 @@ def _next_missing_file_action(state: AgentCoreState, request: AgentRunRequest, f
     "Border.cs" resolving to "Assets/Scripts/Border.cs" is NOT missing); only
     fires when resolution finds nothing at all for the named files.
     """
+    # A task carrying a URL is a web-fetch task; URL path segments look like
+    # filenames ("peps/pep-0020.rst") and must not trigger the missing-file flow.
+    from repooperator_worker.agent_core.intent import extract_urls
+
+    if extract_urls(getattr(request, "task", "") or ""):
+        return None
     mentioned = [str(f).strip().lstrip("/") for f in getattr(frame, "mentioned_files", []) or [] if str(f).strip()]
     # Only treat tokens that look like real filenames (have an extension) as
     # explicit targets. Bare words such as "README" or "코드" in a sentence
@@ -193,6 +200,32 @@ def _next_web_fetch_action(state: AgentCoreState, request: AgentRunRequest, fram
         reason_summary=f"Fetch the URL the user asked about: {url}",
         expected_output="Fetched page content as untrusted evidence.",
         payload={"url": url},
+    )
+
+
+def _next_mentioned_files_covered_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """The user asked about specific files and every one of them has been read —
+    answer now instead of letting the model wander until the loop budget dies
+    ("read calc.py, big_module.py … max_loop_iterations")."""
+    mentioned = [str(f).strip().lstrip("/") for f in getattr(frame, "mentioned_files", []) or [] if str(f).strip()]
+    mentioned = [f for f in mentioned if "." in Path(f).name]
+    # Use the BROAD edit signal here (text + hints + requested outputs): for
+    # this chooser a false positive merely defers to the normal flow, while a
+    # miss would cut off a legitimate edit run with a premature answer.
+    if not mentioned or edit_requested(frame):
+        return None
+    files_read = set(getattr(state, "files_read", []) or [])
+    try:
+        resolved = resolve_target_files(request, mentioned, preferred=known_context_files(request, state))
+    except Exception:
+        resolved = mentioned
+    if not resolved or not set(resolved).issubset(files_read):
+        return None
+    if len(getattr(state, "actions_taken", []) or []) < 2:
+        return None
+    return AgentAction(
+        type="final_answer",
+        reason_summary="All files the user asked about have been read — answer from that evidence.",
     )
 
 
