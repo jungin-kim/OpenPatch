@@ -57,6 +57,7 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
         _next_off_topic_answer_action,
         _next_meta_answer_action,
         _next_missing_file_action,
+        _next_git_commit_action,
         _next_web_fetch_action,
         _next_tool_calling_action,
         _next_explicit_target_action,
@@ -142,6 +143,37 @@ def _next_meta_answer_action(state: AgentCoreState, request: AgentRunRequest, fr
             reason_summary="Meta/capability question — describe what the agent can do.",
         )
     return None
+
+
+_GIT_COMMIT_INTENT_RE = __import__("re").compile(
+    r"커밋\s*해|커밋해|커밋하고|커밋으로|메시지로\s*커밋|make a commit|commit (the|these|this|my|current)|커밋\s*좀",
+    __import__("re").IGNORECASE,
+)
+
+
+def _next_git_commit_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """Explicit "commit this" requests go straight to the approval-gated
+    git_commit tool. Without this the model wandered into the edit path and
+    tried to build an (empty) patch instead of committing."""
+    task = str(getattr(request, "task", "") or "")
+    if not _GIT_COMMIT_INTENT_RE.search(task):
+        return None
+    # Combined requests ("최근 커밋 보여줘. 커밋해줘.") need the read part first —
+    # the regular flow already sequences those correctly, so only take over for
+    # a pure commit request.
+    if __import__("re").search(r"보여줘|이력|로그|내역|history|show|\blog\b", task, __import__("re").IGNORECASE):
+        return None
+    if any(getattr(a, "type", None) == "git_commit" for a in getattr(state, "actions_taken", []) or []):
+        return None
+    import re as _re
+
+    quoted = _re.search(r"['\"‘“]([^'\"’”]{2,72})['\"’”]", task)
+    message = quoted.group(1).strip() if quoted else task[:72]
+    return AgentAction(
+        type="git_commit",
+        reason_summary="User asked to commit the current changes (approval-gated).",
+        payload={"message": message, "stage_all": True},
+    )
 
 
 def _next_web_fetch_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
