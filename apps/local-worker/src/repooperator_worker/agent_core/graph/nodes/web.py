@@ -13,6 +13,7 @@ from repooperator_worker.agent_core.graph.adapters import (
     _invoke_subgraph_delta,
     _latest_result,
     _merge_updates,
+    _pending_action,
     _request,
     _with_checkpoint_bump,
 )
@@ -47,6 +48,23 @@ def web_research_graph_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     return _with_checkpoint_bump(update)
 
 def web_decide_needed_node(state: RepoOperatorGraphState) -> dict[str, Any]:
+    pending = _pending_action(state)
+    if pending is not None and pending.type == "fetch_url" and str((pending.payload or {}).get("url") or "").strip():
+        # An explicit URL fetch was proposed (e.g. the deterministic chooser saw a
+        # URL in the task). Execute it directly instead of gating on the broad
+        # web-research heuristic — that gate used to END without executing, which
+        # left the pending action re-proposed forever (infinite checkpoint churn).
+        update = _execute_ad_hoc_action(state, pending, subgraph="web_research_graph", node_name="decide_web_needed")
+        latest_result = result_from_snapshot((update.get("action_results") or [None])[-1])
+        fetched = [
+            item
+            for item in ((latest_result.payload.get("web_evidence") if latest_result else None) or [])
+            if isinstance(item, dict)
+        ]
+        evidence = {**dict(state.get("evidence_store") or {}), "web_research_needed": False}
+        if fetched:
+            evidence["web_evidence"] = [*(evidence.get("web_evidence") or []), *fetched]
+        return _merge_updates(update, {"evidence_store": evidence, "pending_action": None})
     needed = _web_research_needed(state) and _web_research_available(state)
     return {
         "evidence_store": {**dict(state.get("evidence_store") or {}), "web_research_needed": needed},
