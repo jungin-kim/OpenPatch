@@ -61,13 +61,16 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
         _next_web_fetch_action,
         _next_missing_file_action,
         _next_git_commit_action,
+        # Before any model-driven chooser: an explicitly requested command
+        # ("python calc.py 실행해줘") must reach the preview/approval flow —
+        # model paths kept answering or editing instead of running it.
+        _next_command_action,
         _next_mentioned_files_covered_action,
         _next_tool_calling_action,
         _next_explicit_target_action,
         _next_symbol_action,
         _next_policy_evidence_action,
         _next_model_planner_action,
-        _next_command_action,
         _next_search_candidate_action,
         _next_edit_action,
         _next_project_summary_action,
