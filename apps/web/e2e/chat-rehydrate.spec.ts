@@ -809,8 +809,11 @@ test("G: work trace rehydrates concrete actions and merges by activity_id", asyn
   await page.waitForTimeout(800);
 
   await revealCompletedActivity(page);
-  await expect(page.locator(".agent-transcript-section").first().getByText("README.md", { exact: false })).toBeVisible({ timeout: 8000 });
-  await expect(page.getByText("The user named README.md", { exact: false })).toHaveCount(0);
+  // The concrete read_file row shows the file; the attached reasoning now also
+  // renders as an italic "thinking" row (Claude Code style), so target the
+  // detail row specifically and expect the reasoning to be visible once.
+  await expect(page.locator(".agent-transcript-section").first().locator(".agent-detail-read_file .agent-detail-desc").first()).toBeVisible({ timeout: 8000 });
+  await expect(page.locator(".agent-detail-thinking-text", { hasText: "The user named README.md" })).toHaveCount(1);
   await expect(page.getByText("Chose next action")).toHaveCount(0);
   await expect(page.getByText("do-not-render-hidden")).toHaveCount(0);
   await expect(page.getByText("do-not-render-private")).toHaveCount(0);
