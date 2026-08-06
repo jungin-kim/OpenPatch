@@ -116,12 +116,20 @@ def final_build_response_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     request = _request(state)
     core = _core_state_from_graph(state)
     # Meta / capability question ("what can you do?") — answer about the agent
-    # itself instead of forcing a repository summary.
+    # itself instead of forcing a repository summary. Off-topic small talk gets
+    # a polite scope answer immediately.
     if not core.final_response:
-        from repooperator_worker.agent_core.intent import capability_answer, is_meta_request
+        from repooperator_worker.agent_core.intent import (
+            capability_answer,
+            is_meta_request,
+            is_off_topic_request,
+            off_topic_answer,
+        )
 
         task_text = str(getattr(request, "task", "") or "")
-        if is_meta_request(task_text) and not getattr(core, "files_changed", None):
+        if is_off_topic_request(task_text):
+            core.final_response = off_topic_answer(_task_is_korean(request))
+        elif is_meta_request(task_text) and not getattr(core, "files_changed", None):
             repo_name = str(getattr(request, "project_path", "") or "").rstrip("/").split("/")[-1] or None
             core.final_response = capability_answer(repo_name)
     proposal = state.get("change_set_proposal") if isinstance(state.get("change_set_proposal"), dict) else None
@@ -161,6 +169,15 @@ def final_build_response_node(state: RepoOperatorGraphState) -> dict[str, Any]:
         )
     draft_response = core.final_response
     core.final_response = validate_or_repair_final_answer(core.final_response, core, request)
+    # Deterministic scope/meta answers are canonical — re-apply them after the
+    # evidence repair, which otherwise replaces them with "need more files"
+    # boilerplate (an off-topic answer legitimately has zero file evidence).
+    from repooperator_worker.agent_core.intent import is_off_topic_request as _is_off_topic
+
+    if _is_off_topic(str(getattr(request, "task", "") or "")):
+        from repooperator_worker.agent_core.intent import off_topic_answer as _off_topic_answer
+
+        core.final_response = _off_topic_answer(_task_is_korean(request))
     if _is_explanation_only_edit_request(state) and not state.get("files_changed") and "no files were modified" not in core.final_response.lower():
         core.final_response = core.final_response.rstrip() + "\n\nNo files were modified."
     # Clarification backstop: if the answer *narrates* that it should ask a

@@ -11,7 +11,7 @@ from repooperator_worker.agent_core.state import AgentCoreState
 from repooperator_worker.schemas import AgentRunRequest
 from repooperator_worker.services.common import resolve_project_path
 from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient as _OpenAICompatibleModelClient, split_visible_reasoning
-from repooperator_worker.services.response_quality_service import clean_user_visible_response
+from repooperator_worker.services.response_quality_service import clean_user_visible_response, language_guidance_for_task
 
 NONPUBLIC_MODEL_DELTA_TYPE = "reasoning" + "_delta"
 
@@ -57,11 +57,19 @@ def _answer_with_model(
                 "file contents are supplied. Identity & tone: your name is RepoOperator — introduce yourself by name "
                 "when asked. Match the user's language; in Korean always keep the polite register (존댓말: ~습니다/~요) "
                 "and never switch to 반말. Keep one consistent, professional, warm voice across turns.\n"
+                + language_guidance_for_task(request.task)
+                + "\n"
                 + (f"\nEnabled skills with provenance:\n{skills_context}\n" if skills_context else "")
             ),
             user_prompt=json.dumps(
                 {
                     "task": request.task,
+                    # Recent turns so anaphora resolves ("두 번째 거 자세히" must
+                    # see the numbered list from the previous answer).
+                    "recent_conversation": [
+                        {"role": m.role, "content": (m.content or "")[:600]}
+                        for m in (getattr(request, "conversation_history", None) or [])[-4:]
+                    ],
                     "repo": request.project_path,
                     "active_repository": f"source: {request.git_provider}\npath: {resolved_repo}",
                     "branch": request.branch,
@@ -227,6 +235,14 @@ def _looks_like_bare_json_answer(answer: str) -> bool:
     if fence:
         text = fence.group(1).strip()
     if not text.startswith(("{", "[")):
+        # A short greeting followed by a schema-echo JSON body ("안녕하세요…
+        # { \"purpose\": …") is still a leak: if the JSON blob dominates the
+        # message, treat it the same as bare JSON.
+        brace = text.find("{")
+        if brace != -1 and (len(text) - brace) > max(200, int(len(text) * 0.6)) and re.search(
+            r'"(purpose|structure|important_files|risks_or_unknowns|include|type)"\s*:', text[brace : brace + 400]
+        ):
+            return True
         return False
     try:
         json.loads(text)

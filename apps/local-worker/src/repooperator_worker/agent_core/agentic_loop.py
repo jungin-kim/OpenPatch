@@ -67,6 +67,9 @@ until the user's request is actually done (or genuinely blocked).
   you MUST actually apply it with the edit tools (generate_change_set /
   generate_edit / modify_file / create_file). Producing an edit tool call is
   the only way a change reaches disk.
+- If the task asks you to FIND, review, or analyze issues ("버그 찾아줘"),
+  REPORT the findings with file/line references — do not propose patches
+  unless the user asked you to fix them.
 - NEVER claim a change was made ("added the docstring", "updated the function")
   unless you actually called an edit tool that applied it. Describing a diff in
   prose does not modify the file.
@@ -188,9 +191,9 @@ _EDIT_PRODUCING_ACTION_TYPES = frozenset(
 
 _READ_ONLY_PHRASES = (
     "읽고", "읽어", "설명해", "알려줘", "분석해", "요약해", "보여줘", "확인해",
-    "무슨", "어떻게 동작", "어떤 역할", "파악해",
+    "무슨", "어떻게 동작", "어떤 역할", "파악해", "찾아줘", "찾아봐", "뭐가 있",
     "explain", "describe", "summarize", "analyze", "analyse", "what does", "how does",
-    "walk me through", "tell me", "show me", "read the", "review",
+    "walk me through", "tell me", "show me", "read the", "review", "find the", "look for",
 )
 
 

@@ -54,7 +54,9 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
                 return recovery
 
     for chooser in (
+        _next_off_topic_answer_action,
         _next_meta_answer_action,
+        _next_missing_file_action,
         _next_web_fetch_action,
         _next_tool_calling_action,
         _next_explicit_target_action,
@@ -71,6 +73,46 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
             return action
 
     return AgentAction(type="final_answer", reason_summary="Enough evidence is available for a grounded answer.")
+
+
+def _next_off_topic_answer_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """Obvious small talk (weather, news…) — answer the scope politely at once
+    instead of grinding the repo-analysis loop for minutes."""
+    from repooperator_worker.agent_core.intent import is_off_topic_request
+
+    if getattr(state, "actions_taken", None) or getattr(state, "files_read", None):
+        return None
+    if is_off_topic_request(getattr(request, "task", "") or ""):
+        return AgentAction(
+            type="final_answer",
+            reason_summary="Off-topic request — explain the agent's scope.",
+            payload={"off_topic": True},
+        )
+    return None
+
+
+def _next_missing_file_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """User explicitly named files that don't exist in the repo — say so honestly
+    instead of answering something else.
+
+    Uses the same fuzzy resolution as the explicit-target flow (a bare
+    "Border.cs" resolving to "Assets/Scripts/Border.cs" is NOT missing); only
+    fires when resolution finds nothing at all for the named files.
+    """
+    mentioned = [str(f).strip().lstrip("/") for f in getattr(frame, "mentioned_files", []) or [] if str(f).strip()]
+    if not mentioned or getattr(state, "actions_taken", None):
+        return None
+    try:
+        resolved = resolve_target_files(request, mentioned, preferred=known_context_files(request, state))
+    except Exception:
+        return None
+    if resolved:
+        return None
+    return AgentAction(
+        type="ask_clarification",
+        reason_summary="Named files do not exist in this repository.",
+        payload={"missing_files": mentioned},
+    )
 
 
 def _next_meta_answer_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:

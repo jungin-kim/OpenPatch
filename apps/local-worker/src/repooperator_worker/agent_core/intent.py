@@ -82,6 +82,45 @@ def is_meta_request(text: str) -> bool:
     return any(p in text for p in _META_KO)
 
 
+_OFF_TOPIC_TERMS = (
+    "날씨", "weather", "뉴스", "news", "주식", "stock price", "환율", "로또",
+    "맛집", "레시피", "요리법", "노래 추천", "영화 추천", "농담", "tell me a joke",
+    "몇 시야", "몇시야", "what time is it",
+)
+_REPO_TERMS = (
+    "코드", "파일", "함수", "저장소", "레포", "repo", "code", "file", "function",
+    "커밋", "commit", "브랜치", "branch", "버그", "bug", "테스트", "test",
+    ".py", ".js", ".ts", ".md", "readme",
+)
+
+
+def is_off_topic_request(text: str) -> bool:
+    """Obvious non-repository small talk (weather, news, jokes …).
+
+    These used to grind through the full repo-analysis loop for many minutes.
+    Only fires when an off-topic term appears AND nothing repo-related does.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    if not any(t in text or t in lowered for t in _OFF_TOPIC_TERMS):
+        return False
+    return not any(t in text or t in lowered for t in _REPO_TERMS)
+
+
+def off_topic_answer(korean: bool) -> str:
+    if korean:
+        return (
+            "죄송하지만 그건 제가 도와드릴 수 있는 범위 밖이에요. 저는 이 저장소의 코드를 읽고, 설명하고, "
+            "수정 제안을 만들고, 테스트/커밋/PR을 도와드리는 코딩 에이전트입니다.\n\n"
+            "저장소에 대해 궁금한 것이나 만들고 싶은 변경이 있으면 말씀해 주세요!"
+        )
+    return (
+        "That's outside what I can help with — I'm a coding agent for this repository: I read and explain code, "
+        "propose edits, and help with tests, commits, and PRs.\n\nAsk me anything about the repo or a change you'd like!"
+    )
+
+
 def has_web_intent(text: str) -> bool:
     if extract_urls(text):
         return True

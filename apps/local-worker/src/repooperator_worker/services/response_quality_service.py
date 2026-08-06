@@ -14,8 +14,20 @@ GARBLED_KOREAN_RE = re.compile(r"[\uac00-\ud7a3][A-Za-z]{3,}|[A-Za-z]{3,}[\uac00
 LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_+#.-]*")
 
 
+_ENGLISH_OPENER_RE = re.compile(
+    r"^\s*(what|how|why|when|where|who|which|does|do|is|are|can|could|would|should|please|explain|describe|show|list|tell)\b",
+    re.IGNORECASE,
+)
+
+
 def user_prefers_korean(text: str) -> bool:
-    return bool(HANGUL_RE.search(text or ""))
+    """Korean if the task contains Hangul — unless the sentence itself is an
+    English question/imperative ("What does the /관리자 로그 command do?"),
+    where the only Hangul is an identifier being asked about."""
+    text = text or ""
+    if not HANGUL_RE.search(text):
+        return False
+    return not _ENGLISH_OPENER_RE.match(text)
 
 
 def split_visible_reasoning(text: str) -> tuple[str, str | None]:
@@ -84,6 +96,8 @@ def language_guidance_for_task(task: str) -> str:
             "it as Python, not JavaScript."
         )
     return (
-        "Answer in clear English unless the user explicitly asks for another language. "
-        "Keep code identifiers, file paths, and commands in their original spelling."
+        "The user asked in English — answer entirely in English, even when the question "
+        "mentions identifiers or command names written in another script (keep those "
+        "identifiers in their original spelling, but all prose must be English). "
+        "Never mix Chinese, Korean, or garbled multilingual tokens into the prose."
     )
