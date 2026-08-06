@@ -3,12 +3,12 @@
     "artifacts": [
       {
         "file": "src/app.py",
-        "id": "proposal:db544b9708b9",
+        "id": "proposal:b729a099ee44",
         "kind": "proposal_card"
       }
     ],
     "proposal_ids": [
-      "proposal:db544b9708b9"
+      "proposal:b729a099ee44"
     ]
   },
   "expected_disk_changes_after_approval": {
@@ -93,7 +93,7 @@
   "expected_tool_calls": [
     {
       "name": "validate_change_set",
-      "proposal_id": "proposal:db544b9708b9",
+      "proposal_id": "proposal:b729a099ee44",
       "status": "success",
       "target_files": [
         "src/app.py"
@@ -101,7 +101,7 @@
     },
     {
       "name": "apply_change_set",
-      "proposal_id": "proposal:db544b9708b9",
+      "proposal_id": "proposal:b729a099ee44",
       "status": "skipped",
       "target_files": [
         "src/app.py"
@@ -119,7 +119,7 @@
       "edits": [
         {
           "path": "src/app.py",
-          "proposal_id": "proposal:db544b9708b9",
+          "proposal_id": "proposal:b729a099ee44",
           "status": "rejected"
         }
       ],

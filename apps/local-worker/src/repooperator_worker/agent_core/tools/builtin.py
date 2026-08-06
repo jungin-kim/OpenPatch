@@ -1855,7 +1855,7 @@ def change_set_from_model_payload(
     if not plan.target_files:
         plan.target_files = [change.path for change in changes]
     return ChangeSetProposal(
-        proposal_id=str(raw_payload.get("proposal_id") or stable_proposal_id(plan.summary, plan.target_files)),
+        proposal_id=str(raw_payload.get("proposal_id") or stable_proposal_id(plan.summary, plan.target_files, [change.proposed_content or "" for change in changes])),
         plan=plan,
         changes=changes,
     )

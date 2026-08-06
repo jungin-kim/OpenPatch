@@ -3,12 +3,12 @@
     "artifacts": [
       {
         "file": "src/app.py",
-        "id": "proposal:218a1f905df6",
+        "id": "proposal:fcdb216465c8",
         "kind": "proposal_card"
       }
     ],
     "proposal_ids": [
-      "proposal:218a1f905df6"
+      "proposal:fcdb216465c8"
     ]
   },
   "expected_disk_changes_after_approval": {
@@ -132,7 +132,7 @@
     },
     {
       "name": "generate_change_set",
-      "proposal_id": "proposal:218a1f905df6",
+      "proposal_id": "proposal:fcdb216465c8",
       "status": "success",
       "target_files": [
         "src/app.py"
@@ -154,7 +154,7 @@
       "edits": [
         {
           "path": "src/app.py",
-          "proposal_id": "proposal:218a1f905df6",
+          "proposal_id": "proposal:fcdb216465c8",
           "status": "proposed"
         }
       ],

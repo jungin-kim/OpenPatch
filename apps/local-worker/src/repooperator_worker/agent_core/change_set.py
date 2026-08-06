@@ -83,7 +83,7 @@ class ChangeSetProposal:
     sandbox_validation: dict[str, Any] | None = None
 
     def model_dump(self) -> dict[str, Any]:
-        proposal_id = self.proposal_id or stable_proposal_id(self.plan.summary, self.plan.target_files)
+        proposal_id = self.proposal_id or stable_proposal_id(self.plan.summary, self.plan.target_files, [change.proposed_content or "" for change in self.changes])
         return json_safe(
             {
                 "proposal_id": proposal_id,
@@ -103,8 +103,15 @@ class ChangeSetProposal:
         )
 
 
-def stable_proposal_id(summary: str, paths: list[str]) -> str:
-    digest = hashlib.sha256(json.dumps({"summary": summary, "paths": paths}, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+def stable_proposal_id(summary: str, paths: list[str], contents: list[str] | None = None) -> str:
+    # Without the content fingerprint, two DIFFERENT edits sharing a generic
+    # summary and the same target file minted the same id — the later proposal
+    # silently overwrote the earlier one in storage, so approving "the"
+    # proposal could apply the wrong change.
+    fingerprints = [hashlib.sha256((content or "").encode("utf-8")).hexdigest()[:12] for content in (contents or [])]
+    digest = hashlib.sha256(
+        json.dumps({"summary": summary, "paths": paths, "contents": fingerprints}, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
     return f"proposal:{digest}"
 
 
@@ -160,7 +167,7 @@ def change_set_from_payload(payload: dict[str, Any]) -> ChangeSetProposal:
         )
     status = payload.get("status") if payload.get("status") in {"planned", "valid", "invalid", "repairable", "blocked", "applied", "rejected"} else "planned"
     return ChangeSetProposal(
-        proposal_id=str(payload.get("proposal_id") or stable_proposal_id(plan.summary, plan.target_files)),
+        proposal_id=str(payload.get("proposal_id") or stable_proposal_id(plan.summary, plan.target_files, [change.proposed_content or "" for change in changes])),
         plan=plan,
         changes=changes,
         status=status,
@@ -199,7 +206,7 @@ def proposal_from_edit_result(
         )
         changes.append(_with_diff_counts(change))
     proposal = ChangeSetProposal(
-        proposal_id=stable_proposal_id(plan_summary or "compat-edit", [change.path for change in changes]),
+        proposal_id=stable_proposal_id(plan_summary or "compat-edit", [change.path for change in changes], [change.proposed_content or "" for change in changes]),
         plan=ChangePlan(
             summary=plan_summary or "Prepare validated proposal-only edits.",
             target_files=[change.path for change in changes],
