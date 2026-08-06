@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -29,6 +30,7 @@ from repooperator_worker.services.thread_context_service import update_thread_co
 
 
 _COORDINATOR_LOCK = RLock()
+logger = logging.getLogger(__name__)
 
 
 def start_run(request: AgentRunRequest, *, stream: bool = False) -> AgentRunResponse:
@@ -187,7 +189,16 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
                 if terminal_status == "completed":
                     _drain_queue_after_run(request)
         except Exception as exc:  # noqa: BLE001
-            append_run_event(run_id, {"type": "error", "message": str(exc), "status": "failed"})
+            # Keep the traceback: a bare str(exc) like "'NoneType' object has no
+            # attribute 'get'" is undiagnosable after the fact.
+            import traceback as _traceback
+
+            trace = _traceback.format_exc()
+            logger.exception("Streamed agent run %s failed", run_id)
+            append_run_event(
+                run_id,
+                {"type": "error", "message": str(exc), "status": "failed", "traceback": trace[-4000:]},
+            )
             complete_active_run(run_id=run_id, status="failed", error=str(exc))
             record_agent_run(
                 run_id=run_id,

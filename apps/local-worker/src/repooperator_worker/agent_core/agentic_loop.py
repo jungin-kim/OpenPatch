@@ -180,11 +180,42 @@ _EDIT_PRODUCING_ACTION_TYPES = frozenset(
 )
 
 
+_READ_ONLY_PHRASES = (
+    "읽고", "읽어", "설명해", "알려줘", "분석해", "요약해", "보여줘", "확인해",
+    "무슨", "어떻게 동작", "어떤 역할", "파악해",
+    "explain", "describe", "summarize", "analyze", "analyse", "what does", "how does",
+    "walk me through", "tell me", "show me", "read the", "review",
+)
+
+
+def _looks_read_only(task_frame: Any) -> bool:
+    """Whether the user's own words clearly ask to read/explain, not to change.
+
+    ``edit_requested`` also turns True from weak model tool-hints, which
+    misfires on questions like "read the main file and explain how it works" —
+    that used to push a read request down the edit path.
+    """
+    try:
+        from repooperator_worker.agent_core.planner import edit_requested_text
+
+        text = str(getattr(task_frame, "user_goal", "") or "")
+        if not text:
+            return False
+        if edit_requested_text(text):
+            return False
+        lowered = text.lower()
+        return any(p in text or p in lowered for p in _READ_ONLY_PHRASES)
+    except Exception:
+        return False
+
+
 def _is_change_request(task_frame: Any) -> bool:
     """Whether the task asks to modify the repository (vs. only explain/read)."""
     try:
         from repooperator_worker.agent_core.planner import edit_requested
 
+        if _looks_read_only(task_frame):
+            return False
         return bool(edit_requested(task_frame))
     except Exception:
         return False
