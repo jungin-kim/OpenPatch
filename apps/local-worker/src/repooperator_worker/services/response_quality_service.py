@@ -8,6 +8,10 @@ HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
 THINK_RE = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
 CODE_OR_PATH_RE = re.compile(r"(`[^`]*`|[\w./-]+\.[A-Za-z0-9]{1,8})")
 GARBLED_KOREAN_RE = re.compile(r"[\uac00-\ud7a3][A-Za-z]{3,}|[A-Za-z]{3,}[\uac00-\ud7a3]|[\uac00-\ud7a3][\u4e00-\u9fff]+")
+# Latin words written next to Hangul are normal Korean prose ("RepoOperator\uc785\ub2c8\ub2e4",
+# "Python\uc73c\ub85c"), not garbled mixed script. Protect them before the garbled-text
+# repair runs, or it strips the word and leaves "\uc800\ub294 \uc785\ub2c8\ub2e4".
+LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_+#.-]*")
 
 
 def user_prefers_korean(text: str) -> bool:
@@ -44,6 +48,11 @@ def _repair_korean_visible_text(text: str, *, user_task: str) -> str:
         return f"@@RO_PROTECTED_{len(protected) - 1}@@"
 
     cleaned = CODE_OR_PATH_RE.sub(protect, text)
+    # Protect Latin words (product/library/identifier names) so the garbled-text
+    # repair below only touches genuinely mixed-script artifacts. This pass also
+    # re-protects the placeholders themselves (they are Latin), so restoration
+    # below must run in reverse to unwrap the nesting.
+    cleaned = LATIN_WORD_RE.sub(protect, cleaned)
     replacements = {
         "외부依赖": "외부 의존성",
         "내부依赖": "내부 의존성",
@@ -54,8 +63,8 @@ def _repair_korean_visible_text(text: str, *, user_task: str) -> str:
         cleaned = cleaned.replace(bad, good)
     # Remove short, obvious malformed mixed-script fragments in prose only.
     cleaned = GARBLED_KOREAN_RE.sub(lambda match: _safe_korean_fragment(match.group(0)), cleaned)
-    for index, value in enumerate(protected):
-        cleaned = cleaned.replace(f"@@RO_PROTECTED_{index}@@", value)
+    for index in range(len(protected) - 1, -1, -1):
+        cleaned = cleaned.replace(f"@@RO_PROTECTED_{index}@@", protected[index])
     return cleaned
 
 

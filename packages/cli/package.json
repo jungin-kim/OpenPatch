@@ -1,6 +1,6 @@
 {
   "name": "repooperator",
-  "version": "0.8.8",
+  "version": "0.8.9",
   "private": false,
   "description": "RepoOperator onboarding and local product runtime CLI.",
   "bin": {
