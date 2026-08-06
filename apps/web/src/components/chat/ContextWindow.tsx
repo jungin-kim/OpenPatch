@@ -7,9 +7,10 @@ type Snapshot = {
   provider: string;
   context_window: number;
   max_output_tokens: number;
+  // repo_context = repository files/summaries packed into this chat's request
+  // messages; folded into the Messages row rather than shown separately.
   components: { system_prompt: number; system_tools: number; mcp_tools: number; skills: number; repo_context?: number };
   deferred: { system_tools: number; mcp_tools: number };
-  repo_context_actual?: boolean;
 };
 
 type Segment = { key: string; label: string; tokens: number; color: string };
@@ -76,16 +77,18 @@ export function ContextWindow({ messageTokens, threadId }: { messageTokens: numb
 
   const windowSize = Math.max(1, snap.context_window);
   const cmp = snap.components;
-  const repoContext = cmp.repo_context ?? 0;
-  const used = messageTokens + repoContext + cmp.system_tools + cmp.mcp_tools + cmp.system_prompt + cmp.skills;
+  // Repository file context is sent inside the request's messages, so it counts
+  // as part of Messages rather than a separate row (Claude Code shows file
+  // contents the same way — as tool results inside the conversation).
+  const messagesTotal = messageTokens + (cmp.repo_context ?? 0);
+  const used = messagesTotal + cmp.system_tools + cmp.mcp_tools + cmp.system_prompt + cmp.skills;
   const free = Math.max(0, windowSize - used);
   const pct = Math.min(100, Math.round((used / windowSize) * 100));
 
   // Content components sorted by share (descending); color assigned by rank so
   // the biggest is the most saturated. Free space always sits last, in grey.
   const contentSegments = [
-    { key: "messages", label: "Messages", tokens: messageTokens },
-    { key: "repo_context", label: "Repo context", tokens: repoContext },
+    { key: "messages", label: "Messages", tokens: messagesTotal },
     { key: "system_tools", label: "System tools", tokens: cmp.system_tools },
     { key: "mcp_tools", label: "MCP tools", tokens: cmp.mcp_tools },
     { key: "system_prompt", label: "System prompt", tokens: cmp.system_prompt },
