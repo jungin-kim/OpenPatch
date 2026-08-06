@@ -240,6 +240,11 @@ def _next_mentioned_files_covered_action(state: AgentCoreState, request: AgentRu
     # miss would cut off a legitimate edit run with a premature answer.
     if not mentioned or edit_requested(frame):
         return None
+    # "python calc.py 실행해줘" mentions calc.py, but reading it is not the
+    # task — the requested command still has to run (or reach its approval
+    # gate) before wrapping up.
+    if command_needed_for_task(frame, state):
+        return None
     files_read = set(getattr(state, "files_read", []) or [])
     try:
         resolved = resolve_target_files(request, mentioned, preferred=known_context_files(request, state))

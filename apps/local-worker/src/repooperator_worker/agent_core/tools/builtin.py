@@ -1724,6 +1724,24 @@ Preserve existing class structure and lifecycle methods unless the requested cha
 """
 
 
+ANCHORED_EDIT_PROMPT = """\
+You are RepoOperator's anchored edit generator for LARGE files. Return JSON only.
+Instead of rewriting the file, return a small list of exact find/replace edits.
+Each "find" must be an EXACT, unique substring copied verbatim from the provided
+content (include enough surrounding lines to be unambiguous). "replace" is the
+full replacement for that substring.
+Schema:
+{
+  "file": "repo-relative path",
+  "summary": "short summary",
+  "edits": [{"find": "exact original snippet", "replace": "replacement snippet"}],
+  "risk_notes": [],
+  "preserves_existing_behavior": true
+}
+Keep edits minimal. Never use markdown fences. Do not claim the change was applied.
+"""
+
+
 CHANGE_SET_PROPOSAL_PROMPT = """\
 You are RepoOperator's change-set generator. Return JSON only.
 Prepare a proposal-only multi-file ChangeSetProposal. Do not claim changes were applied.
@@ -1896,7 +1914,65 @@ def _change_with_diff_counts(change):
     return change
 
 
+_ANCHORED_EDIT_THRESHOLD_CHARS = 16_000
+
+
+def model_generate_anchored_edit(relative_path: str, content: str, task: str) -> dict[str, Any] | None:
+    """Large-file edits as find/replace anchors instead of full regeneration.
+
+    Regenerating a 40KB file at local-model speed takes minutes and usually
+    truncates; a handful of anchored edits is fast and verifiable.
+    """
+    from repooperator_worker.agent_core.context_budget import _head_and_tail
+
+    try:
+        raw = OpenAICompatibleModelClient().generate_text(
+            ModelGenerationRequest(
+                system_prompt=ANCHORED_EDIT_PROMPT,
+                user_prompt=json.dumps(
+                    {
+                        "task": task,
+                        "file": relative_path,
+                        "content": _head_and_tail(content, 24_000),
+                        "note": "Content may be truncated in the middle; anchor your edits inside the visible regions.",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        payload = parse_json_object(raw)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    edits = [e for e in (payload.get("edits") or []) if isinstance(e, dict) and str(e.get("find") or "")]
+    if not edits:
+        return None
+    proposed = content
+    for edit in edits:
+        find = str(edit.get("find") or "")
+        replace = str(edit.get("replace") or "")
+        if find not in proposed:
+            return None  # anchor must match exactly; a fuzzy write is worse than none
+        proposed = proposed.replace(find, replace, 1)
+    if proposed == content:
+        return None
+    return {
+        "file": relative_path,
+        "summary": str(payload.get("summary") or "Anchored edit for large file."),
+        "proposed_content": proposed,
+        "unified_diff": summarize_diff(content, proposed),
+        "risk_notes": list(payload.get("risk_notes") or []),
+        "preserves_existing_behavior": bool(payload.get("preserves_existing_behavior", True)),
+    }
+
+
 def model_generate_edit_proposal(relative_path: str, content: str, task: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    if len(content) > _ANCHORED_EDIT_THRESHOLD_CHARS:
+        anchored = model_generate_anchored_edit(relative_path, content, task)
+        if anchored is not None:
+            return anchored
+        # fall through to full-content generation as a last resort
     try:
         raw = OpenAICompatibleModelClient().generate_text(
             ModelGenerationRequest(
