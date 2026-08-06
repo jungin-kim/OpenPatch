@@ -74,9 +74,28 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
     ):
         action = chooser(state, request, frame)
         if action and not _repeats_graph_action(state, action):
-            return action
+            return _with_edit_targets_filled(action, state, request, frame)
 
     return AgentAction(type="final_answer", reason_summary="Enough evidence is available for a grounded answer.")
+
+
+def _with_edit_targets_filled(action: AgentAction, state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction:
+    """A model-proposed generate_edit/generate_change_set often arrives without
+    target_files — the tool then loops over nothing and 'skips' in a second.
+    Fill the targets from the resolved edit targets or the files already read."""
+    if action.type not in {"generate_edit", "generate_change_set"}:
+        return action
+    if action.target_files or (action.payload or {}).get("target_files"):
+        return action
+    targets = current_edit_target_files(state, frame, request)
+    if not targets:
+        targets = [path for path in getattr(state, "files_read", []) or [] if "." in Path(path).name][:4]
+    if not targets:
+        return action
+    action.target_files = list(targets)
+    if isinstance(action.payload, dict):
+        action.payload.setdefault("target_files", list(targets))
+    return action
 
 
 def _next_approved_write_done_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
