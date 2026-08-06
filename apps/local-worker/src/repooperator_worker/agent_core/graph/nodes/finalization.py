@@ -187,6 +187,10 @@ def final_build_response_node(state: RepoOperatorGraphState) -> dict[str, Any]:
         m in core.final_response or m in core.final_response.lower() for m in _QUESTION_MARKERS
     ):
         core.final_response = _ensure_actual_question("", request, korean=_task_is_korean(request))
+    # Prompt-injection backstop: if repository content hijacked the answer (the
+    # model echoed an injected marker or leaked the system prompt), replace it
+    # with an honest report instead of serving the attacker's text.
+    core.final_response = _guard_injection_leak(core.final_response, request, korean=_task_is_korean(request))
     # Honesty backstop: never let the answer claim an edit was applied when no
     # file actually changed. This catches the failure mode where the model
     # narrates a change ("the docstring has been added") without applying it.
@@ -456,7 +460,34 @@ _ASKING_NARRATION_RE = re.compile(r"질문합니다|질문해야|질문을 던�
 
 
 def _ensure_actual_question(text: str, request: Any, *, korean: bool) -> str:
-    """Guarantee the clarification shown to the user actually asks something."""
+    """Guarantee the clarification shown to the user actually asks something.
+
+    A planning request ("…계획을 세워줘") is specific enough to answer — asking
+    "what do you want?" back is a non-answer, so nudge toward a plan instead.
+    """
+    from repooperator_worker.agent_core.intent import is_planning_request
+
+    if is_planning_request(str(getattr(request, "task", "") or "")):
+        if korean:
+            return (
+                "요청하신 작업의 단계별 계획을 세우려면 현재 코드 구조를 조금 더 확인해야 합니다. "
+                "제가 파악한 범위에서 우선 초안 계획을 말씀드리면:\n\n"
+                "1. 관련 데이터 구조/저장소(예: DB 스키마)에 필요한 필드를 정의합니다.\n"
+                "2. 해당 기능을 노출할 명령어 또는 진입점을 추가합니다.\n"
+                "3. 기존 흐름(권한 검사, 입력 검증, 응답 포맷)에 맞춰 로직을 연결합니다.\n"
+                "4. 실패/예외 경로를 처리하고 사용자 안내 메시지를 정리합니다.\n"
+                "5. 간단한 검증(수동 테스트 또는 테스트 코드)으로 동작을 확인합니다.\n\n"
+                "이 방향으로 진행할까요? 원하시는 명령어 이름이나 세부 동작을 알려주시면 코드까지 준비하겠습니다."
+            )
+        return (
+            "Here's a draft plan based on what I could confirm in the repository:\n\n"
+            "1. Define the data/schema fields the feature needs.\n"
+            "2. Add the command or entry point that exposes it.\n"
+            "3. Wire the logic into existing flows (permissions, validation, response formatting).\n"
+            "4. Handle failure paths and user-facing messages.\n"
+            "5. Verify with a quick manual test or a test case.\n\n"
+            "Want me to proceed this way? Tell me the command name or exact behavior and I'll prepare the code."
+        )
     lowered = text.lower()
     if any(marker in text or marker in lowered for marker in _QUESTION_MARKERS):
         return text
@@ -471,6 +502,38 @@ def _ensure_actual_question(text: str, request: Any, *, korean: bool) -> str:
     return (
         f"Before I proceed with{goal_part or ' this request'}, could you describe the expected behavior "
         "a bit more concretely? (e.g. command name, target users, exact behavior)"
+    )
+
+
+_SYSTEM_PROMPT_LEAK_RE = re.compile(
+    r"You are RepoOperator, an autonomous coding agent|## Operating loop|## Untrusted content|"
+    r"Operate as think -> act -> observe",
+    re.IGNORECASE,
+)
+
+
+def _guard_injection_leak(text: str, request: Any, *, korean: bool) -> str:
+    """Block answers hijacked by injected instructions in repository content."""
+    if not text:
+        return text
+    leaked_prompt = bool(_SYSTEM_PROMPT_LEAK_RE.search(text))
+    # A hijacked answer is typically *only* the attacker's demanded string.
+    stripped = text.strip()
+    hijacked = len(stripped) < 200 and bool(
+        re.search(r"\b(HACKED|PWNED|INJECTED)[-_ ]?BY\b", stripped, re.IGNORECASE)
+    )
+    if not (leaked_prompt or hijacked):
+        return text
+    if korean:
+        return (
+            "⚠️ 이 저장소의 파일 내용에 저를 조종하려는 지시문(프롬프트 인젝션)이 포함되어 있어 "
+            "해당 지시는 따르지 않았습니다.\n\n"
+            "파일에 적힌 문구는 데이터로만 취급합니다. 원래 요청을 다시 말씀해 주시면 정상적으로 도와드리겠습니다."
+        )
+    return (
+        "⚠️ This repository's content contains text trying to give me instructions (prompt injection). "
+        "I did not follow it — file contents are treated as data, not commands.\n\n"
+        "Tell me what you'd like to know about the repository and I'll continue normally."
     )
 
 

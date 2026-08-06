@@ -121,6 +121,22 @@ def off_topic_answer(korean: bool) -> str:
     )
 
 
+_PLANNING_TERMS = (
+    "계획을 세워", "계획 세워", "계획해줘", "어떤 작업들이 필요", "무슨 작업이 필요",
+    "단계별로", "단계로 나눠", "로드맵", "설계해줘", "어떻게 접근",
+    "plan the", "make a plan", "step by step", "break it down", "roadmap", "what steps",
+    "how would you approach",
+)
+
+
+def is_planning_request(text: str) -> bool:
+    """Asking for a plan/breakdown — answer with the plan, don't ask what to do."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(t in text or t in lowered for t in _PLANNING_TERMS)
+
+
 def has_web_intent(text: str) -> bool:
     if extract_urls(text):
         return True

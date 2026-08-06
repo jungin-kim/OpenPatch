@@ -100,6 +100,10 @@ def _next_missing_file_action(state: AgentCoreState, request: AgentRunRequest, f
     fires when resolution finds nothing at all for the named files.
     """
     mentioned = [str(f).strip().lstrip("/") for f in getattr(frame, "mentioned_files", []) or [] if str(f).strip()]
+    # Only treat tokens that look like real filenames (have an extension) as
+    # explicit targets. Bare words such as "README" or "코드" in a sentence
+    # ("README와 코드를 읽고 설명해줘") are topics, not missing files.
+    mentioned = [f for f in mentioned if "." in Path(f).name]
     if not mentioned:
         return None
     try:
@@ -112,12 +116,10 @@ def _next_missing_file_action(state: AgentCoreState, request: AgentRunRequest, f
     # exist under another path); only ask once the search came up empty.
     searched = any(getattr(a, "type", None) == "search_files" for a in getattr(state, "actions_taken", []) or [])
     if not searched:
-        from pathlib import Path as _Path
-
         return AgentAction(
             type="search_files",
             reason_summary="Search for the named files before concluding they are missing.",
-            payload={"queries": [_Path(f).name for f in mentioned]},
+            payload={"queries": [Path(f).name for f in mentioned]},
         )
     return AgentAction(
         type="ask_clarification",
@@ -303,6 +305,12 @@ def _next_search_candidate_action(state: AgentCoreState, request: AgentRunReques
 
 def _next_edit_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
     if not edit_requested(frame):
+        return None
+    # A plan request ("…계획을 세워줘") must answer with the plan; generating a
+    # patch here would skip the user's approval of the approach.
+    from repooperator_worker.agent_core.intent import is_planning_request
+
+    if is_planning_request(str(getattr(request, "task", "") or "")):
         return None
     edit_targets = current_edit_target_files(state, frame, request)
     if edit_targets:
