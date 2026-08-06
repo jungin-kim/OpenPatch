@@ -1280,11 +1280,56 @@ class _DirectFileWriteTool(BaseTool):
         return apply_mode_rules_to_decision(self.spec.name, payload, context, ask)
 
     def call(self, payload: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
+        decision = payload.get("approval_decision") if isinstance(payload.get("approval_decision"), dict) else {}
+        if str(decision.get("decision") or "").lower() == "allow":
+            # The user explicitly approved this exact write (path + content shown
+            # in the approval card) — execute it. Before this, the tool was an
+            # audit-only stub, so an approved create_file "completed" without
+            # writing anything and the model narrated a file that didn't exist.
+            return self._perform_approved_write(payload, context)
         return ToolResult(
             tool_name=self.spec.name,
             status="failed",
             observation="Direct file mutation tools are registered for audit visibility; normal writes must go through apply_change_set.",
             payload={"errors": ["use apply_change_set for proposed file writes"]},
+        )
+
+    def _perform_approved_write(self, payload: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
+        from repooperator_worker.services.common import ensure_relative_to_repo, resolve_project_path
+
+        try:
+            repo_path = resolve_project_path(context.request.project_path)
+            name = self.spec.name
+            if name == "rename_file":
+                source = ensure_relative_to_repo(repo_path, str(payload.get("from") or payload.get("path") or ""))
+                target = ensure_relative_to_repo(repo_path, str(payload.get("to") or ""))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source.rename(target)
+                observation = f"Renamed {source.name} to {target.name} after explicit approval."
+                touched = [str(payload.get("to") or "")]
+            elif name == "delete_file":
+                target = ensure_relative_to_repo(repo_path, str(payload.get("path") or ""))
+                target.unlink()
+                observation = f"Deleted {payload.get('path')} after explicit approval."
+                touched = [str(payload.get("path") or "")]
+            else:  # create_file / modify_file
+                target = ensure_relative_to_repo(repo_path, str(payload.get("path") or ""))
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(str(payload.get("content") or ""), encoding="utf-8")
+                observation = f"Wrote {payload.get('path')} after explicit approval."
+                touched = [str(payload.get("path") or "")]
+        except (OSError, ValueError) as exc:
+            return ToolResult(
+                tool_name=self.spec.name,
+                status="failed",
+                observation=f"Approved file write failed: {exc}",
+                payload={"errors": [str(exc)]},
+            )
+        return ToolResult(
+            tool_name=self.spec.name,
+            status="success",
+            observation=observation,
+            payload={"files_modified": touched, "path": payload.get("path"), "approved": True},
         )
 
 

@@ -107,6 +107,78 @@ def await_approval_node(state: RepoOperatorGraphState) -> dict[str, Any]:
             ),
         )
         return _with_checkpoint_bump(update)
+    if pending.get("kind") in {"create_file", "modify_file", "delete_file", "rename_file"} or payload.get("kind") in {"create_file", "modify_file", "delete_file", "rename_file"}:
+        kind = str(pending.get("kind") or payload.get("kind") or "")
+        if normalized.get("decision") == "allow":
+            # Re-dispatch the SAME direct-write action with the approval attached
+            # so the tool executes it. The generic fall-through below builds a
+            # run_approved_command with an empty command, which silently did
+            # nothing and let the model narrate a write that never happened.
+            update = {
+                "pending_action": action_to_snapshot(
+                    AgentAction(
+                        type=kind,
+                        reason_summary=f"Execute {kind} after explicit approval.",
+                        expected_output="File write result.",
+                        payload={**json_safe(pending.get("approval_payload") or {}), "approval_decision": normalized},
+                    )
+                ),
+                "pending_approval": None,
+                "stop_reason": None,
+                "routing_stage": "after_interrupt_resume",
+                "approval_decision": normalized,
+                "events_to_emit": [
+                    _graph_transition_event(
+                        state,
+                        "await_approval",
+                        operation="approval_resume",
+                        status="completed",
+                        aggregate={"kind": kind, "decision": "allow"},
+                    )
+                ],
+            }
+            update = _merge_updates(
+                update,
+                append_visible_rationale(
+                    state,
+                    node="await_approval",
+                    action=update["pending_action"],
+                    summary=f"The user approved {kind}, so I am executing the approved file write.",
+                    basis_refs=[{"kind": "file", "path": str((pending.get("approval_payload") or {}).get("path") or "")}],
+                    safety_note="Direct file writes execute only after explicit approval.",
+                    uncertainty=[],
+                ),
+            )
+            return _with_checkpoint_bump(update)
+        update = {
+            "stop_reason": "approval_denied",
+            "final_response": f"I did not execute {kind} because approval was denied. No file was modified.",
+            "pending_approval": None,
+            "routing_stage": "after_approval",
+            "approval_decision": normalized,
+            "events_to_emit": [
+                _graph_transition_event(
+                    state,
+                    "await_approval",
+                    operation="approval_gate",
+                    status="completed",
+                    aggregate={"kind": kind, "decision": "deny"},
+                )
+            ],
+        }
+        update = _merge_updates(
+            update,
+            append_visible_rationale(
+                state,
+                node="await_approval",
+                action=None,
+                summary=f"The {kind} request was denied, so no file was written.",
+                basis_refs=[],
+                safety_note="Denied approval blocks the file write.",
+                uncertainty=[],
+            ),
+        )
+        return _with_checkpoint_bump(update)
     if pending.get("kind") in {"git_commit", "git_push", "github_create_pr", "gitlab_create_mr"} or payload.get("kind") in {"git_commit", "git_push", "github_create_pr", "gitlab_create_mr"}:
         kind = str(pending.get("kind") or payload.get("kind") or "")
         if normalized.get("decision") == "allow":

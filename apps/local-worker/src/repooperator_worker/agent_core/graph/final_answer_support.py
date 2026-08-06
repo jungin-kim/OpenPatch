@@ -304,6 +304,20 @@ def _response_json_safe(response: AgentRunResponse, request: AgentRunRequest) ->
 
 
 def _format_command_preview(command: list[str], preview: dict[str, Any]) -> str:
+    kind = str(preview.get("kind") or "")
+    payload = preview.get("approval_payload") if isinstance(preview.get("approval_payload"), dict) else {}
+    if not command and (kind in {"create_file", "write_file", "file_write"} or payload.get("path")):
+        # File-write approvals have no shell command; an empty "``" preview
+        # rendered as a blank final message. Describe the write instead.
+        path = str(payload.get("path") or "").strip() or "(unknown path)"
+        content = str(payload.get("content") or "")
+        snippet = content[:600].rstrip()
+        lines = [f"`{path}` 파일 작성을 승인해 주세요. 승인하시면 아래 내용으로 저장됩니다."]
+        if snippet:
+            lines.append(f"\n```\n{snippet}\n```")
+        if len(content) > 600:
+            lines.append(f"(내용 일부만 표시 — 총 {len(content)}자)")
+        return "\n".join(lines)
     text = " ".join(command)
     if preview.get("needs_approval"):
         return f"`{text}` requires approval before RepoOperator can run it. Reason: {preview.get('reason') or 'command policy'}"
