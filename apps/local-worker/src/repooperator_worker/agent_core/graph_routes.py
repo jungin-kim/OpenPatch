@@ -394,6 +394,27 @@ def _next_search_candidate_action(state: AgentCoreState, request: AgentRunReques
     return None
 
 
+_CREATION_INTENT_RE = re.compile(r"만들어|만들 |생성해|생성하|새로 |새 파일|create|new file", re.IGNORECASE)
+
+
+def _creation_target_file(request: AgentRunRequest, frame: Any) -> str | None:
+    """The named file for an explicit create request, if it doesn't exist yet."""
+    task = str(getattr(request, "task", "") or "")
+    if not _CREATION_INTENT_RE.search(task):
+        return None
+    for item in getattr(frame, "mentioned_files", []) or []:
+        name = str(item).strip().lstrip("/")
+        if not name or "." not in Path(name).name:
+            continue
+        try:
+            resolved = resolve_target_files(request, [name])
+        except Exception:
+            resolved = []
+        if not resolved:
+            return name
+    return None
+
+
 def _next_edit_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
     if not edit_requested(frame):
         return None
@@ -404,6 +425,13 @@ def _next_edit_action(state: AgentCoreState, request: AgentRunRequest, frame: An
     if is_planning_request(str(getattr(request, "task", "") or "")):
         return None
     edit_targets = current_edit_target_files(state, frame, request)
+    if not edit_targets:
+        creation_target = _creation_target_file(request, frame)
+        if creation_target:
+            # "utils.py 파일을 새로 만들어서 …" — the named file SHOULD NOT exist,
+            # so target resolution finds nothing. Drive a create-operation
+            # change set instead of asking the user what they meant.
+            edit_targets = [creation_target]
     if edit_targets:
         if not (_has_action(state, "generate_change_set") or _has_action(state, "generate_edit")):
             return AgentAction(

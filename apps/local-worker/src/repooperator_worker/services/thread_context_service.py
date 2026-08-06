@@ -85,6 +85,32 @@ def expand_anaphoric_task(request: AgentRunRequest) -> AgentRunRequest:
     return request.model_copy(update={"task": merged})
 
 
+def remember_last_user_task(thread_id: str | None, project_path: str, task: str) -> None:
+    """Persist the raw user task at run START.
+
+    Saving only at run completion missed every run that paused for approval
+    (proposals, gated commands), so a follow-up like "똑같이 해줘" had no
+    previous task to resolve against. Read-modify-write to keep other fields.
+    """
+    if not thread_id or not (task or "").strip():
+        return
+    path = _thread_context_path(thread_id)
+    payload: dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(loaded, dict):
+                payload = loaded
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+    payload.setdefault("active_repo", project_path)
+    payload["last_user_task"] = task.strip()[:500]
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def build_thread_context(request: AgentRunRequest) -> ThreadContext:
     context = _load_durable_context(request) or ThreadContext(active_repo=request.project_path, branch=request.branch)
     for message in reversed(request.conversation_history):
