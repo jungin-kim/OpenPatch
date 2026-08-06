@@ -61,6 +61,7 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
         _next_web_fetch_action,
         _next_missing_file_action,
         _next_git_commit_action,
+        _next_git_branch_action,
         # Before any model-driven chooser: an explicitly requested command
         # ("python calc.py 실행해줘") must reach the preview/approval flow —
         # model paths kept answering or editing instead of running it.
@@ -211,6 +212,40 @@ _GIT_COMMIT_INTENT_RE = __import__("re").compile(
     r"커밋\s*해|커밋해|커밋하고|커밋으로|메시지로\s*커밋|make a commit|commit (the|these|this|my|current)|커밋\s*좀",
     __import__("re").IGNORECASE,
 )
+
+
+_GIT_BRANCH_CREATE_RE = re.compile(r"(?:브랜치|branch)", re.IGNORECASE)
+_GIT_BRANCH_CREATE_VERB_RE = re.compile(r"만들|생성|create|new", re.IGNORECASE)
+
+
+def _next_git_branch_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """"feature/x 브랜치 만들어줘" goes straight to the gated git_branch_create
+    tool — the model narrated branch creation without ever running git."""
+    task = str(getattr(request, "task", "") or "")
+    if not (_GIT_BRANCH_CREATE_RE.search(task) and _GIT_BRANCH_CREATE_VERB_RE.search(task)):
+        return None
+    if any(getattr(a, "type", None) == "git_branch_create" for a in getattr(state, "actions_taken", []) or []):
+        return None
+    name = ""
+    quoted = re.search(r"['\"`]([\w./-]+)['\"`]", task)
+    if quoted:
+        name = quoted.group(1)
+    if not name:
+        slashed = re.search(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)\b", task)
+        if slashed:
+            name = slashed.group(1)
+    if not name:
+        named = re.search(r"([A-Za-z0-9_.-]{2,})\s*(?:라는|이라는|이란|란)", task)
+        if named:
+            name = named.group(1)
+    if not name:
+        return None
+    return AgentAction(
+        type="git_branch_create",
+        reason_summary=f"Create the requested branch {name} through the gated git tool.",
+        expected_output="Branch creation result.",
+        payload={"branch": name, "name": name},
+    )
 
 
 def _next_git_commit_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
