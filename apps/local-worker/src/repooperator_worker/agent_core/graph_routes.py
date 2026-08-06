@@ -92,6 +92,13 @@ def _with_edit_targets_filled(action: AgentAction, state: AgentCoreState, reques
         return action
     targets = current_edit_target_files(state, frame, request)
     if not targets:
+        # The model may call generate_edit before any file was read — resolve
+        # the files the user actually named.
+        try:
+            targets = resolve_target_files(request, getattr(frame, "mentioned_files", []) or [], preferred=known_context_files(request, state))
+        except Exception:
+            targets = []
+    if not targets:
         targets = [path for path in getattr(state, "files_read", []) or [] if "." in Path(path).name][:4]
     if not targets:
         return action
