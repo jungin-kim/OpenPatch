@@ -394,6 +394,9 @@ def _format_command_preview(command: list[str], preview: dict[str, Any]) -> str:
         if len(content) > 600:
             lines.append(f"(내용 일부만 표시 — 총 {len(content)}자)")
         return "\n".join(lines)
+    if not command and (kind == "git_branch_create" or payload.get("branch")):
+        branch = str(payload.get("branch") or payload.get("name") or "").strip() or "(unknown)"
+        return f"`{branch}` 브랜치 생성을 승인해 주세요. 승인하시면 로컬 브랜치를 만듭니다."
     text = " ".join(command)
     if not text.strip():
         # No command and no recognizable file payload — never render "``".

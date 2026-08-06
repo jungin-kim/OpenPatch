@@ -179,7 +179,7 @@ def await_approval_node(state: RepoOperatorGraphState) -> dict[str, Any]:
             ),
         )
         return _with_checkpoint_bump(update)
-    if pending.get("kind") in {"git_commit", "git_push", "github_create_pr", "gitlab_create_mr"} or payload.get("kind") in {"git_commit", "git_push", "github_create_pr", "gitlab_create_mr"}:
+    if pending.get("kind") in {"git_commit", "git_push", "git_branch_create", "github_create_pr", "gitlab_create_mr"} or payload.get("kind") in {"git_commit", "git_push", "git_branch_create", "github_create_pr", "gitlab_create_mr"}:
         kind = str(pending.get("kind") or payload.get("kind") or "")
         if normalized.get("decision") == "allow":
             action_type = kind
