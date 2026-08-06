@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+import shutil
 import subprocess
 import time
 import uuid
@@ -125,9 +126,14 @@ def run_command_with_policy(
             "created_at": int(time.time()),
         }
 
+    command = list(preview.command)
+    # macOS ships python3 but often no bare "python" — swap instead of failing
+    # with FileNotFoundError after the user already approved the run.
+    if command and command[0] == "python" and shutil.which("python") is None and shutil.which("python3"):
+        command[0] = "python3"
     started = time.perf_counter()
     result = subprocess.run(
-        preview.command,
+        command,
         cwd=preview.cwd,
         text=True,
         capture_output=True,
