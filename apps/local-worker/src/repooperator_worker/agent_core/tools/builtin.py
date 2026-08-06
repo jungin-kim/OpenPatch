@@ -1143,6 +1143,34 @@ class GenerateChangeSetTool(BaseTool):
                     proposal = repaired_proposal
                     validation = repaired_validation
 
+        if validation.status != "valid" and len(evidence_contents) > 1:
+            # Multi-file generation is fragile for local models (one huge JSON
+            # with several full files). Fall back to generating each file's
+            # change independently and merging the valid parts.
+            merged_changes: list[Any] = []
+            for relative_path, content in evidence_contents.items():
+                single_payload = {**payload, "target_files": [relative_path]}
+                single_raw = model_generate_change_set_proposal(
+                    task=context.request.task,
+                    repo=str(repo),
+                    evidence_contents={relative_path: content},
+                    payload=single_payload,
+                )
+                if not single_raw:
+                    continue
+                single_proposal = change_set_from_model_payload(
+                    single_raw,
+                    task=context.request.task,
+                    evidence_contents={relative_path: content},
+                    payload=single_payload,
+                )
+                single_validation = validate_change_set(single_proposal, repo=context.request.project_path)
+                if single_validation.status == "valid":
+                    merged_changes.extend(change for change in single_proposal.changes if change.path == relative_path)
+            if merged_changes:
+                proposal.changes = merged_changes
+                validation = validate_change_set(proposal, repo=context.request.project_path)
+
         proposal.validation = validation
         proposal.status = validation.status
         proposal.validation_status = validation.status

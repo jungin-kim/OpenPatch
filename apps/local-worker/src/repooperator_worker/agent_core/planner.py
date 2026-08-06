@@ -474,6 +474,17 @@ def command_needed_for_text(text: str) -> list[str] | None:
     lowered = (text or "").lower()
     if ("git log" in lowered) or ("commit" in lowered and "recent" in lowered) or ("커밋" in text and "최근" in text):
         return ["git", "log", "--oneline", "-n", "5"]
+    # Explicit run requests: "python calc.py를 실행해줘", "run pytest".
+    # Without this there was no deterministic path to the command approval
+    # gate and the model just described the file instead of running anything.
+    if any(marker in text or marker in lowered for marker in ("실행해", "실행시켜", "돌려줘", "돌려 줘", "run ", "execute ")):
+        match = re.search(r"\b(python3?|pytest|npm|pnpm|yarn|node|make|go|cargo)\b(?:\s+([A-Za-z0-9_./:-]+))?", lowered)
+        if match:
+            command = [match.group(1)]
+            arg = (match.group(2) or "").strip()
+            if arg:
+                command.append(arg)
+            return command
     return None
 
 
