@@ -55,6 +55,7 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
                 return recovery
 
     for chooser in (
+        _next_approved_write_done_action,
         _next_off_topic_answer_action,
         _next_meta_answer_action,
         _next_web_fetch_action,
@@ -76,6 +77,24 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
             return action
 
     return AgentAction(type="final_answer", reason_summary="Enough evidence is available for a grounded answer.")
+
+
+def _next_approved_write_done_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """An explicitly approved direct file write just succeeded — the task is
+    done. Without this the loop wandered into the change-set flow against the
+    already-written file and reported a failure for work that succeeded."""
+    results = getattr(state, "action_results", []) or []
+    if not results:
+        return None
+    latest = results[-1]
+    if getattr(latest, "status", "") != "success":
+        return None
+    payload = getattr(latest, "payload", None) or {}
+    actions = getattr(state, "actions_taken", []) or []
+    last_type = str(getattr(actions[-1], "type", "") or "") if actions else ""
+    if last_type in {"create_file", "modify_file", "delete_file", "rename_file"} and payload.get("approved"):
+        return AgentAction(type="final_answer", reason_summary="The approved file write completed; report the result.")
+    return None
 
 
 def _next_off_topic_answer_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:

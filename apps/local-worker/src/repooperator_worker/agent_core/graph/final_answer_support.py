@@ -46,6 +46,9 @@ def build_final_answer_text(
     repository_review = _repository_review_response(state)
     if repository_review:
         return repository_review.response
+    approved_write = _latest_approved_write_result(state)
+    if approved_write:
+        return approved_write
     edit_proposal = _latest_edit_proposal(state)
     if edit_proposal:
         return _format_edit_proposal(edit_proposal)
@@ -113,6 +116,11 @@ def build_final_response(state: AgentCoreState, request: AgentRunRequest) -> Age
     if review_response and state.stop_reason not in {"cancelled", "waiting_approval"}:
         return _response_json_safe(review_response.model_copy(update={"loop_iteration": state.loop_iteration, "agent_flow": "langgraph"}), request)
     response_type = "command_approval" if state.pending_approval else "assistant_answer"
+    final_text = state.final_response
+    if state.pending_approval and not (final_text or "").strip():
+        # A blank message next to the approval card left the user guessing what
+        # they were approving — describe the gated command/file write instead.
+        final_text = _format_command_preview(list(state.pending_approval.get("command") or []), state.pending_approval)
     graph_path = "agent_core:" + (
         "cancelled" if state.stop_reason == "cancelled"
         else "command_preview" if state.pending_approval
@@ -122,7 +130,7 @@ def build_final_response(state: AgentCoreState, request: AgentRunRequest) -> Age
     return _response_json_safe(
         build_agent_response(
             request,
-            response=state.final_response,
+            response=final_text,
             response_type=response_type,
             files_read=state.files_read,
             graph_path=graph_path,
@@ -301,6 +309,25 @@ def _response_json_safe(response: AgentRunResponse, request: AgentRunRequest) ->
             activity_events=list(safe_payload.get("activity_events") or []),
             agent_flow="langgraph",
         )
+
+
+def _latest_approved_write_result(state: AgentCoreState) -> str | None:
+    """A user-approved direct file write that succeeded is the outcome of the
+    run — report it, even if later steps (e.g. a redundant change-set attempt
+    against the already-written file) recorded errors."""
+    actions = list(getattr(state, "actions_taken", []) or [])
+    results = list(getattr(state, "action_results", []) or [])
+    for action, result in zip(reversed(actions[-len(results):] if results else []), reversed(results)):
+        action_type = str(getattr(action, "type", "") or "")
+        if action_type not in {"create_file", "modify_file", "delete_file", "rename_file"}:
+            continue
+        payload = getattr(result, "payload", None) or {}
+        if getattr(result, "status", "") != "success" or not payload.get("approved"):
+            continue
+        path = str(payload.get("path") or "").strip() or "요청하신 파일"
+        verbs = {"create_file": "생성했습니다", "modify_file": "수정했습니다", "delete_file": "삭제했습니다", "rename_file": "이름을 변경했습니다"}
+        return f"승인해 주신 대로 `{path}` 파일을 {verbs.get(action_type, '처리했습니다')}. 작업이 완료되었습니다."
+    return None
 
 
 def _format_command_preview(command: list[str], preview: dict[str, Any]) -> str:
