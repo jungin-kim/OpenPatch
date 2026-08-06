@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from pathlib import Path
 from typing import Any
 
 from repooperator_worker.agent_core.graph.adapters import (
@@ -28,21 +29,54 @@ from repooperator_worker.schemas import AgentRunResponse
 from repooperator_worker.services.event_service import append_run_event
 from repooperator_worker.services.json_safe import json_safe
 
+def _close_file_candidates(request: Any, missing_names: list[str]) -> list[str]:
+    """Nearest existing filenames for a typo'd request ("calk.py" → calc.py)."""
+    import difflib
+
+    from repooperator_worker.services.common import resolve_project_path
+
+    try:
+        root = Path(resolve_project_path(str(getattr(request, "project_path", "") or "")))
+    except Exception:
+        return []
+    files: list[str] = []
+    try:
+        for p in root.rglob("*"):
+            if p.is_file() and ".git" not in p.parts and "node_modules" not in p.parts:
+                files.append(str(p.relative_to(root)))
+                if len(files) >= 800:
+                    break
+    except OSError:
+        return []
+    names = [Path(f).name.lower() for f in files]
+    out: list[str] = []
+    for missing in missing_names:
+        for match in difflib.get_close_matches(Path(str(missing)).name.lower(), names, n=2, cutoff=0.6):
+            for f in files:
+                if Path(f).name.lower() == match and f not in out:
+                    out.append(f)
+    return out[:4]
+
+
 def ask_clarification_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     action = _pending_action(state)
     request = _request(state)
     core = _core_state_from_graph(state)
     korean = _task_is_korean(request)
-    missing = ", ".join(action.payload.get("missing_files") or []) if action else ""
+    missing_list = list(action.payload.get("missing_files") or []) if action else []
+    missing = ", ".join(missing_list)
+    close = _close_file_candidates(request, missing_list) if missing_list else []
+    suggestion_ko = f" 혹시 이 파일을 말씀하신 걸까요: {', '.join(f'`{c}`' for c in close)}?" if close else ""
+    suggestion_en = f" Did you mean: {', '.join(f'`{c}`' for c in close)}?" if close else ""
     final_response = (
         action.payload.get("question")
         if action
         else None
     ) or core.classifier_result.clarification_question or (
         (
-            f"{missing} 파일을 찾지 못했어요. 정확한 경로를 알려주시거나 제가 찾은 후보 중에서 골라주시겠어요?"
+            f"{missing} 파일을 찾지 못했어요.{suggestion_ko} 정확한 경로를 알려주시면 이어서 확인하겠습니다."
             if korean
-            else f"I could not find {missing}. Please confirm the repo-relative path or choose one of the candidates I found."
+            else f"I could not find {missing}.{suggestion_en} Please confirm the repo-relative path."
         )
         if missing
         else (
