@@ -346,6 +346,9 @@ def _format_command_preview(command: list[str], preview: dict[str, Any]) -> str:
             lines.append(f"(내용 일부만 표시 — 총 {len(content)}자)")
         return "\n".join(lines)
     text = " ".join(command)
+    if not text.strip():
+        # No command and no recognizable file payload — never render "``".
+        return "승인이 필요한 작업이 있습니다. 승인 카드에서 내용을 확인하고 진행 여부를 결정해 주세요."
     if preview.get("needs_approval"):
         return f"`{text}` requires approval before RepoOperator can run it. Reason: {preview.get('reason') or 'command policy'}"
     return f"`{text}` is allowed by command policy. I did not run a mutating command."
