@@ -482,7 +482,10 @@ def command_needed_for_text(text: str) -> list[str] | None:
         if match:
             command = [match.group(1)]
             arg = (match.group(2) or "").strip()
-            if arg:
+            # Only treat the following token as an argument when it looks like
+            # a file/target or a known subcommand — "run pytest please" must
+            # not become `pytest please`.
+            if arg and ("." in arg or "/" in arg or arg in {"test", "run", "build", "install", "dev", "lint"}):
                 command.append(arg)
             return command
     return None
