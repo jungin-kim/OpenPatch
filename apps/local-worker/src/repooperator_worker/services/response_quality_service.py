@@ -7,6 +7,7 @@ import re
 HANGUL_RE = re.compile(r"[\uac00-\ud7a3]")
 THINK_RE = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
 CODE_OR_PATH_RE = re.compile(r"(`[^`]*`|[\w./-]+\.[A-Za-z0-9]{1,8})")
+STANDALONE_CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
 GARBLED_KOREAN_RE = re.compile(r"[\uac00-\ud7a3][A-Za-z]{3,}|[A-Za-z]{3,}[\uac00-\ud7a3]|[\uac00-\ud7a3][\u4e00-\u9fff]+")
 # Latin words written next to Hangul are normal Korean prose ("RepoOperator\uc785\ub2c8\ub2e4",
 # "Python\uc73c\ub85c"), not garbled mixed script. Protect them before the garbled-text
@@ -75,6 +76,12 @@ def _repair_korean_visible_text(text: str, *, user_task: str) -> str:
         cleaned = cleaned.replace(bad, good)
     # Remove short, obvious malformed mixed-script fragments in prose only.
     cleaned = GARBLED_KOREAN_RE.sub(lambda match: _safe_korean_fragment(match.group(0)), cleaned)
+    # Standalone Chinese phrases also leak into Korean answers ("让您 질문하신
+    # ... 这个问题") — the adjacency pattern above misses them because they are
+    # separated by punctuation/whitespace. Korean prose has no legitimate runs
+    # of CJK ideographs here (code spans are already protected).
+    cleaned = STANDALONE_CJK_RE.sub(" ", cleaned)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     for index in range(len(protected) - 1, -1, -1):
         cleaned = cleaned.replace(f"@@RO_PROTECTED_{index}@@", protected[index])
     return cleaned
