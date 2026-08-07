@@ -1809,6 +1809,7 @@ def model_generate_change_set_proposal(
         raw = OpenAICompatibleModelClient().generate_text(
             ModelGenerationRequest(
                 system_prompt=CHANGE_SET_PROPOSAL_PROMPT,
+                max_output_tokens=8192,
                 user_prompt=json.dumps(
                     {
                         "task": task,
@@ -2000,6 +2001,7 @@ def model_generate_edit_proposal(relative_path: str, content: str, task: str, co
         raw = OpenAICompatibleModelClient().generate_text(
             ModelGenerationRequest(
                 system_prompt=EDIT_PROPOSAL_PROMPT,
+                max_output_tokens=8192,
                 user_prompt=json.dumps(
                     {
                         "task": task,

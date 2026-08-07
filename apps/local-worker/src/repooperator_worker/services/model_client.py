@@ -1,5 +1,6 @@
 import json
 import socket
+import time
 from dataclasses import dataclass
 from typing import Any, Iterator
 from urllib import error, request
@@ -25,6 +26,7 @@ _ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 class ModelGenerationRequest:
     system_prompt: str
     user_prompt: str
+    max_output_tokens: int | None = None
 
 
 def _post_json(
@@ -134,12 +136,17 @@ class OpenAICompatibleModelClient:
             headers=self._build_headers(),
             method="POST",
         )
+        stream_started = time.monotonic()
         try:
             with request.urlopen(
                 http_request,
                 timeout=self._settings.model_request_timeout_seconds,
             ) as response:
                 for raw_line in response:
+                    if time.monotonic() - stream_started > self._settings.model_request_timeout_seconds:
+                        # urlopen's timeout only bounds gaps BETWEEN bytes — a
+                        # slow-but-steady stream could run forever.
+                        break
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line or not line.startswith("data:"):
                         continue
@@ -223,6 +230,10 @@ class OpenAICompatibleModelClient:
                 {"role": "system", "content": prompt.system_prompt},
                 {"role": "user", "content": prompt.user_prompt},
             ],
+            # Uncapped output let a slow local model generate for 30+ minutes
+            # on a single call. Callers that legitimately need long output
+            # (full-file edit proposals) override max_output_tokens.
+            "max_tokens": int(prompt.max_output_tokens or 4096),
         }
         payload.update(self._ollama_options())
         return payload
