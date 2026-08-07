@@ -92,7 +92,7 @@ def git_propose_commit_summary_node(state: RepoOperatorGraphState) -> dict[str, 
         }
     workflow = dict(state.get("git_workflow") or {})
     files = list(state.get("files_changed") or [])
-    message = workflow.get("commit_message") or _generated_commit_message(state)
+    message = _quoted_message_from_task(state) or workflow.get("commit_message") or _generated_commit_message(state)
     validation_status = str(state.get("post_apply_validation_status") or "unknown")
     commit_summary = {
         "message": message,
@@ -237,6 +237,17 @@ def _merge_request_requested(state: RepoOperatorGraphState) -> bool:
 
 def _git_write_context_allowed(state: RepoOperatorGraphState) -> bool:
     return bool(state.get("apply_status") == "applied" or state.get("applied_change_set_id") or _git_workflow_requested(state))
+
+def _quoted_message_from_task(state: RepoOperatorGraphState) -> str | None:
+    """"'게임 구현' 메시지로 커밋해줘" — a user-quoted commit message must win
+    over the workflow's generated one."""
+    try:
+        task = str(_request(state).task or "")
+    except Exception:
+        return None
+    match = re.search(r"['\"‘“]([^'\"’”]{2,72})['\"’”]", task)
+    return match.group(1).strip() if match else None
+
 
 def _generated_commit_message(state: RepoOperatorGraphState) -> str:
     files = [str(item) for item in state.get("files_changed") or [] if str(item)]
