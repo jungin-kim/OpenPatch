@@ -777,11 +777,14 @@ def _edit_requested(frame: Any) -> bool:
     try:
         from repooperator_worker.agent_core.planner import edit_requested_text
 
+        # Question markers FIRST: identifier names like `add`/`fix` in "add
+        # 함수는 뭘 반환해?" would otherwise match the English edit-verb regex.
+        read_only_markers = ("반환해", "설명해", "알려줘", "뭐야", "뭐 하", "무엇", "어떻게", "몇 개", "?", "요약")
+        korean_edit_verbs = ("추가", "고쳐", "구현", "수정", "바꿔", "바꾸", "삭제", "지워", "지우", "제거", "만들어", "생성해", "변경")
+        if any(marker in goal_raw for marker in read_only_markers) and not any(verb in goal_raw for verb in korean_edit_verbs):
+            return False
         if edit_requested_text(goal_raw):
             return True
-        read_only_markers = ("반환해", "설명해", "알려줘", "뭐야", "뭐 하", "무엇", "어떻게", "몇 개", "?", "요약")
-        if any(marker in goal_raw or marker in goal for marker in read_only_markers):
-            return False
     except Exception:
         pass
     tools = {str(item) for item in getattr(frame, "likely_needed_tools", []) or []}
