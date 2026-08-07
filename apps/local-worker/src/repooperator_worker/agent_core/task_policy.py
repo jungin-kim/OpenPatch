@@ -769,9 +769,23 @@ def _broad_requested(frame: Any) -> bool:
 
 
 def _edit_requested(frame: Any) -> bool:
+    goal_raw = str(getattr(frame, "user_goal", "") or "")
+    goal = goal_raw.lower()
+    # The user's own words override model tool-hints: a plain question ("add
+    # 함수는 뭘 반환해?") kept getting edit-shaped from a stray generate_edit
+    # hint, which drove the edit-evidence flow into a clarification dead end.
+    try:
+        from repooperator_worker.agent_core.planner import edit_requested_text
+
+        if edit_requested_text(goal_raw):
+            return True
+        read_only_markers = ("반환해", "설명해", "알려줘", "뭐야", "뭐 하", "무엇", "어떻게", "몇 개", "?", "요약")
+        if any(marker in goal_raw or marker in goal for marker in read_only_markers):
+            return False
+    except Exception:
+        pass
     tools = {str(item) for item in getattr(frame, "likely_needed_tools", []) or []}
     outputs = {str(item).lower() for item in getattr(frame, "requested_outputs", []) or []}
-    goal = str(getattr(frame, "user_goal", "") or "").lower()
     if "generate_change_set" in tools or "generate_edit" in tools or any("edit" in item or "patch" in item or "change" in item for item in outputs):
         return True
     return bool(re.search(r"\b(add|implement|fix|refactor|change|update|support)\b", goal)) or any(term in goal for term in ("추가", "고쳐", "구현", "수정"))
