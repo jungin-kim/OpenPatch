@@ -191,6 +191,7 @@ def build_repooperator_state_graph() -> StateGraph:
             "route_next": "route_next",
             "await_approval": "await_approval",
             "await_change_approval": "await_change_approval",
+            "apply_change_set": "apply_change_set",
             "final_synthesis": "final_synthesis",
         },
     )
