@@ -459,6 +459,10 @@ export function ChatApp() {
         if (cancelled) return;
         const next: Record<string, string> = {};
         for (const run of payload.runs) {
+          // A run parked at an approval gate is waiting on the USER, not
+          // working — showing it as a spinner made every unanswered approval
+          // look like a stuck run.
+          if (run.status === "waiting_approval") continue;
           if (run.thread_id) next[run.thread_id] = run.id;
         }
         activeRunByThreadRef.current = next;

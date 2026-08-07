@@ -254,6 +254,31 @@ def list_activity_states(run_id: str) -> list[dict[str, Any]]:
 _WAITING_APPROVAL_TTL_SECONDS = 24 * 3600
 
 
+def reap_orphaned_runs() -> int:
+    """Close out runs a previous worker process left mid-flight.
+
+    running/cancelling/pending states cannot survive a restart — the thread
+    driving them is gone — but their meta files kept the UI's "Run active"
+    spinners going indefinitely. waiting_approval is left alone (a user may
+    still answer it; the 24h TTL handles abandonment).
+    """
+    reaped = 0
+    for meta_path in _runs_dir().glob("*/meta.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if meta.get("status") not in {"running", "cancelling", "pending"}:
+            continue
+        meta = {**meta, "status": "failed", "error": "The worker restarted while this run was in flight."}
+        try:
+            meta_path.write_text(json.dumps(json_safe(meta), ensure_ascii=False), encoding="utf-8")
+            reaped += 1
+        except OSError:
+            continue
+    return reaped
+
+
 def _expire_stale_waiting_run(meta_path: Any, meta: dict[str, Any]) -> bool:
     """Expire waiting_approval runs whose approval nobody answered for a day.
 
