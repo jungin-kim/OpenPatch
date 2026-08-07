@@ -2078,7 +2078,11 @@ def validate_edit_proposal_detailed(relative_path: str, original: str, payload: 
 
 def common_proposal_validation_error(relative_path: str, original: str, proposed: str, task: str) -> str | None:
     suffix = Path(relative_path).suffix.lower()
-    if re.search(r"^\s*```", proposed, flags=re.MULTILINE):
+    fences_expected = suffix in {".md", ".markdown", ".rst", ".mdx"} or bool(re.search(r"^\s*```", original or "", flags=re.MULTILINE))
+    if not fences_expected and re.search(r"^\s*```", proposed, flags=re.MULTILINE):
+        # A fence in a source file means the model wrapped its answer in
+        # markdown — but fences are NORMAL CONTENT in markdown docs (README
+        # edits were being vetoed for containing their own code blocks).
         return "source content contains markdown fences"
     lowered = proposed.lower()
     commentary_markers = (

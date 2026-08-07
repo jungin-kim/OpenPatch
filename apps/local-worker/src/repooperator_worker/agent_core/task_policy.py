@@ -24,10 +24,10 @@ SOURCE_SUFFIXES = {
 CONFIG_BASENAMES = {
     "package.json", "pyproject.toml", "requirements.txt", "build.gradle", "settings.gradle",
     "cargo.toml", "go.mod", "pom.xml", "tsconfig.json", "next.config.ts", "vite.config.ts",
-    "makefile", "dockerfile",
+    "makefile", "dockerfile", "androidmanifest.xml", "build.gradle.kts", "settings.gradle.kts",
 }
 DOC_SUFFIXES = {".md", ".rst", ".txt"}
-ENTRYPOINT_STEMS = {"main", "app", "bot", "index", "server", "cli", "worker"}
+ENTRYPOINT_STEMS = {"main", "app", "bot", "index", "server", "cli", "worker", "mainactivity", "application"}
 SKIP_DIRS = {".git", ".claude", "node_modules", "runtime", ".next", "dist", "build", "out", "coverage", ".venv", "venv", "__pycache__"}
 
 
