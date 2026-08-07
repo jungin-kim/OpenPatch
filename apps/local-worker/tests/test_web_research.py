@@ -44,7 +44,7 @@ class WebResearchTests(unittest.TestCase):
             repo = Path(tmp)
             (repo / "README.md").write_text("# Demo\n", encoding="utf-8")
             request = AgentRunRequest(project_path=str(repo), git_provider="local", branch="main", task="Search web")
-            result = ToolOrchestrator(run_id="run-web-approval", request=request).execute_action(
+            result = ToolOrchestrator(run_id="run-web-approval", request=request, permission_mode="default").execute_action(
                 AgentAction(type="search_web", reason_summary="web", payload={"query": "docs"})
             )
         self.assertEqual(result.status, "waiting_approval")

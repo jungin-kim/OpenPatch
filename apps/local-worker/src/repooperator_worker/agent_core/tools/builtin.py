@@ -17,6 +17,7 @@ from repooperator_worker.agent_core.secret_scanner import redact_secrets
 from repooperator_worker.agent_core.tools.base import BaseTool, ToolExecutionContext, ToolResult, ToolSpec
 from repooperator_worker.agent_core.permissions import (
     PermissionDecision,
+    PermissionMode,
     PermissionRuleSource,
     ToolPermissionContext,
     apply_mode_rules_to_decision,
@@ -488,11 +489,22 @@ class RunApprovedCommandTool(BaseTool):
                 payload={"command_security": shape.model_dump()},
             )
         command = list(raw_command)
+        approval_id = payload.get("approval_id")
+        if not approval_id and context.permission_mode == PermissionMode.FULL_ACCESS:
+            # full_access self-approves gated commands; blocked commands still
+            # fail inside run_command_with_policy, and remote writes were
+            # already stopped at the permission-decision layer.
+            from repooperator_worker.services.command_service import preview_command
+
+            try:
+                approval_id = (preview_command(command, project_path=context.request.project_path) or {}).get("approval_id")
+            except Exception:
+                approval_id = None
         result = run_command_with_policy(
             command,
             project_path=context.request.project_path,
             reason=str(payload.get("reason_summary") or ""),
-            approval_id=payload.get("approval_id"),
+            approval_id=approval_id,
             remember_for_session=bool(payload.get("remember_for_session")),
         )
         return ToolResult(
@@ -549,7 +561,11 @@ class _NetworkEvidenceTool(BaseTool):
             )
             return apply_mode_rules_to_decision(self.spec.name, payload, context, allowed)
         try:
-            profile = permission_profile()
+            # Resolve the profile for THIS context's mode — reading the global
+            # config here let a full_access config auto-allow network calls even
+            # when the executing orchestrator was pinned to a stricter mode.
+            context_mode = getattr(context, "permission_mode", None)
+            profile = permission_profile(context_mode.value if hasattr(context_mode, "value") else context_mode)
         except Exception:
             profile = {}
         approval = profile.get("approval") if isinstance(profile.get("approval"), dict) else {}
@@ -1309,11 +1325,12 @@ class _DirectFileWriteTool(BaseTool):
 
     def call(self, payload: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
         decision = payload.get("approval_decision") if isinstance(payload.get("approval_decision"), dict) else {}
-        if str(decision.get("decision") or "").lower() == "allow":
-            # The user explicitly approved this exact write (path + content shown
-            # in the approval card) — execute it. Before this, the tool was an
-            # audit-only stub, so an approved create_file "completed" without
-            # writing anything and the model narrated a file that didn't exist.
+        mode_auto = context.permission_mode in {PermissionMode.ACCEPT_EDITS, PermissionMode.FULL_ACCESS}
+        if str(decision.get("decision") or "").lower() == "allow" or mode_auto:
+            # Execute when the user explicitly approved this exact write, or
+            # when the session mode (accept_edits / full_access) auto-approves
+            # local edits. Before this, the tool was an audit-only stub, so an
+            # approved create_file "completed" without writing anything.
             return self._perform_approved_write(payload, context)
         return ToolResult(
             tool_name=self.spec.name,

@@ -41,6 +41,7 @@ class ToolOrchestratorTests(unittest.TestCase):
             request=self.request,
             registry=registry or get_default_tool_registry(),
             hook_manager=hook_manager,
+            permission_mode="default",
         )
 
     def test_read_file_executes_through_orchestrator(self) -> None:

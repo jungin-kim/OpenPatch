@@ -477,16 +477,16 @@ def apply_mode_rules_to_decision(
         return decision
 
     if mode == PermissionMode.ACCEPT_EDITS:
-        if tool_name in _APPLY_TOOLS:
-            if explicit_approval and decision.decision == "allow":
-                return decision
-            if decision.decision == "allow":
-                return _mode_ask(
-                    decision,
-                    mode,
-                    "accept_edits requires an approval decision before applying a change set.",
-                    approval_payload=_approval_payload_for(tool_name, payload),
-                )
+        # accept_edits means what it says: validated local file edits apply
+        # without a per-edit approval prompt. Before this the mode still asked,
+        # making default/accept_edits/full_access behaviorally identical.
+        if tool_name in _APPLY_TOOLS or (tool_name in _DIRECT_WRITE_TOOLS and tool_name != "delete_file"):
+            # delete_file stays gated even here — destructive, rare, and cheap
+            # to confirm. Change-set deletes still flow through apply_change_set
+            # with validation.
+            if decision.decision == "ask":
+                return _mode_allow(decision, mode, "accept_edits auto-applies validated local file edits.")
+            return decision
         return _guard_remote_write_without_approval(tool_name, payload, decision, mode)
 
     if mode == PermissionMode.AUTO_READONLY:
@@ -501,6 +501,11 @@ def apply_mode_rules_to_decision(
         )
 
     if mode == PermissionMode.FULL_ACCESS:
+        # full_access auto-approves local writes, git local writes, commands,
+        # and network fetches; only dangerous REMOTE writes (push / PR / MR)
+        # still require an explicit decision.
+        if decision.decision == "ask" and tool_name not in _REMOTE_WRITE_TOOLS and tool_name != "delete_file":
+            return _mode_allow(decision, mode, "full_access auto-approves local actions.")
         return _guard_remote_write_without_approval(tool_name, payload, decision, mode)
 
     if mode == PermissionMode.ROUTINE_SAFE:
@@ -658,6 +663,21 @@ def _mode_deny(
         mode=mode.value,
         denial_code=denial_code,
         recovery_hint=recovery_hint,
+    )
+
+
+def _mode_allow(
+    decision: PermissionDecision,
+    mode: PermissionMode,
+    reason: str,
+) -> PermissionDecision:
+    return replace(
+        decision,
+        decision="allow",
+        reason=reason,
+        source=PermissionRuleSource.MODE.value,
+        priority=_SOURCE_PRECEDENCE[PermissionRuleSource.MODE],
+        mode=mode.value,
     )
 
 

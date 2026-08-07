@@ -175,7 +175,7 @@ class SkillPluginMCPFoundationTests(unittest.TestCase):
         adapter = MCPRegistry([server]).tool_adapters(enabled_only=True)[0]
         registry = ToolRegistry([adapter])
 
-        result = ToolOrchestrator(run_id="mcp_permission_test", request=_request("lookup docs"), registry=registry).execute_tool(
+        result = ToolOrchestrator(run_id="mcp_permission_test", request=_request("lookup docs"), registry=registry, permission_mode="default").execute_tool(
             adapter.spec.name,
             {"query": "langgraph"},
         )

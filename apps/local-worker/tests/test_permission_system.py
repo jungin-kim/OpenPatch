@@ -75,9 +75,13 @@ class PermissionSystemTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             run_command_with_policy(["git", "commit", "-m", "test"], project_path=str(self.repo))
 
-    def test_bypass_mode_exists_but_does_not_bypass_command_policy(self) -> None:
+    def test_bypass_mode_auto_allows_local_commands_but_not_blocked_ones(self) -> None:
+        # full_access (BYPASS alias) now self-approves gated LOCAL commands —
+        # that behavioral difference from default is the point of the mode.
         decision = RunApprovedCommandTool().check_permission({"command": ["git", "commit", "-m", "test"]}, self._context(PermissionMode.BYPASS))
-        self.assertEqual(decision.decision, "ask")
+        self.assertEqual(decision.decision, "allow")
+        blocked = RunApprovedCommandTool().check_permission({"command": ["rm", "-rf", "/"]}, self._context(PermissionMode.BYPASS))
+        self.assertIn(blocked.decision, {"deny", "ask"})
 
     def test_permission_policy_priority_and_audit(self) -> None:
         policy = PermissionPolicy(
@@ -207,7 +211,7 @@ class PermissionSystemTests(unittest.TestCase):
         self.assertEqual(result.payload["permission_decision"]["denial_code"], "approval_required_headless")
 
     def test_repeated_approval_request_does_not_loop(self) -> None:
-        orchestrator = ToolOrchestrator(run_id="run-repeat-denial", request=self.request)
+        orchestrator = ToolOrchestrator(run_id="run-repeat-denial", request=self.request, permission_mode="default")
         action = AgentAction(type="git_commit", reason_summary="commit", payload={"message": "test"})
         first = orchestrator.execute_action(action)
         second = orchestrator.execute_action(action)

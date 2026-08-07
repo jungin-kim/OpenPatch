@@ -6,7 +6,8 @@ from typing import Any
 
 from langgraph.graph import END
 
-from repooperator_worker.agent_core.actions import ActionResult
+from repooperator_worker.agent_core.actions import ActionResult, AgentAction
+from repooperator_worker.agent_core.graph_state import action_to_snapshot
 from repooperator_worker.agent_core.change_set import (
     change_set_from_payload,
     plan_change_set,
@@ -146,6 +147,17 @@ def _ground_change_paths(proposal: dict[str, Any], repo_root: Any) -> dict[str, 
     return proposal
 
 
+def _mode_auto_applies_edits() -> bool:
+    from repooperator_worker.agent_core.permissions import PermissionMode, permission_mode_from_value
+    from repooperator_worker.config import get_settings
+
+    try:
+        mode = permission_mode_from_value(str(get_settings().permission_mode))
+    except Exception:
+        return False
+    return mode in {PermissionMode.ACCEPT_EDITS, PermissionMode.FULL_ACCESS}
+
+
 def validate_change_set_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     latest = _latest_result(state)
     proposal = _change_set_from_latest_result(state, latest) or state.get("change_set_proposal") or {}
@@ -178,24 +190,41 @@ def validate_change_set_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     pending_approval = None
     stop_reason = state.get("stop_reason")
     final_response = state.get("final_response") or ""
+    auto_apply_action = None
     if validation["proposal_status"] == "valid" and proposal.get("changes") and not proposal.get("applied"):
         proposal_id = str(proposal.get("proposal_id") or "")
-        pending_approval = {
-            "kind": "change_set_apply",
-            "proposal_id": proposal_id,
-            "change_set_proposal": json_safe(proposal),
-            "reason": "Applying this validated change set will modify files and requires approval.",
-        }
-        stop_reason = "waiting_approval"
-        final_response = _final_text_for_change_set(state, proposal)
+        if _mode_auto_applies_edits():
+            # accept_edits / full_access: a validated change set applies without
+            # a per-edit approval stop — that distinction is the whole point of
+            # the modes (default keeps the approval gate).
+            auto_apply_action = AgentAction(
+                type="apply_change_set",
+                reason_summary="Apply validated change set automatically per session permission mode.",
+                expected_output="Files written through the approved change-set apply path.",
+                payload={
+                    "proposal_id": proposal_id,
+                    "approval_decision": {"decision": "allow", "source": "permission_mode"},
+                    "change_set_snapshot": json_safe(proposal),
+                },
+            )
+        else:
+            pending_approval = {
+                "kind": "change_set_apply",
+                "proposal_id": proposal_id,
+                "change_set_proposal": json_safe(proposal),
+                "reason": "Applying this validated change set will modify files and requires approval.",
+            }
+            stop_reason = "waiting_approval"
+            final_response = _final_text_for_change_set(state, proposal)
     update = {
             "change_set_proposal": proposal,
             "pending_approval": pending_approval if pending_approval is not None else state.get("pending_approval"),
             "proposal_id": proposal.get("proposal_id") if isinstance(proposal, dict) else None,
             "proposal_status": validation["proposal_status"],
-            "apply_status": "pending" if pending_approval else state.get("apply_status"),
+            "apply_status": "pending" if (pending_approval or auto_apply_action) else state.get("apply_status"),
             "stop_reason": stop_reason,
             "final_response": final_response,
+            **({"pending_action": action_to_snapshot(auto_apply_action), "edit_mode": "apply_approved"} if auto_apply_action else {}),
             "validation_results": [validation],
             "proposal_errors": validation["errors"],
             "routing_stage": "after_change_plan",
