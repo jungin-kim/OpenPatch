@@ -366,7 +366,17 @@ def _load_durable_context(request: AgentRunRequest) -> ThreadContext | None:
 
 
 def _save_durable_context(thread_id: str, context: ThreadContext) -> None:
+    # Preserve keys managed outside ThreadContext (first_user_task is written
+    # at run start and must survive the completion-time rewrite).
+    existing: dict[str, Any] = {}
+    try:
+        existing_raw = json.loads(_thread_context_path(thread_id).read_text(encoding="utf-8", errors="replace"))
+        if isinstance(existing_raw, dict):
+            existing = existing_raw
+    except (OSError, json.JSONDecodeError):
+        existing = {}
     payload = {
+        **({"first_user_task": existing.get("first_user_task")} if existing.get("first_user_task") else {}),
         "active_repo": context.active_repo,
         "branch": context.branch,
         "recent_files": context.recent_files[:20],

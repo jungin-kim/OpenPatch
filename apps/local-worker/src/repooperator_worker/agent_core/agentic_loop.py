@@ -195,6 +195,16 @@ def propose_next_action_with_tool_calling(
         and _looks_read_only(task_frame)
     ):
         return None
+    # A read-only question with evidence in hand must be ANSWERED, not
+    # deflected — the model otherwise emits ask_clarification after reading
+    # the very file that contains the answer.
+    if (
+        action is not None
+        and action.type == "ask_clarification"
+        and _looks_read_only(task_frame)
+        and _has_min_evidence(state)
+    ):
+        return None
     # Run-command gate: "python calc.py 실행해줘" must reach the command
     # approval flow — not end as a description of the file, and not detour
     # into edit generation (the model sometimes "checks" a script by editing
@@ -237,6 +247,7 @@ _EDIT_PRODUCING_ACTION_TYPES = frozenset(
 _READ_ONLY_PHRASES = (
     "읽고", "읽어", "설명해", "알려줘", "분석해", "요약해", "보여줘", "확인해",
     "무슨", "어떻게 동작", "어떤 역할", "파악해", "찾아줘", "찾아봐", "뭐가 있",
+    "반환해", "뭐야", "뭐였지", "몇 개", "무엇", "뭘 ", "기억나",
     "explain", "describe", "summarize", "analyze", "analyse", "what does", "how does",
     "walk me through", "tell me", "show me", "read the", "review", "find the", "look for",
 )
