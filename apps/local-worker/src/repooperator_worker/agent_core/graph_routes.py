@@ -104,8 +104,10 @@ def _with_edit_targets_filled(action: AgentAction, state: AgentCoreState, reques
     if not targets:
         return action
     action.target_files = list(targets)
-    if isinstance(action.payload, dict):
-        action.payload.setdefault("target_files", list(targets))
+    if isinstance(action.payload, dict) and not action.payload.get("target_files"):
+        # The model often sends an EXPLICIT empty list — setdefault left it in
+        # place, and the payload spread overrode the filled top-level targets.
+        action.payload["target_files"] = list(targets)
     return action
 
 
