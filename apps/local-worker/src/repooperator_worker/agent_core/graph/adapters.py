@@ -191,12 +191,17 @@ def _updates_from_core_after_action(
     if result.status == "waiting_approval":
         decision = result.payload.get("permission_decision") if isinstance(result.payload, dict) else None
         metadata = decision.get("metadata") if isinstance(decision, dict) and isinstance(decision.get("metadata"), dict) else {}
-        update["pending_approval"] = result.command_result or {
-            "kind": action.type,
-            "reason": result.observation,
-            "approval_payload": metadata.get("approval_payload") or action.payload,
-            "tool_name": action.type,
-        }
+        # A command preview must AUGMENT the pending approval, not replace it —
+        # when it won outright, kind/approval_payload vanished, the resume node
+        # fell through to the empty-command branch, and finalization rendered
+        # `git commit -m ''` because the proposed message was lost.
+        base = result.command_result if isinstance(result.command_result, dict) else {}
+        pending = {**base}
+        pending.setdefault("kind", action.type)
+        pending.setdefault("tool_name", action.type)
+        pending.setdefault("reason", result.observation)
+        pending.setdefault("approval_payload", metadata.get("approval_payload") or action.payload)
+        update["pending_approval"] = pending
     if result.status in {"cancelled", "timed_out"}:
         update["stop_reason"] = result.status
     return update

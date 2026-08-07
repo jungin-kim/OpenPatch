@@ -376,7 +376,7 @@ def _git_approval_payload(pending: dict[str, Any]) -> dict[str, Any]:
     command: list[str]
     title: str
     if kind == "git_commit":
-        message = str(pending.get("message") or "")
+        message = str(pending.get("message") or (pending.get("approval_payload") or {}).get("message") or "")
         command = ["git", "commit", "-m", message]
         title = "Commit approval required"
     elif kind == "git_push":
