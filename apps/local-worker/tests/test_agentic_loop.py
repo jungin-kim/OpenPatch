@@ -96,8 +96,12 @@ class ActionMappingTests(unittest.TestCase):
         response = ToolCallResponse(
             tool_calls=(ToolCall(id="c1", name="delete_file", arguments={"path": "/x/y.py", "justification": "dead"}),),
         )
+        # An edit-shaped request: the read-only inverse gate must not block the
+        # edit action whose alias mapping this test exercises.
+        edit_request = AgentRunRequest(project_path="/tmp/repo", task="delete the dead file y.py")
+        edit_frame = TaskFrame(user_goal="delete the dead file y.py", likely_needed_tools=["delete_file"], likely_capabilities=[])
         action = agentic_loop.propose_next_action_with_tool_calling(
-            _request(), _state(), _frame(), client_factory=lambda s: FakeClient(response), settings=_settings()
+            edit_request, _state(), edit_frame, client_factory=lambda s: FakeClient(response), settings=_settings()
         )
         self.assertEqual(action.type, "delete_file")
         self.assertEqual(action.target_files, ["x/y.py"])  # leading slash stripped

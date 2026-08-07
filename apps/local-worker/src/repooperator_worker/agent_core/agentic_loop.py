@@ -185,6 +185,16 @@ def propose_next_action_with_tool_calling(
         and not _change_applied(state)
     ):
         return None
+    # Inverse gate: a plainly read-only question ("add 함수는 뭘 반환해?") must
+    # never produce an edit — the model sometimes "answers" by generating a
+    # patch for the file it just read.
+    if (
+        action is not None
+        and action.type in _EDIT_PRODUCING_ACTION_TYPES
+        and not _is_change_request(task_frame)
+        and _looks_read_only(task_frame)
+    ):
+        return None
     # Run-command gate: "python calc.py 실행해줘" must reach the command
     # approval flow — not end as a description of the file, and not detour
     # into edit generation (the model sometimes "checks" a script by editing

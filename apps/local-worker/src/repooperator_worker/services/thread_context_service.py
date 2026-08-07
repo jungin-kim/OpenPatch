@@ -127,11 +127,38 @@ def remember_last_user_task(thread_id: str | None, project_path: str, task: str)
         except (OSError, json.JSONDecodeError):
             payload = {}
     payload.setdefault("active_repo", project_path)
+    if not payload.get("first_user_task"):
+        payload["first_user_task"] = task.strip()[:500]
     payload["last_user_task"] = task.strip()[:500]
     try:
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except OSError:
         pass
+
+
+_FIRST_TURN_RECALL_RE = re.compile(r"(?:맨\s*처음|제일\s*처음|처음에|첫\s*(?:번째|질문))[^\n]*(?:물어|질문|얘기|말했)", re.IGNORECASE)
+
+
+def expand_first_turn_recall(request: AgentRunRequest) -> AgentRunRequest:
+    """"제일 처음 내가 물어본 게 뭐였지?" — the final synthesis only sees the
+    last few turns, so long sessions lost the opening question entirely."""
+    task = str(request.task or "")
+    if not _FIRST_TURN_RECALL_RE.search(task):
+        return request
+    if not request.thread_id:
+        return request
+    path = _thread_context_path(request.thread_id)
+    if not path.exists():
+        return request
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return request
+    first = str(payload.get("first_user_task") or "").strip()
+    if not first or first == task.strip():
+        return request
+    merged = f"{task}\n(참고: 이 대화에서 사용자의 첫 질문은 다음과 같았습니다: \"{first[:300]}\")"
+    return request.model_copy(update={"task": merged})
 
 
 def expand_implicit_edit_target(request: AgentRunRequest) -> AgentRunRequest:
