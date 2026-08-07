@@ -265,12 +265,34 @@ def _next_git_commit_action(state: AgentCoreState, request: AgentRunRequest, fra
     import re as _re
 
     quoted = _re.search(r"['\"‘“]([^'\"’”]{2,72})['\"’”]", task)
-    message = quoted.group(1).strip() if quoted else task[:72]
+    if quoted:
+        message = quoted.group(1).strip()
+    else:
+        # No explicit message — derive one from what actually changed instead
+        # of committing the request sentence itself ("방금 변경사항을 적당한
+        # 메시지로 커밋해줘" ended up verbatim in git log).
+        message = _derived_commit_message(request) or "Apply RepoOperator change set"
     return AgentAction(
         type="git_commit",
         reason_summary="User asked to commit the current changes (approval-gated).",
         payload={"message": message, "stage_all": True},
     )
+
+
+def _derived_commit_message(request: AgentRunRequest) -> str | None:
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(getattr(request, "project_path", "") or "."), "status", "--short"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except Exception:
+        return None
+    files = [line[3:].strip() for line in out.splitlines() if line.strip()][:4]
+    if not files:
+        return None
+    return "Update " + ", ".join(files)
 
 
 def _next_web_fetch_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
