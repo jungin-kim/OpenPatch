@@ -28,6 +28,7 @@ from repooperator_worker.services.json_safe import json_safe, safe_agent_respons
 from repooperator_worker.services.memory_service import maybe_record_from_agent_run
 from repooperator_worker.services.thread_context_service import (
     expand_anaphoric_task,
+    expand_implicit_edit_target,
     expand_referent_task,
     remember_last_user_task,
     update_thread_context,
@@ -41,7 +42,7 @@ logger = logging.getLogger(__name__)
 def start_run(request: AgentRunRequest, *, stream: bool = False) -> AgentRunResponse:
     """Run the authoritative sync agent lifecycle and persist run state/events."""
     original_task = request.task
-    request = expand_referent_task(expand_anaphoric_task(request))
+    request = expand_implicit_edit_target(expand_referent_task(expand_anaphoric_task(request)))
     remember_last_user_task(request.thread_id, request.project_path, original_task)
     run_id = new_run_id()
     start_active_run(run_id=run_id, request=request, thread_id=request.thread_id)
@@ -105,7 +106,7 @@ def start_run(request: AgentRunRequest, *, stream: bool = False) -> AgentRunResp
 def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
     """Start a background streamed run and return an SSE iterator."""
     original_task = request.task
-    request = expand_referent_task(expand_anaphoric_task(request))
+    request = expand_implicit_edit_target(expand_referent_task(expand_anaphoric_task(request)))
     remember_last_user_task(request.thread_id, request.project_path, original_task)
     run_id = new_run_id()
     start_active_run(run_id=run_id, request=request, thread_id=request.thread_id)

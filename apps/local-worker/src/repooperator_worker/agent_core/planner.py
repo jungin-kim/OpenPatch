@@ -478,15 +478,32 @@ def command_needed_for_text(text: str) -> list[str] | None:
     # Without this there was no deterministic path to the command approval
     # gate and the model just described the file instead of running anything.
     if any(marker in text or marker in lowered for marker in ("실행해", "실행시켜", "돌려줘", "돌려 줘", "run ", "execute ")):
-        match = re.search(r"\b(python3?|pytest|npm|pnpm|yarn|node|make|go|cargo)\b(?:\s+([A-Za-z0-9_./:-]+))?", lowered)
-        if match:
+        # Take the LAST runner mention: "python game.py 말고 python -m
+        # py_compile game.py 를 실행해줘" names the wanted command second.
+        matches = list(re.finditer(
+            r"\b(python3?|pytest|npm|pnpm|yarn|node|make|go|cargo)\b((?:\s+[A-Za-z0-9_./:-]+){0,3})",
+            lowered,
+        ))
+        if matches:
+            match = matches[-1]
             command = [match.group(1)]
-            arg = (match.group(2) or "").strip()
-            # Only treat the following token as an argument when it looks like
-            # a file/target or a known subcommand — "run pytest please" must
-            # not become `pytest please`.
-            if arg and ("." in arg or "/" in arg or arg in {"test", "run", "build", "install", "dev", "lint"}):
-                command.append(arg)
+            rest = (match.group(2) or "").split()
+            index = 0
+            while index < len(rest):
+                token = rest[index]
+                if token == "-m" and index + 1 < len(rest):
+                    # module runner: the next token is a module name even
+                    # without a dot ("-m py_compile").
+                    command.extend([token, rest[index + 1]])
+                    index += 2
+                    continue
+                # Other arguments must look like a file/target or a known
+                # subcommand — "run pytest please" must not become `pytest please`.
+                if "." in token or "/" in token or token in {"test", "run", "build", "install", "dev", "lint"}:
+                    command.append(token)
+                    index += 1
+                    continue
+                break
             return command
     return None
 

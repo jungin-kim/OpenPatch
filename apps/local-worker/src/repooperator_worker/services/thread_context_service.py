@@ -134,6 +134,31 @@ def remember_last_user_task(thread_id: str | None, project_path: str, task: str)
         pass
 
 
+def expand_implicit_edit_target(request: AgentRunRequest) -> AgentRunRequest:
+    """Ground file-less follow-up edits ("좋아. 이제 시도 횟수를 7번으로
+    제한해줘") in the thread's working files.
+
+    Mid-conversation edits routinely omit the filename; without this the edit
+    flow had no target and stalled or asked what to change.
+    """
+    task = str(request.task or "")
+    if _FILE_TOKEN_RE.search(task):
+        return request
+    try:
+        from repooperator_worker.agent_core.planner import edit_requested_text
+
+        if not edit_requested_text(task):
+            return request
+    except Exception:
+        return request
+    durable = _load_durable_context(request)
+    recent = [f for f in (durable.recent_files if durable else []) if isinstance(f, str) and f.strip()][:2]
+    if not recent:
+        return request
+    merged = f"{task}\n(참고: 이 대화에서 작업 중인 파일: {', '.join(recent)})"
+    return request.model_copy(update={"task": merged})
+
+
 def build_thread_context(request: AgentRunRequest) -> ThreadContext:
     context = _load_durable_context(request) or ThreadContext(active_repo=request.project_path, branch=request.branch)
     for message in reversed(request.conversation_history):
