@@ -541,9 +541,17 @@ def edit_requested_text(text: str) -> bool:
     # RequestUnderstanding facts. Do not expand this into language-specific
     # request routing; prefer likely_needed_tools/requested_outputs instead.
     lowered = (text or "").lower()
-    return bool(re.search(r"\b(edit|patch|add|fix|implement|refactor|change|update|support|rename|delete|remove|create)\b", lowered)) or any(
-        term in text for term in ("추가", "고쳐", "구현", "수정", "바꿔", "바꾸", "변경해", "으로 변경", "로 변경", "삭제", "지워", "지우", "제거", "만들어", "생성해")
-    )
+    if any(term in text for term in ("추가", "고쳐", "구현", "수정", "바꿔", "바꾸", "변경해", "으로 변경", "로 변경", "삭제", "지워", "지우", "제거", "만들어", "생성해")):
+        return True
+    if re.search(r"\b(edit|patch|add|fix|implement|refactor|change|update|support|rename|delete|remove|create)\b", lowered):
+        # English verbs double as identifier names ("add 함수는 뭘 반환해?",
+        # "what does add return?"). Question-form sentences are not edits.
+        if re.search(r"[가-힣]", text) and ("?" in text or any(m in text for m in ("반환", "뭐야", "뭐였", "무엇", "몇 개", "설명", "알려줘", "요약", "어떻게"))):
+            return False
+        if re.match(r"\s*(what|how|why|where|which|who|does|do|is|are|when)\b", lowered):
+            return False
+        return True
+    return False
 
 
 def explanation_only_requested(text: str, requested_outputs: list[str] | None = None) -> bool:
