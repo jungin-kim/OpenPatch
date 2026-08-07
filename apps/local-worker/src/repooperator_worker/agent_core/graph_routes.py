@@ -62,6 +62,10 @@ def choose_graph_next_action(state: AgentCoreState, request: AgentRunRequest) ->
         _next_missing_file_action,
         _next_git_commit_action,
         _next_git_branch_action,
+        # A named new file ("README.md 파일을 만들어서 …") must go straight to
+        # edit generation — the explicit-target flow otherwise searches for the
+        # (intentionally absent) file and ends in a clarification question.
+        _next_create_file_action,
         # Before any model-driven chooser: an explicitly requested command
         # ("python calc.py 실행해줘") must reach the preview/approval flow —
         # model paths kept answering or editing instead of running it.
@@ -521,6 +525,26 @@ def _edit_generation_came_up_empty(state: AgentCoreState) -> bool:
             return False
         return getattr(result, "status", "") in {"skipped", "failed"}
     return False
+
+
+def _next_create_file_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
+    """Drive an explicit new-file request into edit generation immediately."""
+    if _has_action(state, "generate_change_set") or _has_action(state, "generate_edit"):
+        return None
+    target = _creation_target_file(request, frame)
+    if not target:
+        return None
+    from repooperator_worker.agent_core.intent import is_planning_request
+
+    if is_planning_request(str(getattr(request, "task", "") or "")):
+        return None
+    return AgentAction(
+        type="generate_change_set",
+        reason_summary=f"Create the requested new file {target} as a validated change set.",
+        target_files=[target],
+        expected_output="Validated ChangeSetProposal creating the new file.",
+        payload={"target_files": [target], "new_file_paths": [target]},
+    )
 
 
 def _next_edit_action(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> AgentAction | None:
