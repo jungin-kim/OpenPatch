@@ -142,7 +142,26 @@ async function main() {
     console.log(`  bundled ${name} -> ${path.relative(PACKAGE_ROOT, dest)}`);
   }
 
+  await syncReadme();
+
   console.log("prepare-runtime: done");
+}
+
+async function syncReadme() {
+  // npm renders packages/cli/README.md — keep it identical to the repo root
+  // README, rewriting repo-relative links/images to absolute GitHub URLs so
+  // they work on npmjs.com.
+  const rootReadme = path.join(MONO_ROOT, "README.md");
+  if (!fs.existsSync(rootReadme)) return;
+  const base = "https://github.com/jungin-kim/RepoOperator/blob/main/";
+  const raw = "https://raw.githubusercontent.com/jungin-kim/RepoOperator/main/";
+  let text = await fsp.readFile(rootReadme, "utf8");
+  // images first (![alt](relative)) -> raw content URL
+  text = text.replace(/!\[([^\]]*)\]\((?!https?:|#)([^)\s]+)\)/g, (_m, alt, target) => `![${alt}](${raw}${target})`);
+  // then every remaining relative target (including badge-wrapped links) -> blob URL
+  text = text.replace(/\]\((?!https?:|#|mailto:)([^)\s]+)\)/g, (_m, target) => `](${base}${target})`);
+  await fsp.writeFile(path.join(PACKAGE_ROOT, "README.md"), text, "utf8");
+  console.log("  synced README.md from monorepo root");
 }
 
 main().catch((err) => {

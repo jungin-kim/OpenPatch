@@ -190,11 +190,55 @@ def next_recovery_action(
     return next_evidence_gathering_action(state, request, frame)
 
 
+def _model_generated_subtask_specs(request: AgentRunRequest, shape: str) -> list[tuple[str, str, str, list[str]]] | None:
+    """Task-specific plan steps from the model, for edit-shaped requests only.
+
+    The visible Plan was a fixed template ("Locate relevant implementation
+    area", …) regardless of what the user asked. For edits — where the plan is
+    user-facing progress UI — ask the model for concrete steps; fall back to
+    the template on any failure. Read-shaped requests keep the fast template.
+    """
+    if shape != "edit":
+        return None
+    import os
+
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return None  # unit tests must not depend on a live model
+    try:
+        from repooperator_worker.services.model_client import ModelGenerationRequest, OpenAICompatibleModelClient
+        from repooperator_worker.agent_core.tools.builtin import parse_json_object
+
+        raw = OpenAICompatibleModelClient().generate_text(
+            ModelGenerationRequest(
+                system_prompt=(
+                    "Return JSON only: {\"steps\": [{\"title\": \"...\", \"goal\": \"...\"}]} "
+                    "with 3-5 short, concrete steps (same language as the task) describing how a "
+                    "coding agent will fulfil the request. Final step must be reporting the result."
+                ),
+                user_prompt=str(request.task or "")[:600],
+            )
+        )
+        payload = parse_json_object(raw) or {}
+        steps = [s for s in (payload.get("steps") or []) if isinstance(s, dict) and str(s.get("title") or "").strip()]
+        if not 3 <= len(steps) <= 6:
+            return None
+        ops_cycle = [["search", "read_file"], ["read_file"], ["edit"], ["edit"], ["final_answer"], ["final_answer"]]
+        return [
+            (f"step{i}", str(s.get("title"))[:80], str(s.get("goal") or "")[:160], ops_cycle[min(i, len(ops_cycle) - 1)])
+            for i, s in enumerate(steps)
+        ]
+    except Exception:
+        return None
+
+
 def ensure_subtasks(state: AgentCoreState, request: AgentRunRequest, frame: Any) -> None:
     if state.subtasks:
         return
     shape = request_shape(request, frame)
-    if shape == "edit":
+    generated = _model_generated_subtask_specs(request, shape)
+    if generated:
+        specs = generated
+    elif shape == "edit":
         specs = [
             ("locate", "Locate relevant implementation area", "Find the files or modules that likely own the requested change.", ["list_files", "search", "read_file"]),
             ("understand", "Understand current behavior/data/API flow", "Read enough source to understand the current implementation path.", ["read_file", "search"]),

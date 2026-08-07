@@ -39,6 +39,12 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 ## Features
 
 - Autonomous agent mode: the model drives a native tool-calling think → act → observe loop (with a deterministic planner as a safety fallback)
+- Permission modes that actually differ: read-only, default (approve each change), accept edits (validated edits auto-apply), and full access (edits and local commands self-approve; remote pushes and deletes stay gated)
+- Reviewable change sets: every edit lands as a diff card you approve, with validation before apply and syntax checks after
+- Large-file editing through anchored find/replace patches instead of full-file regeneration
+- Task-aware plan: edit requests get model-generated, task-specific plan steps in the live checklist
+- Git workflow with gated commit, branch create, and push — user-quoted commit messages are honored, and unquoted ones derive from the changed files
+- Conversational continuity: file-less follow-ups ("이제 이 부분도 고쳐줘"), "do the same for X", and "that file from earlier" resolve against the thread's working context
 - MCP plugin support: connect external tools over the Model Context Protocol (stdio and HTTP/SSE)
 - Multi-agent supervisor that fans broad requests out to scoped, model-backed subagents
 - Live web UI: streamed tool activity, token-by-token answers, and a live plan/todo checklist
@@ -50,7 +56,7 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 - First-class local project support using absolute filesystem paths
 - Ollama-first local model runtime support
 - Remote model API support for OpenAI-compatible and enterprise-style APIs
-- Read-only repository Q&A through the local worker
+- Repository Q&A and proposal-only edits through the local worker
 - Runtime config stored under `~/.repooperator`
 
 ## Quickstart

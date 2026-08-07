@@ -1,14 +1,28 @@
 # RepoOperator
 
-[![CI](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/ci.yml?branch=main&label=CI)](https://github.com/jungin-kim/RepoOperator/actions)
-[![Web E2E](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/web-e2e.yml?branch=main&label=Web%20E2E)](https://github.com/jungin-kim/RepoOperator/actions)
-[![npm](https://img.shields.io/npm/v/repooperator?label=npm)](https://www.npmjs.com/package/repooperator)
-[![License](https://img.shields.io/github/license/jungin-kim/RepoOperator)](LICENSE)
-[![GitHub repo](https://img.shields.io/badge/GitHub-RepoOperator-181717?logo=github)](https://github.com/jungin-kim/RepoOperator)
-[![Issues](https://img.shields.io/github/issues/jungin-kim/RepoOperator)](https://github.com/jungin-kim/RepoOperator/issues)
+<!-- Build & release -->
+[![CI](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=CI)](https://github.com/jungin-kim/RepoOperator/actions/workflows/ci.yml)
+[![Web E2E](https://img.shields.io/github/actions/workflow/status/jungin-kim/RepoOperator/web-e2e.yml?branch=main&style=flat-square&logo=playwright&logoColor=white&label=Web%20E2E)](https://github.com/jungin-kim/RepoOperator/actions/workflows/web-e2e.yml)
+[![npm version](https://img.shields.io/npm/v/repooperator?style=flat-square&logo=npm&logoColor=white&color=CB3837&label=npm)](https://www.npmjs.com/package/repooperator)
+[![npm downloads](https://img.shields.io/npm/dm/repooperator?style=flat-square&logo=npm&logoColor=white&color=CB3837&label=downloads)](https://www.npmjs.com/package/repooperator)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](https://github.com/jungin-kim/RepoOperator/blob/main/LICENSE)
 
+<!-- Stack -->
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://github.com/jungin-kim/RepoOperator/blob/main/apps/local-worker/pyproject.toml)
+[![FastAPI](https://img.shields.io/badge/FastAPI-worker-009688?style=flat-square&logo=fastapi&logoColor=white)](https://github.com/jungin-kim/RepoOperator/blob/main/apps/local-worker)
+[![Node 20+](https://img.shields.io/badge/Node-20%2B-339933?style=flat-square&logo=nodedotjs&logoColor=white)](https://github.com/jungin-kim/RepoOperator/blob/main/packages/cli/package.json)
+[![Next.js 15](https://img.shields.io/badge/Next.js-15-000000?style=flat-square&logo=nextdotjs&logoColor=white)](https://github.com/jungin-kim/RepoOperator/blob/main/apps/web)
 
-RepoOperator is a local-first repository assistant for opening private codebases, asking read-only questions, and keeping repository access on your machine.
+<!-- Capabilities & community -->
+[![Autonomous agent](https://img.shields.io/badge/agent-LangGraph%20%C2%B7%20tool--calling-1C3C3C?style=flat-square)](https://github.com/jungin-kim/RepoOperator/blob/main/docs/architecture.md)
+[![Plugins: MCP](https://img.shields.io/badge/plugins-MCP-6E56CF?style=flat-square&logo=modelcontextprotocol&logoColor=white)](https://github.com/jungin-kim/RepoOperator/blob/main/README.md#plugins-mcp)
+[![Local-first](https://img.shields.io/badge/local--first-privacy-0F9D58?style=flat-square&logo=gnuprivacyguard&logoColor=white)](https://github.com/jungin-kim/RepoOperator/blob/main/docs/security.md)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square&logo=github&logoColor=white)](https://github.com/jungin-kim/RepoOperator/blob/main/CONTRIBUTING.md)
+[![GitHub stars](https://img.shields.io/github/stars/jungin-kim/RepoOperator?style=flat-square&logo=github&logoColor=white&color=FFD43B)](https://github.com/jungin-kim/RepoOperator/stargazers)
+
+![RepoOperator CLI Screenshot](https://raw.githubusercontent.com/jungin-kim/RepoOperator/main/repooperator-screenshot.svg)
+
+RepoOperator is a local-first repository assistant for opening private codebases, answering codebase questions, preparing proposed changes, and keeping repository access on your machine.
 
 ## Why RepoOperator
 
@@ -20,11 +34,21 @@ RepoOperator explores a third path:
 - the user experience can still be browser-based and product-oriented
 - model access can be local through Ollama or remote through an enterprise-compatible API
 
-The current alpha is intentionally focused: onboard a machine, start the local runtime, open a repository, and ask read-only questions.
+The current alpha is intentionally focused: onboard a machine, start the local runtime, open a repository, and work through repository questions or proposal-only edits.
 
 ## Features
 
-- One-command local product startup with `repooperator up`
+- Autonomous agent mode: the model drives a native tool-calling think → act → observe loop (with a deterministic planner as a safety fallback)
+- Permission modes that actually differ: read-only, default (approve each change), accept edits (validated edits auto-apply), and full access (edits and local commands self-approve; remote pushes and deletes stay gated)
+- Reviewable change sets: every edit lands as a diff card you approve, with validation before apply and syntax checks after
+- Large-file editing through anchored find/replace patches instead of full-file regeneration
+- Task-aware plan: edit requests get model-generated, task-specific plan steps in the live checklist
+- Git workflow with gated commit, branch create, and push — user-quoted commit messages are honored, and unquoted ones derive from the changed files
+- Conversational continuity: file-less follow-ups ("이제 이 부분도 고쳐줘"), "do the same for X", and "that file from earlier" resolve against the thread's working context
+- MCP plugin support: connect external tools over the Model Context Protocol (stdio and HTTP/SSE)
+- Multi-agent supervisor that fans broad requests out to scoped, model-backed subagents
+- Live web UI: streamed tool activity, token-by-token answers, and a live plan/todo checklist
+- One-command local product startup with `repo up`
 - Guided onboarding for repository source and model connection setup
 - Local worker that performs repository operations on the developer machine
 - Browser UI with project selection, branch selection, and repository-aware chat
@@ -32,52 +56,121 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 - First-class local project support using absolute filesystem paths
 - Ollama-first local model runtime support
 - Remote model API support for OpenAI-compatible and enterprise-style APIs
-- Read-only repository Q&A through the local worker
+- Repository Q&A and proposal-only edits through the local worker
 - Runtime config stored under `~/.repooperator`
 
 ## Quickstart
 
-Install the CLI:
+### Install via Homebrew (macOS — recommended)
+
+```bash
+brew tap jungin-kim/repooperator
+brew install repooperator
+```
+
+Homebrew handles Python 3.12 automatically — no manual Python setup needed.
+
+### Install via npm
+
+RepoOperator requires **Python 3.11 or later** for the local worker. If you use the
+npm path, install Python first.
 
 ```bash
 npm install -g repooperator
 ```
 
-Run onboarding once:
+If onboarding fails with a Python version error, set `REPOOPERATOR_PYTHON` to a
+compatible interpreter:
 
 ```bash
-repooperator onboard
+REPOOPERATOR_PYTHON=$(which python3.12) repo onboard
+```
+
+### First-run setup
+
+Run onboarding once (automatically prepares the local runtime):
+
+```bash
+repo onboard
 ```
 
 Start the local product runtime:
 
 ```bash
-repooperator up
+repo up
 ```
 
-Open the printed local web URL, choose a repository, and ask a read-only question.
+Open the printed local web URL, choose a repository, and ask a repository question.
+
+> **No source clone required.** `repo onboard` downloads and prepares all runtime
+> dependencies into `~/.repooperator/runtime/` automatically. You do not need to clone the
+> RepoOperator source repository as a normal user.
+
+If something looks wrong, run the diagnostics command:
+
+```bash
+repo doctor
+```
+
+To reset everything and start fresh:
+
+```bash
+rm -rf ~/.repooperator
+repo onboard
+```
+
+### Troubleshooting: Python version errors
+
+If you see an error like:
+
+```
+ERROR: Package 'repooperator-local-worker' requires a different Python: 3.9.6 not in '>=3.11'
+```
+
+Your system Python is too old. Fix options:
+
+**macOS (Homebrew):**
+```bash
+brew install python@3.12
+REPOOPERATOR_PYTHON="$(brew --prefix python@3.12)/bin/python3.12" repo onboard
+```
+
+**Linux (apt):**
+```bash
+sudo apt install python3.12
+REPOOPERATOR_PYTHON=$(which python3.12) repo onboard
+```
+
+**Linux (dnf):**
+```bash
+sudo dnf install python3.12
+REPOOPERATOR_PYTHON=$(which python3.12) repo onboard
+```
+
+You can also set `REPOOPERATOR_PYTHON` permanently in your shell profile so
+onboarding always uses the right interpreter.
 
 ## First End-To-End Local Flow
 
 The intended common path is:
 
 1. Install the CLI.
-2. Run `repooperator onboard`.
+2. Run `repo onboard`.
 3. Choose a repository source: GitLab, GitHub, or local project.
 4. Choose a model connection mode: local runtime or remote API.
-5. Run `repooperator up`.
+5. Run `repo up`.
 6. Open the printed web URL.
 7. Select a project and branch.
 8. Open the repository locally.
-9. Ask a read-only repository question.
+9. Ask a repository question or request a proposal-only change.
 10. Review the answer in the browser.
 
 ```bash
 npm install -g repooperator
-repooperator onboard
-repooperator up
-repooperator doctor
-repooperator status
+repo onboard
+repo up
+repo doctor
+repo status
 ```
 
 Health can also be checked directly:
@@ -86,13 +179,102 @@ Health can also be checked directly:
 curl http://127.0.0.1:8000/health
 ```
 
+## Authentication and Token Setup
+
+RepoOperator needs a personal access token to list and clone repositories from GitHub or GitLab.
+Tokens are stored locally in `~/.repooperator/config.json` and never sent outside your machine.
+
+### GitHub
+
+**Creating a fine-grained personal access token (recommended)**
+
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**.
+2. Click **Generate new token**.
+3. Set a token name and expiration date.
+4. Under **Repository access**, choose the owner or organization whose repositories you want to open.
+   - The **owner/org** value you enter during `repo onboard` should be a username or
+     organization name such as `jungin-kim`, **not** a full URL.
+5. Under **Permissions → Repository permissions**, grant at minimum:
+   - **Metadata**: Read (required for repository discovery)
+   - **Contents**: Read (required for reading file contents)
+6. Click **Generate token** and copy it immediately.
+
+**Public GitHub vs GitHub Enterprise**
+
+| Scenario | Base URL |
+|---|---|
+| Public GitHub (github.com) | Leave blank — the default `https://api.github.com` is used automatically. |
+| GitHub Enterprise Server | Enter your instance URL such as `https://github.example.com`. |
+
+During onboarding, if you see a prompt for **GitHub base URL**, enter your Enterprise server URL or
+leave it blank for public GitHub.
+
+**Minimum token permissions for RepoOperator**
+
+| Permission | Access level | Required for |
+|---|---|---|
+| Metadata | Read | Repository listing and discovery |
+| Contents | Read | File reading and repository Q&A |
+
+Write permissions are not required for read-only Q&A. If you plan to use the write-with-approval
+workflow, Contents: Write is additionally needed to apply proposed changes via the GitHub API
+in future releases.
+
+---
+
+### GitLab
+
+**Creating a personal access token**
+
+1. Go to **GitLab → User settings → Access tokens** (or your organization's GitLab instance).
+2. Click **Add new token**.
+3. Set a token name and expiration date.
+4. Select the scopes:
+   - `read_repository` — required for clone and file reading
+   - `read_api` — required for project listing and branch discovery
+5. Click **Create personal access token** and copy it immediately.
+
+**Self-hosted GitLab**
+
+If you use a self-hosted GitLab instance, enter your instance URL during onboarding, for example:
+
+```text
+https://gitlab.example.com
+```
+
+Leave blank only if you use public GitLab (`https://gitlab.com`).
+
+**Minimum token scopes for RepoOperator**
+
+| Scope | Required for |
+|---|---|
+| `read_repository` | Cloning and reading repository contents |
+| `read_api` | Project listing, branch listing, and repository metadata |
+
+---
+
+### Security notes
+
+- **Never commit tokens to source control.** RepoOperator stores them in
+  `~/.repooperator/config.json`, which is local to your machine and should not be committed.
+- **Rotate exposed tokens immediately.** If a token is accidentally shared, revoke it and generate
+  a new one.
+- **Use least privilege.** Grant only the scopes listed above. Avoid using classic GitHub PATs with
+  full `repo` scope unless your provider requires them.
+- **Prefer short-lived tokens.** Set a reasonable expiration date (30–90 days) and rotate on
+  schedule.
+- **Fine-grained tokens are preferred** for GitHub because they can be scoped to specific
+  repositories or organizations and allow read-only permissions without write access.
+
+---
+
 ## Supported Repository Sources
 
 RepoOperator currently supports these repository sources:
 
 | Source | Status | Notes |
 | --- | --- | --- |
-| GitLab | Working alpha path | Project listing, branch listing, clone/fetch, and read-only Q&A are the most exercised path. |
+| GitLab | Working alpha path | Project listing, branch listing, clone/fetch, repository Q&A, and proposal flows are the most exercised path. |
 | GitHub | Supported alpha path | Uses the same provider-oriented flow, with GitHub token and base URL from onboarding. |
 | Local project | Supported alpha path | Uses absolute filesystem paths and can work with git repositories or plain directories. |
 
@@ -104,14 +286,79 @@ RepoOperator supports two model connection modes:
 
 | Mode | Providers | Notes |
 | --- | --- | --- |
-| Local self-served runtime | Ollama | First-class local path. The default suggested model is `qwen2.5-coder:7b`. |
+| Local self-served runtime | Ollama, vLLM | Ollama is first-class for laptop use. vLLM uses an OpenAI-compatible endpoint on this machine or a trusted LAN host. |
 | Remote model API | OpenAI-compatible, OpenAI, Anthropic, Gemini | Intended for enterprise API gateways and hosted model providers. |
+
+Onboarding detects this machine (chip, memory, and — outside Apple Silicon — GPU
+VRAM) and recommends Ollama coding models that actually fit, marking the best
+default with a ★ and flagging models that need more memory.
 
 For a local Ollama setup, onboarding uses:
 
 ```text
 http://127.0.0.1:11434/v1
 ```
+
+For vLLM, start your runtime separately and point RepoOperator at its OpenAI-compatible base URL:
+
+```bash
+vllm serve <model> --host 0.0.0.0 --port 8001 --api-key <optional-token>
+```
+
+Default vLLM base URL:
+
+```text
+http://127.0.0.1:8001/v1
+```
+
+Only expose unauthenticated vLLM endpoints on trusted local or private networks.
+
+## Autonomous Agent Mode
+
+RepoOperator can run its decision core two ways:
+
+| Planner | Behavior |
+|---|---|
+| Autonomous (native tool calling) | The model sees the real tool schemas and the running think → act → observe transcript and chooses each tool call itself. This is what makes RepoOperator behave like a full agent. |
+| Guided (deterministic) | A priority chain of rule-based proposers picks safe primitive actions. Used as a fallback when a tool-calling model is not configured, or when the model declines. |
+
+Both planners produce the same action shape, so execution, permission gating,
+secret redaction, and budgets are enforced identically regardless of which
+planner chose the action.
+
+Autonomous mode is enabled when a tool-calling-capable model is configured.
+`repo onboard` turns it on for new installs (`model.toolCalling: true`).
+You can force it with an environment variable:
+
+```bash
+REPOOPERATOR_AGENTIC_TOOL_CALLING=1 repo up
+```
+
+Native tool calling is supported for OpenAI-compatible providers (OpenAI,
+Ollama, vLLM) and for Anthropic's native Messages API. The active planner is
+shown on the Debug page under **Agents**.
+
+## Plugins (MCP)
+
+RepoOperator loads external tools through the Model Context Protocol. Declare
+servers in `~/.repooperator/mcp.json` (or a repo `.repooperator/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+      "enabled": true
+    }
+  }
+}
+```
+
+MCP tools appear as `mcp_<server>_<tool>` and stay behind the same approval gate
+as any networked or mutating tool. Both `stdio` and `http`/`sse` transports are
+supported. No extra Python dependency is required.
 
 ## Web App
 
@@ -142,35 +389,74 @@ http://localhost:3000
 
 ## CLI Commands
 
+> **Short alias:** `repo` is a built-in alias for `repooperator`, so `repo up`,
+> `repo onboard`, etc. all work.
+
 Core commands:
 
 ```bash
-repooperator onboard
-repooperator up
-repooperator down
-repooperator doctor
-repooperator status
-repooperator config show
+repo onboard       # Guided first-run setup (auto-prepares runtime on first install)
+repo up            # Start worker and web UI (self-heals missing runtime)
+repo down          # Stop worker and web UI
+repo doctor        # Run local diagnostics (reports runtime, worker, web, model state)
+repo status        # Show runtime status
+repo update        # Update the CLI to the latest published version
+repo version       # Show the installed version and check for updates
+repo config show   # Print redacted config
 ```
 
 Worker maintenance commands:
 
 ```bash
-repooperator worker start
-repooperator worker stop
-repooperator worker restart
-repooperator worker status
-repooperator worker logs
+repo worker start
+repo worker stop
+repo worker restart
+repo worker status
+repo worker logs
 ```
 
 The recommended product flow is:
 
 ```bash
-repooperator onboard
-repooperator up
+repo onboard
+repo up
 ```
 
 Use `worker` commands when you need lower-level runtime inspection or maintenance.
+
+## Source Install (Contributors Only)
+
+Normal users do **not** need to clone this repository. The npm package bundles the local worker
+and web sources inside it and installs them automatically.
+
+If you are contributing to RepoOperator, clone the repo and work from source:
+
+```bash
+git clone https://github.com/jungin-kim/RepoOperator.git
+cd RepoOperator
+
+# Install worker deps
+cd apps/local-worker
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Install web deps
+cd ../web
+npm install
+npm run dev
+
+# Run CLI from source
+cd ../../packages/cli
+node bin/repooperator.js onboard
+```
+
+You can override the paths the CLI uses with environment variables:
+
+```bash
+export REPOOPERATOR_WORKER_PATH=/path/to/apps/local-worker
+export REPOOPERATOR_WEB_PATH=/path/to/apps/web
+```
 
 ## Architecture Overview
 
@@ -197,34 +483,89 @@ Key directories:
 
 Helpful docs:
 
-- [Onboarding guide](docs/onboarding.md)
-- [Read-only demo](docs/demo.md)
-- [Architecture](docs/architecture.md)
-- [Architecture diagram](docs/architecture-diagram.md)
-- [Security](docs/security.md)
-- [Roadmap](docs/roadmap.md)
-- [Troubleshooting](docs/troubleshooting.md)
+- [Onboarding guide](https://github.com/jungin-kim/RepoOperator/blob/main/docs/onboarding.md)
+- [Read-only demo](https://github.com/jungin-kim/RepoOperator/blob/main/docs/demo.md)
+- [Architecture](https://github.com/jungin-kim/RepoOperator/blob/main/docs/architecture.md)
+- [Architecture diagram](https://github.com/jungin-kim/RepoOperator/blob/main/docs/architecture-diagram.md)
+- [Security](https://github.com/jungin-kim/RepoOperator/blob/main/docs/security.md)
+- [Roadmap](https://github.com/jungin-kim/RepoOperator/blob/main/docs/roadmap.md)
+- [Troubleshooting](https://github.com/jungin-kim/RepoOperator/blob/main/docs/troubleshooting.md)
+
+## Write Mode and Permissions
+
+RepoOperator has a built-in permission model to prevent accidental file modifications.
+
+### Permission modes
+
+| Mode | Behavior |
+|---|---|
+| `basic` (default) | Repository sandbox mode. RepoOperator can read files, prepare diffs, and run safe in-repo commands with guardrails. |
+| `auto_review` | Daily-use mode for sandbox work plus approval cards for elevated actions, network access, and risky local tools. |
+| `full_access` | Dangerous advanced mode for broader local access after a strong confirmation. Risky commands are still logged and previewed where practical. |
+
+Auto-apply, auto-commit, and auto-push are never enabled by default.
+
+### Setting permission mode
+
+Open the web app and use the permission selector in the top bar:
+
+- **Basic permissions** maps to `basic`.
+- **Auto review** maps to `auto_review`.
+- **Full access** maps to `full_access` after a confirmation prompt.
+
+RepoOperator persists the selected mode in `~/.repooperator/config.json` while preserving the rest of your configuration. Advanced users can still override the mode for debugging with `REPOOPERATOR_PERMISSION_MODE`, but normal usage should go through the web UI.
+
+Local tool access is capability-based and visible in the Debug page. RepoOperator currently detects `git` and `glab`, allows safe repository diagnostics, and requires explicit approval cards for mutating, networked, or risky commands.
+
+### File edit workflow
+
+1. Open a repository and switch to a branch you want to work on.
+2. Click **Propose change** in the composer area.
+3. Enter the relative file path and describe the change.
+4. RepoOperator generates a proposed diff and shows it in the chat.
+5. Review the diff before doing anything.
+6. Click **Apply** to write the change to the file, or **Reject** to discard it.
+7. No files are modified until you explicitly click Apply.
+
+Applying changes only modifies files within the current repository and current branch.
+Changes never escape the repository root.
+
+### Branch management
+
+When a git repository is open, the current branch is shown as a clickable pill in the repository
+banner. Clicking it opens the branch panel where you can:
+
+- see all local branches
+- switch to an existing local branch
+- create a new branch from any base branch and check it out immediately
+
+Creating and switching branches modifies the actual local git working tree, so GitHub Desktop and
+other git tools will reflect the change immediately.
 
 ## Current Capabilities
 
 RepoOperator currently supports:
 
 - CLI onboarding with repository provider and model connection setup
-- one-command local runtime startup through `repooperator up`
+- one-command local runtime startup through `repo up`
 - worker lifecycle management through the CLI
 - bounded health checks through `doctor` and `status`
 - GitLab and GitHub provider-backed repository open flows
 - local project open flows with absolute paths
 - visible project lists and branch lists in the web UI
 - non-interactive clone/fetch for private repositories when provider credentials are configured
-- read-only repository questions through the local worker
-- query-aware repository context retrieval for more useful answers than a README-only flow
+- repository questions through the local worker with persisted activity events
+- query-aware repository context and tool-based file evidence gathering
+- agent-core orchestration with request understanding, planning, safe tool execution, and final synthesis
+- local branch listing, branch creation, and branch switching from the web UI
+- approval-based write workflow: propose a change, review the diff, apply with one click
+- write permission model with `read-only` (default) and `write-with-approval` modes
+- write mode badge in the web UI header showing the active permission level
 
 ## Current Limitations
 
 RepoOperator is still alpha-stage software. Important limitations:
 
-- The main polished flow is read-only.
 - Editing, patch review, validation, commit, and merge-request workflows are still evolving.
 - Hosted-to-local worker pairing is currently development-style rather than packaged desktop software.
 - GitLab is the most exercised provider path today.
@@ -236,7 +577,7 @@ RepoOperator is still alpha-stage software. Important limitations:
 
 Near-term priorities:
 
-- harden `repooperator up` and `repooperator down` across more local environments
+- harden `repo up` and `repo down` across more local environments
 - improve repository selection and branch-selection UX
 - improve file-aware retrieval for code-specific questions
 - show which files were used in each answer more consistently
@@ -251,7 +592,7 @@ Longer-term direction:
 - team-friendly hosted UI pairing with local workers
 - safer write workflows with explicit review and confirmation steps
 
-See [docs/roadmap.md](docs/roadmap.md) for more detail.
+See [docs/roadmap.md](https://github.com/jungin-kim/RepoOperator/blob/main/docs/roadmap.md) for more detail.
 
 ## Contributing
 
@@ -264,8 +605,8 @@ Contributions are welcome, especially around:
 - onboarding and documentation
 - security review and threat modeling
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md). For bugs or feature requests, open an issue on [GitHub](https://github.com/jungin-kim/RepoOperator/issues).
+Start with [CONTRIBUTING.md](https://github.com/jungin-kim/RepoOperator/blob/main/CONTRIBUTING.md). For bugs or feature requests, open an issue on [GitHub](https://github.com/jungin-kim/RepoOperator/issues).
 
 ## License
 
-RepoOperator is released under the MIT License. See [LICENSE](LICENSE).
+RepoOperator is released under the MIT License. See [LICENSE](https://github.com/jungin-kim/RepoOperator/blob/main/LICENSE).
