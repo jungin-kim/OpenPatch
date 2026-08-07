@@ -63,6 +63,10 @@ def start_run(request: AgentRunRequest, *, stream: bool = False) -> AgentRunResp
         final_payload = _safe_final_result(response, run_id=run_id)
         _record_response_events(run_id, request, response)
         if _is_waiting_for_approval(response):
+            # Record thread context even while waiting — a run that pauses at a
+            # post-apply gate has still read/modified files, and follow-ups
+            # ("이제 …도 해줘") need those as implicit targets.
+            update_thread_context(request, response)
             wait_for_approval(run_id, _approval_resume_payload(response, request))
             record_agent_run(
                 run_id=run_id,
@@ -170,6 +174,7 @@ def stream_run(request: AgentRunRequest) -> tuple[str, Iterator[str]]:
                 try:
                     response = AgentRunResponse.model_validate(final_result)
                     if _is_waiting_for_approval(response):
+                        update_thread_context(request, response)
                         wait_for_approval(run_id, _approval_resume_payload(response, request))
                         record_agent_run(
                             run_id=run_id,
