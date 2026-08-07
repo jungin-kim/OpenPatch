@@ -216,6 +216,16 @@ def route_after_change_plan(state: RepoOperatorGraphState) -> str:
     if (errors or (latest and latest.status == "failed")) and int(state.get("repair_attempts") or 0) < 1:
         return "repair_change_set"
     if isinstance(proposal, dict) and proposal.get("changes") and str(proposal.get("status")) == "valid" and not proposal.get("applied"):
+        pending = _pending_action(state)
+        if (
+            pending is not None
+            and pending.type == "apply_change_set"
+            and str(((pending.payload or {}).get("approval_decision") or {}).get("decision") or "").lower() == "allow"
+        ):
+            # accept_edits / full_access pre-approved this apply — skip the
+            # approval interrupt (which unconditionally re-gated every valid
+            # proposal and made the modes indistinguishable from default).
+            return "apply_change_set"
         return "await_change_approval"
     return route_to_final_or_continue(state)
 
