@@ -453,7 +453,8 @@ def _next_command_action(state: AgentCoreState, request: AgentRunRequest, frame:
             expected_output="Command safety classification.",
         )
     preview = _latest_command_preview(state, command)
-    if preview and preview.status == "success" and _preview_read_only(preview.command_result) and not _has_command_run(state, command):
+    preview_auto = bool(preview and isinstance(preview.command_result, dict) and preview.command_result.get("auto_approved_by_mode"))
+    if preview and preview.status == "success" and (_preview_read_only(preview.command_result) or preview_auto) and not _has_command_run(state, command):
         return AgentAction(
             type="run_approved_command",
             reason_summary="Run read-only command after policy preview.",

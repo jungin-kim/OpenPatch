@@ -377,7 +377,13 @@ class PreviewCommandTool(BaseTool):
             related_command=command,
         )
         preview = command_policy_preview(command, project_path=context.request.project_path, reason=reason)
-        status = "waiting_approval" if preview.get("needs_approval") else "success"
+        needs_approval = bool(preview.get("needs_approval"))
+        if needs_approval and context.permission_mode == PermissionMode.FULL_ACCESS and not preview.get("blocked"):
+            # full_access self-approves gated local commands — the preview must
+            # not force the run into a waiting state the mode already answered.
+            needs_approval = False
+            preview = {**preview, "needs_approval": False, "auto_approved_by_mode": "full_access"}
+        status = "waiting_approval" if needs_approval else "success"
         append_activity_event(
             run_id=context.run_id,
             request=context.request,
