@@ -109,6 +109,26 @@ const NONPUBLIC_MODEL_DELTA_TYPE = ["reasoning", "delta"].join("_");
 
 // Slash commands expand to natural-language tasks that flow through the
 // (intent-aware) agent — /help surfaces capabilities, /fetch pulls a URL, etc.
+function friendlyRepoError(error: unknown): string {
+  // Map raw worker/exception strings to a human message + next action, keeping
+  // the original as a trailing detail so power users still see it.
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  const lower = raw.toLowerCase();
+  if (/401|403|unauthor|forbidden|permission|token/.test(lower)) {
+    return "저장소에 접근할 권한이 없습니다. ⚙ Settings의 Repository 탭에서 토큰을 확인해 주세요.";
+  }
+  if (/404|not found|does not exist|no such/.test(lower)) {
+    return "저장소를 찾을 수 없습니다. 소유자/이름과 브랜치가 맞는지 확인해 주세요.";
+  }
+  if (/timeout|timed out|econnrefused|network|unreachable|connect/.test(lower)) {
+    return "저장소 서버에 연결하지 못했습니다. 네트워크와 저장소 주소를 확인해 주세요.";
+  }
+  if (/not a git|no git repository|invalid path|no such file|enoent/.test(lower)) {
+    return "지정한 경로에서 git 저장소를 찾지 못했습니다. 로컬 경로가 올바른지 확인해 주세요.";
+  }
+  return raw ? `저장소를 열지 못했습니다: ${raw}` : "로컬 워커를 통해 저장소를 열지 못했습니다.";
+}
+
 function expandSlashCommand(text: string): string {
   if (!text.startsWith("/")) return text;
   const [cmd, ...rest] = text.slice(1).split(/\s+/);
@@ -1224,11 +1244,7 @@ export function ChatApp() {
     } catch (error) {
       if (!isActiveRepositoryOpenRequest(requestId)) return;
       setRepoResult(null);
-      setRepoError(
-        error instanceof LocalWorkerClientError || error instanceof Error
-          ? error.message
-          : "Unable to open the repository through the local worker.",
-      );
+      setRepoError(friendlyRepoError(error));
     } finally {
       clearRepositoryOpenProgress(requestId);
     }
@@ -1701,11 +1717,7 @@ export function ChatApp() {
       setQuestion("");
     } catch (error) {
       if (!isActiveRepositoryOpenRequest(requestId)) return;
-      setRepoError(
-        error instanceof LocalWorkerClientError || error instanceof Error
-          ? error.message
-          : "Unable to restore the repository for this thread.",
-      );
+      setRepoError(friendlyRepoError(error));
     } finally {
       clearRepositoryOpenProgress(requestId);
     }

@@ -145,6 +145,10 @@ test("proposal diff card renders and Apply posts the approval", async ({ page })
   await expect(page.getByText("Reject")).toBeVisible();
   await expect(page.getByText('"""Add two numbers."""', { exact: false })).toBeVisible();
 
+  // New diff UX: each diff line carries two line-number gutters (old + new).
+  await expect(page.locator(".proposal-diff-line-add").first()).toBeVisible();
+  await expect(page.locator(".proposal-diff-line-add").first().locator(".proposal-diff-lineno")).toHaveCount(2);
+
   await page.getByText("Apply changes").click();
 
   // The approval reaches the worker with the proposal id…

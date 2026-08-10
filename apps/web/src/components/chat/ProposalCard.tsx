@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   applyChangeSet,
   rejectChangeSet,
@@ -30,7 +30,14 @@ function formatAppliedTime(iso: string): string {
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-function buildLineDiff(original: string, proposed: string): Array<{ kind: "ctx" | "add" | "del"; line: string }> {
+interface DiffEntry {
+  kind: "ctx" | "add" | "del";
+  line: string;
+  oldNo: number | null;
+  newNo: number | null;
+}
+
+function buildLineDiff(original: string, proposed: string): DiffEntry[] {
   const oldLines = original.split("\n");
   const newLines = proposed.split("\n");
 
@@ -49,28 +56,54 @@ function buildLineDiff(original: string, proposed: string): Array<{ kind: "ctx" 
     }
   }
 
-  const result: Array<{ kind: "ctx" | "add" | "del"; line: string }> = [];
+  const result: DiffEntry[] = [];
   let i = 0;
   let j = 0;
+  let oldNo = 1;
+  let newNo = 1;
   while (i < m || j < n) {
     if (i < m && j < n && oldLines[i] === newLines[j]) {
-      result.push({ kind: "ctx", line: oldLines[i] });
-      i++;
-      j++;
+      result.push({ kind: "ctx", line: oldLines[i], oldNo, newNo });
+      oldNo++; newNo++; i++; j++;
     } else if (j < n && (i >= m || dp[i + 1][j] <= dp[i][j + 1])) {
-      result.push({ kind: "add", line: newLines[j] });
-      j++;
+      result.push({ kind: "add", line: newLines[j], oldNo: null, newNo });
+      newNo++; j++;
     } else {
-      result.push({ kind: "del", line: oldLines[i] });
-      i++;
+      result.push({ kind: "del", line: oldLines[i], oldNo, newNo: null });
+      oldNo++; i++;
     }
   }
 
   return result;
 }
 
-function DiffView({ original, proposed }: { original: string; proposed: string }) {
-  const diff = buildLineDiff(original, proposed);
+/** Collapse long runs of unchanged context to keep large diffs reviewable.
+ * Keeps a few context lines around each change; hides the rest behind a marker. */
+function collapseContext(diff: DiffEntry[], pad = 3): Array<DiffEntry | { kind: "gap"; hidden: number }> {
+  const changed = new Set<number>();
+  diff.forEach((d, idx) => { if (d.kind !== "ctx") changed.add(idx); });
+  if (!changed.size) return diff;
+  const keep = new Array(diff.length).fill(false);
+  changed.forEach((idx) => {
+    for (let k = Math.max(0, idx - pad); k <= Math.min(diff.length - 1, idx + pad); k++) keep[k] = true;
+  });
+  const out: Array<DiffEntry | { kind: "gap"; hidden: number }> = [];
+  let hidden = 0;
+  diff.forEach((entry, idx) => {
+    if (keep[idx]) {
+      if (hidden) { out.push({ kind: "gap", hidden }); hidden = 0; }
+      out.push(entry);
+    } else {
+      hidden++;
+    }
+  });
+  if (hidden) out.push({ kind: "gap", hidden });
+  return out;
+}
+
+function DiffView({ original, proposed, expanded }: { original: string; proposed: string; expanded: boolean }) {
+  const diff = useMemo(() => buildLineDiff(original, proposed), [original, proposed]);
+  const rows = useMemo(() => (expanded ? diff : collapseContext(diff)), [diff, expanded]);
   const hasChanges = diff.some((d) => d.kind !== "ctx");
 
   if (!hasChanges) {
@@ -81,17 +114,20 @@ function DiffView({ original, proposed }: { original: string; proposed: string }
 
   return (
     <div className="proposal-diff">
-      {diff.map((entry, idx) => (
-        <div
-          key={idx}
-          className={`proposal-diff-line proposal-diff-line-${entry.kind}`}
-        >
-          <span className="proposal-diff-gutter" aria-hidden="true">
-            {entry.kind === "add" ? "+" : entry.kind === "del" ? "−" : " "}
-          </span>
-          <span className="proposal-diff-text">{entry.line}</span>
-        </div>
-      ))}
+      {rows.map((entry, idx) =>
+        entry.kind === "gap" ? (
+          <div key={idx} className="proposal-diff-gap">⋯ {entry.hidden} unchanged line{entry.hidden === 1 ? "" : "s"}</div>
+        ) : (
+          <div key={idx} className={`proposal-diff-line proposal-diff-line-${entry.kind}`}>
+            <span className="proposal-diff-lineno" aria-hidden="true">{entry.oldNo ?? ""}</span>
+            <span className="proposal-diff-lineno" aria-hidden="true">{entry.newNo ?? ""}</span>
+            <span className="proposal-diff-gutter" aria-hidden="true">
+              {entry.kind === "add" ? "+" : entry.kind === "del" ? "−" : " "}
+            </span>
+            <span className="proposal-diff-text">{entry.line || " "}</span>
+          </div>
+        ),
+      )}
     </div>
   );
 }
@@ -114,6 +150,22 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
       }];
   const selectedChange = changes.find((change) => change.path === selectedPath) ?? changes[0];
   const fileCount = changes.length;
+
+  // Compute each file's +/- once (the old code called the O(m·n) diff twice per
+  // row — once for additions, once for deletions).
+  const fileStats = useMemo(
+    () =>
+      new Map(
+        changes.map((c) => {
+          if (c.additions != null && c.deletions != null) {
+            return [c.path, { added: c.additions, removed: c.deletions }] as const;
+          }
+          const counts = countChangedLines(c.original_content ?? "", c.proposed_content ?? "");
+          return [c.path, counts] as const;
+        }),
+      ),
+    [changes],
+  );
 
   async function handleApply() {
     if (applying || isSettled) return;
@@ -213,9 +265,9 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
             <span className="proposal-file-op">{operationLabel(change.operation)}</span>
             <span className="proposal-file-path">{change.path}</span>
             <span className="proposal-file-stats">
-              +{change.additions ?? countChangedLines(change.original_content ?? "", change.proposed_content ?? "").added}
+              <span className="proposal-file-add">+{fileStats.get(change.path)?.added ?? 0}</span>
               {" / "}
-              -{change.deletions ?? countChangedLines(change.original_content ?? "", change.proposed_content ?? "").removed}
+              <span className="proposal-file-del">−{fileStats.get(change.path)?.removed ?? 0}</span>
             </span>
             <span className="proposal-file-validation">{change.validation_status || proposal.changeSetProposal?.validation?.status || "pending"}</span>
           </button>
@@ -231,7 +283,7 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
             type="button"
             onClick={() => setShowFull((v) => !v)}
           >
-            {showFull ? "Collapse" : "Expand full diff"}
+            {showFull ? "변경 부분만 보기" : "전체 코드 보기"}
           </button>
           <button
             className="proposal-diff-toggle"
@@ -252,11 +304,12 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
         ) : null}
         <div
           className="proposal-diff-scroll"
-          style={{ maxHeight: showFull ? "none" : "260px" }}
+          style={{ maxHeight: showFull ? "none" : "360px" }}
         >
           <DiffView
             original={selectedChange?.operation === "create" ? "" : selectedChange?.original_content ?? proposal.originalContent}
             proposed={selectedChange?.operation === "delete" ? "" : selectedChange?.proposed_content ?? proposal.proposedContent}
+            expanded={showFull}
           />
         </div>
       </div>

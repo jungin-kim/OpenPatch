@@ -3380,6 +3380,17 @@ select {
 .proposal-diff-line-del { background: rgba(192, 57, 43, 0.09); }
 .proposal-diff-line-ctx { }
 
+.proposal-diff-lineno {
+  flex-shrink: 0;
+  width: 34px;
+  text-align: right;
+  padding-right: 10px;
+  color: var(--muted);
+  opacity: 0.55;
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
 .proposal-diff-gutter {
   flex-shrink: 0;
   width: 14px;
@@ -3391,6 +3402,18 @@ select {
 
 .proposal-diff-line-add .proposal-diff-gutter { color: #3fa869; }
 .proposal-diff-line-del .proposal-diff-gutter { color: #c0392b; }
+
+.proposal-diff-gap {
+  padding: 3px 12px 3px 92px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-style: italic;
+  background: var(--glass-soft);
+  user-select: none;
+}
+
+.proposal-file-add { color: #3fa869; }
+.proposal-file-del { color: #c0392b; }
 
 .proposal-diff-text {
   white-space: pre;
