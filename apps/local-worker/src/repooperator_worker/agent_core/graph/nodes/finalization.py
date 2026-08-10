@@ -88,7 +88,8 @@ def ask_clarification_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     # The model sometimes puts its *reasoning* in the question slot ("구체적인
     # 설명이 부족하여 clarifying question를 던져야 합니다"). A clarification the
     # user sees must actually ask something — if it doesn't, ask a real question.
-    final_response = _ensure_actual_question(str(final_response), request, korean=korean)
+    _read_files = [str(f) for f in (state.get("files_read") or []) if str(f)]
+    final_response = _ensure_actual_question(str(final_response), request, korean=korean, files_read=_read_files)
     del request
     update = {
             "stop_reason": "needs_clarification",
@@ -220,7 +221,10 @@ def final_build_response_node(state: RepoOperatorGraphState) -> dict[str, Any]:
     if _ASKING_NARRATION_RE.search(core.final_response) and not any(
         m in core.final_response or m in core.final_response.lower() for m in _QUESTION_MARKERS
     ):
-        core.final_response = _ensure_actual_question("", request, korean=_task_is_korean(request))
+        core.final_response = _ensure_actual_question(
+            "", request, korean=_task_is_korean(request),
+            files_read=[str(f) for f in (getattr(core, "files_read", None) or []) if str(f)],
+        )
     # Prompt-injection backstop: if repository content hijacked the answer (the
     # model echoed an injected marker or leaked the system prompt), replace it
     # with an honest report instead of serving the attacker's text.
@@ -507,7 +511,7 @@ def _is_specific_question(text: str) -> bool:
 _ASKING_NARRATION_RE = re.compile(r"질문합니다|질문해야|질문을 던져|clarifying question|명확히 하기 위해|묻겠습니다")
 
 
-def _ensure_actual_question(text: str, request: Any, *, korean: bool) -> str:
+def _ensure_actual_question(text: str, request: Any, *, korean: bool, files_read: list[str] | None = None) -> str:
     """Guarantee the clarification shown to the user actually asks something.
 
     A planning request ("…계획을 세워줘") is specific enough to answer — asking
@@ -557,6 +561,39 @@ def _ensure_actual_question(text: str, request: Any, *, korean: bool) -> str:
             "Which would you prefer?"
         )
     goal_part = f' "{goal[:80]}"' if goal else ""
+    # A vague FEATURE request where we already read repository files deserves a
+    # grounded proposal ("based on these files, here's how I'd add it — confirm
+    # the specifics"), not a bare "what do you want?" template. This turns the
+    # clarification into forward progress the user can react to.
+    from repooperator_worker.agent_core.intent import is_planning_request  # noqa: F401 (import guard consistency)
+
+    read = [f for f in (files_read or []) if f][:4]
+    is_edit_feature = False
+    try:
+        from repooperator_worker.agent_core.planner import edit_requested_text
+
+        is_edit_feature = bool(edit_requested_text(goal))
+    except Exception:
+        is_edit_feature = False
+    if read and is_edit_feature:
+        files_str = ", ".join(f"`{f}`" for f in read)
+        if korean:
+            return (
+                f"요청하신 기능{goal_part}을 추가하려면, 확인한 파일({files_str})을 근거로 다음 순서로 구현하는 방향을 제안드립니다:\n\n"
+                "1. 관련 데이터/상태를 다루는 부분에 필요한 필드나 구조를 추가합니다.\n"
+                "2. 기능을 노출할 명령어 또는 진입점을 연결합니다.\n"
+                "3. 기존 흐름(권한·입력 검증·응답 포맷)에 맞춰 로직을 작성합니다.\n"
+                "4. 실패/예외 경로와 사용자 안내 메시지를 처리합니다.\n\n"
+                "이 방향으로 진행할까요? 명령어 이름이나 세부 동작만 정해주시면 바로 코드를 준비하겠습니다."
+            )
+        return (
+            f"To add{goal_part or ' this feature'}, based on the files I read ({files_str}) here's the approach I'd take:\n\n"
+            "1. Add the needed fields/structure where the related data/state lives.\n"
+            "2. Wire in the command or entry point that exposes it.\n"
+            "3. Implement the logic following existing flows (permissions, validation, response format).\n"
+            "4. Handle failure paths and user-facing messages.\n\n"
+            "Want me to proceed this way? Just confirm the command name or exact behavior and I'll prepare the code."
+        )
     if korean:
         return (
             f"요청하신 내용{goal_part}을 진행하기 전에 확인이 필요해요. "
