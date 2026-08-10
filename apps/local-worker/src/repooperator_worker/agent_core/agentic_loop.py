@@ -185,6 +185,19 @@ def propose_next_action_with_tool_calling(
         and not _change_applied(state)
     ):
         return None
+    # Empty-edit retry gate: the last edit attempt produced no proposal (the
+    # local model intermittently emits an invalid patch) and the model is now
+    # trying to give up with a final_answer. Defer to the deterministic edit
+    # planner, which retries with the alternate edit tool — this is the R4
+    # '똑같이 해줘' flake, where _is_change_request alone was too weak to hold
+    # the gate because the follow-up phrasing carries no edit verb of its own.
+    if (
+        action is not None
+        and action.type in {"final_answer", "ask_clarification"}
+        and _edit_generation_came_up_empty(state)
+        and not _change_applied(state)
+    ):
+        return None
     # Inverse gate: a plainly read-only question ("add 함수는 뭘 반환해?") must
     # never produce an edit — the model sometimes "answers" by generating a
     # patch for the file it just read.
@@ -307,6 +320,25 @@ def _is_change_request(task_frame: Any) -> bool:
 def _change_applied(state: AgentCoreState) -> bool:
     """Whether a file change has actually been applied to the working tree."""
     return bool(getattr(state, "files_changed", None))
+
+
+def _edit_generation_came_up_empty(state: AgentCoreState) -> bool:
+    """The latest generate_edit/generate_change_set attempt produced nothing.
+
+    Kept local (not imported from graph_routes) to avoid a circular import.
+    """
+    actions = list(getattr(state, "actions_taken", []) or [])
+    results = list(getattr(state, "action_results", []) or [])
+    if not results:
+        return False
+    for action, result in zip(reversed(actions[-len(results):]), reversed(results)):
+        if str(getattr(action, "type", "") or "") not in {"generate_edit", "generate_change_set"}:
+            continue
+        payload = getattr(result, "payload", None) or {}
+        if payload.get("edit_proposals") or (payload.get("change_set_proposal") or {}).get("changes"):
+            return False
+        return str(getattr(result, "status", "") or "") in {"skipped", "failed"}
+    return False
 
 
 _EVIDENCE_ACTION_TYPES = frozenset(
