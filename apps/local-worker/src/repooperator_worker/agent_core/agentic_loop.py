@@ -504,6 +504,16 @@ def _string_list(args: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
     out: list[str] = []
     for key in keys:
         value = args.get(key)
+        if isinstance(value, str) and value.strip().startswith("[") and value.strip().endswith("]"):
+            # The model intermittently double-serializes list arguments —
+            # target_files arrives as the STRING '["calc.py"]', which then
+            # resolves to no file at all and kills the edit.
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    value = parsed
+            except (ValueError, TypeError):
+                pass
         if isinstance(value, str) and value.strip():
             out.append(value.strip().lstrip("/"))
         elif isinstance(value, list):

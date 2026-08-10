@@ -191,14 +191,15 @@ def next_recovery_action(
 
 
 def _model_generated_subtask_specs(request: AgentRunRequest, shape: str) -> list[tuple[str, str, str, list[str]]] | None:
-    """Task-specific plan steps from the model, for edit-shaped requests only.
+    """Task-specific plan steps from the model for edit and broad requests.
 
     The visible Plan was a fixed template ("Locate relevant implementation
-    area", …) regardless of what the user asked. For edits — where the plan is
-    user-facing progress UI — ask the model for concrete steps; fall back to
-    the template on any failure. Read-shaped requests keep the fast template.
+    area", …) regardless of what the user asked. For edits and broad analysis —
+    where the plan is user-facing progress UI over many steps — ask the model
+    for concrete steps; fall back to the template on any failure. Simple
+    summary/follow-up questions keep the fast template (no extra model call).
     """
-    if shape != "edit":
+    if shape not in {"edit", "broad"}:
         return None
     import os
 
@@ -222,7 +223,10 @@ def _model_generated_subtask_specs(request: AgentRunRequest, shape: str) -> list
         steps = [s for s in (payload.get("steps") or []) if isinstance(s, dict) and str(s.get("title") or "").strip()]
         if not 3 <= len(steps) <= 6:
             return None
-        ops_cycle = [["search", "read_file"], ["read_file"], ["edit"], ["edit"], ["final_answer"], ["final_answer"]]
+        if shape == "broad":
+            ops_cycle = [["list_files", "search"], ["read_file"], ["read_file", "search"], ["read_file"], ["final_answer"], ["final_answer"]]
+        else:
+            ops_cycle = [["search", "read_file"], ["read_file"], ["edit"], ["edit"], ["final_answer"], ["final_answer"]]
         return [
             (f"step{i}", str(s.get("title"))[:80], str(s.get("goal") or "")[:160], ops_cycle[min(i, len(ops_cycle) - 1)])
             for i, s in enumerate(steps)

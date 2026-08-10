@@ -32,7 +32,16 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // The Playwright browser CDN is unreachable from some networks
+        // (Microsoft PRSS gateway returns 400). PLAYWRIGHT_CHROMIUM_PATH lets
+        // a locally installed Chromium (e.g. Homebrew cask) stand in; CI keeps
+        // using the downloaded browser.
+        ...(process.env.PLAYWRIGHT_CHROMIUM_PATH
+          ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } }
+          : {}),
+      },
     },
   ],
 
