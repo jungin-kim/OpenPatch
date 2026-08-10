@@ -1,16 +1,18 @@
 name: CI
 
-# Local-worker test suite (pytest). Runs on pushes and PRs that touch the
-# worker or this workflow.
+# Local-worker test suite (pytest) and CLI unit tests (node:test). Each job
+# runs only when files it covers (or this workflow) change.
 on:
   push:
     branches: [main]
     paths:
       - "apps/local-worker/**"
+      - "packages/cli/**"
       - ".github/workflows/ci.yml"
   pull_request:
     paths:
       - "apps/local-worker/**"
+      - "packages/cli/**"
       - ".github/workflows/ci.yml"
   workflow_dispatch:
 
@@ -35,3 +37,19 @@ jobs:
         # A couple of worktree/git tests are occasionally flaky under load;
         # rerun failures so genuine regressions still fail but races don't.
         run: pytest -p no:cacheprovider --reruns 2 --reruns-delay 1
+
+  cli-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run CLI unit tests
+        run: npm test

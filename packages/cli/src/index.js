@@ -779,8 +779,11 @@ async function runStatus() {
 
 async function runUp() {
   await ensureBaseDirectories();
-  await ensureRuntimeInstalled();
+  // Validate configuration before the (slow) runtime install so a missing or
+  // incomplete config fails in milliseconds instead of after a dependency
+  // download. requireConfig throws a guided error pointing at `onboard`.
   const config = await requireConfig();
+  await ensureRuntimeInstalled();
   const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
   const webUrl = config.web?.baseUrl || DEFAULT_WEB_URL;
 
@@ -804,6 +807,28 @@ async function runUp() {
   const webHealth = await term.spinner("Verify web UI", () => checkWebHealth(webUrl, DEFAULT_WEB_HEALTH_TIMEOUT_MS));
   if (!webHealth.reachable) {
     throw new Error(`Web UI did not become healthy. ${webHealth.message}`);
+  }
+
+  // Non-fatal model preflight: the worker and web UI can be perfectly healthy
+  // while the model endpoint is unreachable (Ollama not running, wrong base URL,
+  // bad key). Surface that now with a concrete action instead of letting the
+  // first chat message fail cryptically. A reachable model is confirmed; an
+  // unreachable one warns but still leaves the UI up.
+  if (config.model) {
+    const modelConnectivity = await term.spinner(
+      "Verify model connectivity",
+      () => checkModelConnectivity(config.model, DEFAULT_MODEL_CONNECTIVITY_TIMEOUT_MS),
+    );
+    if (!modelConnectivity.reachable) {
+      term.line("warning", "Model not reachable", modelConnectivity.message);
+      term.line(
+        "info",
+        "What to do",
+        config.model.connectionMode === "local-runtime"
+          ? `Make sure the model runtime is running at ${config.model.baseUrl}, or update it with \`${CLI_COMMAND} onboard\`.`
+          : `Check the base URL, API key, and model name in Settings, or rerun \`${CLI_COMMAND} onboard\`.`,
+      );
+    }
   }
 
   term.summaryBox(`${PRODUCT_NAME} is up`, [
@@ -1001,24 +1026,25 @@ async function startWorker({ interactive, quiet = false }) {
   if (!startupHealth.reachable) {
     await safeStopWorkerProcess(child.pid);
     const logTail = await readLogTail(WORKER_LOG_PATH, DEFAULT_LOG_TAIL_LINES);
+    const failureType = classifyWorkerStartupFailure(startupHealth, logTail);
     await writeRuntimeState({
       ...(await readState()),
       status: "failed",
       failedAt: new Date().toISOString(),
-      failureType: classifyWorkerStartupFailure(startupHealth, logTail),
+      failureType,
       lastError: startupHealth.message,
       lastLogTail: logTail,
       exitCode: startupHealth.exitCode ?? null,
       exitSignal: startupHealth.exitSignal ?? null,
     });
-    term.line("error", "Startup failure", startupHealth.message);
-    term.line("info", "Process exited", startupHealth.exited ? "yes" : "no");
-    term.line("info", "Exit code", String(startupHealth.exitCode ?? "unknown"));
+    const { cause, action } = describeStartupFailureAction(failureType, { workerUrl, kind: "worker" });
+    term.line("error", "Worker failed to start", cause);
+    term.line("info", "What to do", action);
     if (logTail) {
       term.summaryBox("Recent worker log output", logTail.split(/\r?\n/).slice(-12));
     }
     throw new Error(
-      `Worker failed to start. ${startupHealth.message} Check logs with \`${CLI_COMMAND} worker logs\`.`,
+      `Worker failed to start. ${cause} ${action}`,
     );
   }
 
@@ -1287,22 +1313,27 @@ async function startWeb({ interactive, quiet = false, workerUrl, webUrl }) {
   if (!startupHealth.reachable) {
     await safeStopWorkerProcess(child.pid);
     const logTail = await readLogTail(WEB_LOG_PATH, DEFAULT_LOG_TAIL_LINES);
+    const failureType = (logTail && logTail.includes("EADDRINUSE"))
+      ? "port_in_use"
+      : startupHealth.exited ? "process_exited" : "health_timeout";
     await writeWebRuntimeState({
       ...(await readWebState()),
       status: "failed",
       failedAt: new Date().toISOString(),
-      failureType: startupHealth.exited ? "process_exited" : "health_timeout",
+      failureType,
       lastError: startupHealth.message,
       lastLogTail: logTail,
       exitCode: startupHealth.exitCode ?? null,
       exitSignal: startupHealth.exitSignal ?? null,
     });
-    term.line("error", "Web startup failure", startupHealth.message);
+    const { cause, action } = describeStartupFailureAction(failureType, { webUrl, kind: "web" });
+    term.line("error", "Web UI failed to start", cause);
+    term.line("info", "What to do", action);
     if (logTail) {
       term.summaryBox("Recent web log output", logTail.split(/\r?\n/).slice(-12));
     }
     throw new Error(
-      `Web UI failed to start. ${startupHealth.message} Check logs at ${WEB_LOG_PATH}.`,
+      `Web UI failed to start. ${cause} ${action}`,
     );
   }
 
@@ -2515,7 +2546,7 @@ async function promptGitProviderConfig(rl, provider, existingProviderConfig = nu
       "GitLab base URL",
       existingProviderConfig?.baseUrl || "https://gitlab.com",
     );
-    const token = await promptWithDefault(rl, "GitLab token", existingProviderConfig?.token || "");
+    const token = await promptSecret(rl, "GitLab token", existingProviderConfig?.token || "");
     return { provider: "gitlab", baseUrl, token };
   }
 
@@ -2552,7 +2583,7 @@ async function promptGitProviderConfig(rl, provider, existingProviderConfig = nu
       "Optional GitHub owner/org scope",
       existingProviderConfig?.owner || scopeFromPath || "",
     );
-    const token = await promptWithDefault(rl, "GitHub token", existingProviderConfig?.token || "");
+    const token = await promptSecret(rl, "GitHub token", existingProviderConfig?.token || "");
     return {
       provider: "github",
       baseUrl,
@@ -2615,15 +2646,19 @@ async function promptRemoteApiModelConfig(rl, existingModelConfig = null) {
   let model = existingMatchesProvider ? existingModelConfig.model || "" : providerConfig.defaultModel || "";
 
   if (providerConfig.prompts.includes("baseUrl")) {
-    baseUrl = await promptWithDefault(rl, "Base URL", baseUrl);
+    baseUrl = await promptUrl(rl, "Base URL", baseUrl);
   }
 
   if (providerConfig.prompts.includes("apiKey")) {
-    apiKey = await promptWithDefault(rl, "API key", apiKey);
+    apiKey = await promptSecret(rl, "API key", apiKey);
+  }
+
+  if (providerConfig.prompts.includes("apiKeyOptional")) {
+    apiKey = await promptSecret(rl, "API key (optional)", apiKey);
   }
 
   if (providerConfig.prompts.includes("model")) {
-    model = await promptWithDefault(rl, "Model name", model);
+    model = await promptRequired(rl, "Model name", model);
   }
 
   if (!providerConfig.prompts.includes("baseUrl")) {
@@ -2672,7 +2707,7 @@ async function promptOllamaModelConfig(rl, existingModelConfig = null) {
     }
   }
 
-  const baseUrl = await promptWithDefault(rl, "Ollama base URL", existingModelConfig?.baseUrl || OLLAMA_DEFAULT_BASE_URL);
+  const baseUrl = await promptUrl(rl, "Ollama base URL", existingModelConfig?.baseUrl || OLLAMA_DEFAULT_BASE_URL);
   const serverState = await ensureOllamaServerReady(rl, baseUrl);
   const listedModels = await listOllamaModels();
   const selectedModel = await chooseOllamaModel(
@@ -2700,8 +2735,8 @@ async function promptVllmModelConfig(rl, existingModelConfig = null) {
     "RepoOperator does not start vLLM. Start it yourself on this machine or a trusted LAN host.",
   ]);
 
-  const baseUrl = await promptWithDefault(rl, "vLLM base URL", existingModelConfig?.baseUrl || VLLM_DEFAULT_BASE_URL);
-  const apiKey = await promptWithDefault(rl, "API key (optional)", existingModelConfig?.apiKey || "");
+  const baseUrl = await promptUrl(rl, "vLLM base URL", existingModelConfig?.baseUrl || VLLM_DEFAULT_BASE_URL);
+  const apiKey = await promptSecret(rl, "API key (optional)", existingModelConfig?.apiKey || "");
   const probe = await term.spinner("Check vLLM /models", () => checkModelConnectivity({
     connectionMode: "local-runtime",
     provider: "vllm",
@@ -2714,7 +2749,7 @@ async function promptVllmModelConfig(rl, existingModelConfig = null) {
   } else {
     term.line("warning", "vLLM not reachable yet", probe.message);
   }
-  const model = await promptWithDefault(rl, "Model name", existingModelConfig?.model || "");
+  const model = await promptRequired(rl, "Model name", existingModelConfig?.model || "");
   return {
     connectionMode: "local-runtime",
     provider: "vllm",
@@ -2819,6 +2854,83 @@ async function promptWithDefault(rl, label, defaultValue) {
   const answer = await rl.question(`${label}${suffix}: `);
   const trimmed = answer.trim();
   return trimmed || defaultValue;
+}
+
+// Non-echoing prompt for secrets (tokens, API keys). Typed characters are
+// masked as • so credentials never appear in the terminal scrollback or in a
+// screen-share. When a value already exists the user can press Enter to keep it
+// (the stored secret is never displayed, only its presence is acknowledged).
+//
+// readline echoes keystrokes by writing to rl.output; we wrap output.write so
+// that, once the prompt itself has been printed, printable glyphs render as
+// bullets while control sequences (cursor moves, newlines) pass through intact.
+async function promptSecret(rl, label, existingValue = "") {
+  const hasExisting = Boolean(existingValue);
+  const suffix = hasExisting ? " [stored · press Enter to keep]" : "";
+  const prompt = `${label}${suffix}: `;
+  const out = rl.output;
+  const originalWrite = out.write.bind(out);
+  let masking = false;
+
+  out.write = (chunk, ...rest) => {
+    if (masking && typeof chunk === "string") {
+      chunk = chunk.replace(/[^\r\n\x00-\x1f\x7f]/g, "•");
+    }
+    return originalWrite(chunk, ...rest);
+  };
+
+  try {
+    const questionPromise = rl.question(prompt);
+    masking = true; // Prompt is already queued unmasked; mask everything after.
+    const answer = await questionPromise;
+    const trimmed = answer.trim();
+    if (!trimmed && hasExisting) {
+      return existingValue;
+    }
+    return trimmed;
+  } finally {
+    masking = false;
+    out.write = originalWrite;
+  }
+}
+
+// http(s) URL validator used to reject typos before they are written to config
+// and surface as an opaque connection failure later.
+function isValidHttpUrl(value) {
+  if (!value || typeof value !== "string") {
+    return false;
+  }
+  let parsed;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    return false;
+  }
+  return parsed.protocol === "http:" || parsed.protocol === "https:";
+}
+
+// Prompt for an http(s) URL, re-asking on invalid input instead of silently
+// storing a bad value. Empty input keeps the default when one is provided.
+async function promptUrl(rl, label, defaultValue) {
+  for (;;) {
+    const value = await promptWithDefault(rl, label, defaultValue);
+    if (isValidHttpUrl(value)) {
+      return value.trim();
+    }
+    term.line("warning", "Invalid URL", "Enter a full http(s) URL, e.g. http://localhost:11434/v1");
+  }
+}
+
+// Prompt that refuses empty input, re-asking until a value is given. Used for
+// required free-text fields such as the model name.
+async function promptRequired(rl, label, defaultValue) {
+  for (;;) {
+    const value = await promptWithDefault(rl, label, defaultValue);
+    if (value && value.trim()) {
+      return value.trim();
+    }
+    term.line("warning", "Required", `${label} cannot be empty.`);
+  }
 }
 
 async function promptYesNo(rl, prompt, defaultYes) {
@@ -3015,7 +3127,16 @@ async function requireConfig() {
 async function readConfig() {
   await ensureBaseDirectories();
   const raw = await fsp.readFile(CONFIG_PATH, "utf-8");
-  return normalizeConfig(JSON.parse(raw));
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `The configuration at ${CONFIG_PATH} is not valid JSON (${error.message}). `
+        + `Fix the file by hand, or rerun \`${CLI_COMMAND} onboard\` to recreate it.`,
+    );
+  }
+  return normalizeConfig(parsed);
 }
 
 async function readOptionalConfig() {
@@ -3606,6 +3727,39 @@ function describePortState(portState, workerUrl, workerHealthy) {
   return portState.detail;
 }
 
+// Turn a machine failureType into a one-line, human-readable cause + the single
+// most useful next action, shown ABOVE the raw log tail so the user does not
+// have to interpret a stack trace to know what to do.
+function describeStartupFailureAction(failureType, { workerUrl, webUrl, kind } = {}) {
+  const target = kind === "web" ? "web UI" : "worker";
+  const url = kind === "web" ? webUrl : workerUrl;
+  switch (failureType) {
+    case "port_in_use":
+      return {
+        cause: `Port ${url} is already in use by another process.`,
+        action: kind === "web"
+          ? `Stop whatever is listening there, or set a different web URL with \`${CLI_COMMAND} onboard\`.`
+          : `Stop whatever is listening there, or set a different worker URL with \`${CLI_COMMAND} onboard\`.`,
+      };
+    case "import_failure":
+      return {
+        cause: "The worker could not import its Python app (runtime is incomplete or corrupted).",
+        action: `Remove the runtime directory (${RUNTIME_DIR}) and rerun \`${CLI_COMMAND} up\` to reinstall it.`,
+      };
+    case "health_timeout":
+      return {
+        cause: `The ${target} started but did not become healthy in time.`,
+        action: `It may still be warming up — rerun \`${CLI_COMMAND} up\`. If it repeats, check the log below.`,
+      };
+    case "process_exited":
+    default:
+      return {
+        cause: `The ${target} process exited during startup.`,
+        action: "See the cause in the recent log output below.",
+      };
+  }
+}
+
 function classifyWorkerStartupFailure(startupHealth, logTail) {
   const tail = logTail || "";
   if (tail.includes("ModuleNotFoundError") || tail.includes("No module named 'repooperator_worker'")) {
@@ -3993,6 +4147,11 @@ function printHelp() {
 
 module.exports = {
   runCli,
+  promptSecret,
+  promptUrl,
+  promptRequired,
+  isValidHttpUrl,
+  describeStartupFailureAction,
   detectHardware,
   recommendOllamaModels,
   recommendedOllamaModel,
