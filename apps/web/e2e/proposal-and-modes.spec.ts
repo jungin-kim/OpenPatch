@@ -186,8 +186,10 @@ test("permission mode selector posts the chosen mode", async ({ page }) => {
   await expect(trigger).toBeVisible({ timeout: 10000 });
   await trigger.click();
 
-  await page.getByRole("menuitemradio", { name: /Full access/ }).click();
+  // accept_edits has no confirm() gate (full_access does), so it exercises
+  // the POST path deterministically.
+  await page.getByRole("menuitemradio", { name: /Accept edits/ }).click();
 
-  await expect.poll(() => postedMode, { timeout: 8000 }).toBe("full_access");
-  await expect(trigger).toContainText("Full access", { timeout: 8000 });
+  await expect.poll(() => postedMode, { timeout: 8000 }).toBe("accept_edits");
+  await expect(trigger).toContainText("Accept edits", { timeout: 8000 });
 });
