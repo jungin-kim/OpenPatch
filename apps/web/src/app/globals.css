@@ -1157,7 +1157,9 @@ select {
      header — wrapping pushed this to ~88px and the two headers went out of
      sync. Overflowing controls compress (min-width:0) rather than wrap. */
   flex-wrap: nowrap;
-  min-height: 51px;
+  /* 50px row + the parent .chat-header's 1px bottom border = 51px total,
+     matching the sidebar header exactly (which includes its border in 51px). */
+  min-height: 50px;
   box-sizing: border-box;
   overflow-x: auto;
 }
