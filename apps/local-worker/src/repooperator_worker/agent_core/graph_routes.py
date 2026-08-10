@@ -584,7 +584,7 @@ def _next_edit_action(state: AgentCoreState, request: AgentRunRequest, frame: An
                 1 for a in getattr(state, "actions_taken", []) or []
                 if str(getattr(a, "type", "") or "") in {"generate_edit", "generate_change_set"}
             )
-            if edit_attempts < 3:
+            if edit_attempts < 2:
                 retry_tool = "generate_edit" if _has_action(state, "generate_change_set") and not _has_action(state, "generate_edit") else "generate_change_set"
                 return AgentAction(
                     type=retry_tool,
