@@ -625,6 +625,19 @@ export function ChatApp() {
   }, [activeRunId, questionPending]);
 
   useEffect(() => {
+    // The thread history only loads once the worker is reachable. Without this,
+    // threadStoreState stays "loading" forever while the worker is offline —
+    // the sidebar shows "Loading saved chats" that never resolves. Reflect the
+    // real state: unavailable when the worker is down, loading only while the
+    // health check is still in flight.
+    if (connectionState === "unavailable") {
+      setThreadStoreState("unavailable");
+    } else if (connectionState === "checking") {
+      setThreadStoreState("loading");
+    }
+  }, [connectionState]);
+
+  useEffect(() => {
     if (connectionState !== "connected") return;
 
     let cancelled = false;
@@ -2069,6 +2082,9 @@ export function ChatApp() {
           livePlan={livePlan}
           gitProvider={gitProvider}
           writeMode={writeMode}
+          connectionState={connectionState}
+          configuredModelProvider={configuredModelProvider}
+          onRetryConnection={() => void refreshHealthCheck({ syncProvider: true })}
           onProposalStatusChange={handleProposalStatusChange}
           onClarificationSelect={(candidate) => setQuestion(candidate)}
           onCommandDecision={handleCommandDecision}

@@ -22,6 +22,14 @@ interface ProposalCardProps {
 }
 
 /** Build a simple unified-style line diff for display (no external library needed). */
+function formatAppliedTime(iso: string): string {
+  // The backend hands back a raw ISO timestamp; show a readable local time
+  // ("오후 3:51" style) instead of "2026-08-07T03:51:02Z".
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
 function buildLineDiff(original: string, proposed: string): Array<{ kind: "ctx" | "add" | "del"; line: string }> {
   const oldLines = original.split("\n");
   const newLines = proposed.split("\n");
@@ -280,7 +288,7 @@ export function ProposalCard({ proposal, writeMode, onStatusChange }: ProposalCa
 
       {isSettled && proposal.status !== "proposed" && (
         <div className={`proposal-settled-notice proposal-settled-${proposal.status}`}>
-          {proposal.status === "applied" && `Listed file changes were applied${proposal.appliedAt ? ` at ${proposal.appliedAt}` : ""}.`}
+          {proposal.status === "applied" && `Listed file changes were applied${proposal.appliedAt ? ` at ${formatAppliedTime(proposal.appliedAt)}` : ""}.`}
           {proposal.status === "rejected" && "Proposal was not applied."}
           {proposal.status === "failed" && "Failed to apply changes."}
         </div>

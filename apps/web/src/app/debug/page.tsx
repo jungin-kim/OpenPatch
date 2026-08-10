@@ -263,7 +263,14 @@ function Dashboard({ runtime }: { runtime: RuntimeDebug | null }) {
       <Card title="Worker">
         <Row label="Status" value={runtime?.worker?.status ?? "-"} />
         <Row label="Service" value={runtime?.worker?.service ?? "-"} />
-        <Row label="Active runs" value={String(runtime?.active_runs?.length ?? 0)} />
+        <Row
+          label="Active runs"
+          value={String(
+            (runtime?.active_runs ?? []).filter(
+              (r: { status?: string }) => String(r?.status || "") !== "waiting_approval",
+            ).length,
+          )}
+        />
       </Card>
       <Card title="Model">
         <Row label="Provider" value={runtime?.model?.provider ?? "-"} />

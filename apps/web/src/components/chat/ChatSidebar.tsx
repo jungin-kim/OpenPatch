@@ -405,9 +405,11 @@ export function ChatSidebar({
               Debug dashboard
             </Link>
             <div className="sidebar-home-row">
-              <Link href="/" className="sidebar-item sidebar-home-link" style={{ color: "var(--muted)", fontSize: "0.84rem" }}>
-                ← Home
-              </Link>
+              {/* The root now redirects straight to the app, so a "Home" link
+                  would just bounce back here — the theme toggle stands alone. */}
+              <span className="sidebar-item" style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
+                RepoOperator
+              </span>
               {onThemeToggle && <ThemeToggle theme={theme} onThemeToggle={onThemeToggle} />}
             </div>
           </div>

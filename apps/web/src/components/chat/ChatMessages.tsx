@@ -592,6 +592,9 @@ interface ChatMessagesProps {
   livePlan?: LivePlanItem[];
   gitProvider: string;
   writeMode?: PermissionMode;
+  connectionState?: "checking" | "connected" | "unavailable";
+  configuredModelProvider?: string;
+  onRetryConnection?: () => void;
   onProposalStatusChange?: (id: string, status: ProposalStatus, message?: string, result?: AgentRunPayload) => void;
   onClarificationSelect?: (candidate: string) => void;
   onCommandDecision?: (metadata: AgentRunPayload, decision: "yes" | "yes_session" | "no_explain") => void;
@@ -606,6 +609,9 @@ export function ChatMessages({
   livePlan = [],
   gitProvider,
   writeMode = "default",
+  connectionState = "connected",
+  configuredModelProvider = "",
+  onRetryConnection,
   onProposalStatusChange,
   onClarificationSelect,
   onCommandDecision,
@@ -721,15 +727,42 @@ export function ChatMessages({
       )}
 
       {messages.length === 0 && !questionPending ? (
-        <div className="chat-empty">
-          <div className="chat-empty-icon" aria-hidden="true" />
-          <h2>RepoOperator</h2>
-          <p>
-            {repoResult
-              ? "Repository is open. Ask a question about the codebase below."
-              : "Select a repository above and click Open repository, then ask questions."}
-          </p>
-        </div>
+        connectionState === "unavailable" ? (
+          <div className="chat-empty chat-empty-alert">
+            <div className="chat-empty-icon" aria-hidden="true" />
+            <h2>로컬 워커가 실행 중이 아닙니다</h2>
+            <p>RepoOperator 워커에 연결할 수 없어요. 터미널에서 아래 명령으로 시작해 주세요.</p>
+            <div className="chat-empty-cmd">
+              <code>repo up</code>
+              <button type="button" onClick={() => void navigator.clipboard?.writeText("repo up")}>복사</button>
+            </div>
+            {onRetryConnection && (
+              <button type="button" className="chat-empty-retry" onClick={onRetryConnection}>
+                다시 시도
+              </button>
+            )}
+          </div>
+        ) : connectionState === "connected" && !configuredModelProvider ? (
+          <div className="chat-empty chat-empty-alert">
+            <div className="chat-empty-icon" aria-hidden="true" />
+            <h2>모델이 아직 연결되지 않았습니다</h2>
+            <p>질문에 답하려면 먼저 모델 연결을 설정해야 해요. 터미널에서 온보딩을 실행해 주세요.</p>
+            <div className="chat-empty-cmd">
+              <code>repo onboard</code>
+              <button type="button" onClick={() => void navigator.clipboard?.writeText("repo onboard")}>복사</button>
+            </div>
+          </div>
+        ) : (
+          <div className="chat-empty">
+            <div className="chat-empty-icon" aria-hidden="true" />
+            <h2>RepoOperator</h2>
+            <p>
+              {repoResult
+                ? "Repository is open. Ask a question about the codebase below."
+                : "Select a repository above and click Open repository, then ask questions."}
+            </p>
+          </div>
+        )
       ) : (
         <>
           {messages.map((msg) => (

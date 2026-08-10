@@ -2080,6 +2080,52 @@ select {
   line-height: 1.65;
 }
 
+.chat-empty-alert .chat-empty-icon {
+  background: linear-gradient(135deg, #f0a020, #e0603a);
+}
+
+.chat-empty-cmd {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--glass-soft);
+}
+
+.chat-empty-cmd code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.chat-empty-cmd button,
+.chat-empty-retry {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--glass-mid);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.chat-empty-retry {
+  margin-top: 12px;
+  padding: 8px 18px;
+  background: var(--accent-grad);
+  border: none;
+  color: #fff;
+}
+
+.chat-empty-cmd button:hover,
+.chat-empty-retry:hover {
+  filter: brightness(1.08);
+}
+
 /* ── Messages ─────────────────────────────────────── */
 
 .message-group {
