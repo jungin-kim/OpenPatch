@@ -270,8 +270,11 @@ test("A: active thread survives navigation away and back during active run", asy
   await expect(page.locator(".agent-transcript-section")).toHaveCount(1);
   await expect(page.getByTestId("stop-run-button")).toBeVisible();
 
-  // Navigate away to the real debug route, which unmounts ChatApp, then return.
+  // Navigate away to the real debug/settings route, which unmounts ChatApp,
+  // then return. The console now opens on the Model tab; switch to the
+  // Dashboard diagnostics tab to read the Active runs count.
   await page.goto("/debug");
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
   await expect(page.locator(".debug-card:has-text('Worker') .debug-row:has-text('Active runs') strong")).toHaveText("1");
   await page.getByRole("link", { name: "Back to app" }).click();
 
@@ -329,7 +332,7 @@ test("B: active run completes while user is on debug page and rehydrates on retu
   await expectConcreteActivity(page);
 
   await page.goto("/debug");
-  await expect(page.getByText("RepoOperator Debug")).toBeVisible();
+  await expect(page.getByText("RepoOperator Settings")).toBeVisible();
 
   currentRun = completedRun;
   currentActiveRuns = [];
