@@ -91,6 +91,14 @@ class IntentTextContractTests(unittest.TestCase):
     def test_read_only_text_not_edit(self) -> None:
         self.assertFalse(edit_requested_text("calc.py를 설명해줘"))
 
+    def test_view_implementation_is_read_not_edit(self) -> None:
+        # "divide 함수 구현을 보여줘" is a request to SEE code, not to add it —
+        # the bare verb stem "구현" must not classify it as an edit (which had
+        # produced a change set adding a nonexistent function).
+        self.assertFalse(edit_requested_text("calc.py의 divide 함수 구현을 보여줘"))
+        self.assertFalse(edit_requested_text("add 함수가 어디에 정의돼 있어?"))
+        self.assertTrue(edit_requested_text("multiply 함수 구현해줘"))
+
 
 class ChooserBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
