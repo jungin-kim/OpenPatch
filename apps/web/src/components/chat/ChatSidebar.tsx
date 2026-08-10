@@ -401,8 +401,8 @@ export function ChatSidebar({
           <div style={{ flex: 1 }} />
 
           <div className="sidebar-section">
-            <Link href="/debug" className="sidebar-item" style={{ display: "block", color: "var(--muted)", fontSize: "0.84rem", marginBottom: 6 }}>
-              Debug dashboard
+            <Link href="/debug" className="sidebar-item" style={{ display: "block", color: "var(--text)", fontSize: "0.9rem", fontWeight: 600, marginBottom: 6 }}>
+              ⚙ Settings
             </Link>
             <div className="sidebar-home-row">
               {/* The root now redirects straight to the app, so a "Home" link

@@ -1,7 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
+import {
+  getSettings,
+  updateModelSettings,
+  updateRepositorySettings,
+  getPermissionMode,
+  updatePermissionMode,
+  getLogs,
+  type SettingsSnapshot,
+  type LogTail,
+  type PermissionMode,
+} from "@/lib/local-worker-client";
 import { formatBudgetUsage, formatCarryoverSummary, formatTargetCandidates, type ContextBudgetUsage, type TargetCandidateDebug } from "./context-format";
 
 type ModelProfileDebug = {
@@ -166,7 +177,8 @@ type ContextDebug = {
   }>;
 };
 
-const tabs = ["Dashboard", "Agents", "Context", "Memory", "Skills", "Integrations", "MCP", "Tools", "Events / Runs", "Settings"] as const;
+// Editable settings first, then plugins, then read-only diagnostics.
+const tabs = ["Model", "Repository", "Permissions", "Logs", "MCP", "Skills", "Tools", "Integrations", "Dashboard", "Agents", "Context", "Memory", "Events / Runs"] as const;
 type DebugTab = typeof tabs[number];
 
 async function loadJson<T>(url: string): Promise<T> {
@@ -176,7 +188,7 @@ async function loadJson<T>(url: string): Promise<T> {
 }
 
 export default function DebugPage() {
-  const [activeTab, setActiveTab] = useState<DebugTab>("Dashboard");
+  const [activeTab, setActiveTab] = useState<DebugTab>("Model");
   const [runtime, setRuntime] = useState<RuntimeDebug | null>(null);
   const [context, setContext] = useState<ContextDebug | null>(null);
   const [memory, setMemory] = useState<MemoryDebug | null>(null);
@@ -218,7 +230,7 @@ export default function DebugPage() {
   return (
     <div className="debug-shell">
       <aside className="debug-sidebar">
-        <div className="debug-brand">RepoOperator Debug</div>
+        <div className="debug-brand">RepoOperator Settings</div>
         {tabs.map((tab) => (
           <button
             key={tab}
@@ -242,6 +254,10 @@ export default function DebugPage() {
           </div>
         </header>
         {error && <div className="debug-error">{error}</div>}
+        {activeTab === "Model" && <ModelSettingsPanel />}
+        {activeTab === "Repository" && <RepositorySettingsPanel />}
+        {activeTab === "Permissions" && <PermissionsSettingsPanel />}
+        {activeTab === "Logs" && <LogsPanel />}
         {activeTab === "Dashboard" && <Dashboard runtime={runtime} />}
         {activeTab === "Agents" && <Agents runtime={runtime} />}
         {activeTab === "Context" && <ContextPanel context={context} />}
@@ -251,7 +267,6 @@ export default function DebugPage() {
         {activeTab === "MCP" && <McpPanel />}
         {activeTab === "Tools" && <ToolsPanel tools={tools} catalog={toolCatalog} />}
         {activeTab === "Events / Runs" && <RunsPanel runtime={runtime} />}
-        {activeTab === "Settings" && <SettingsPanel runtime={runtime} />}
       </main>
     </div>
   );
@@ -953,14 +968,223 @@ function RunsPanel({ runtime }: { runtime: RuntimeDebug | null }) {
   );
 }
 
-function SettingsPanel({ runtime }: { runtime: RuntimeDebug | null }) {
+const SECRET_SENTINEL = "__stored__";
+
+function ModelSettingsPanel() {
+  const [snap, setSnap] = useState<SettingsSnapshot | null>(null);
+  const [form, setForm] = useState({ connectionMode: "", provider: "", baseUrl: "", model: "", contextWindow: "", apiKey: "" });
+  const [ctxMode, setCtxMode] = useState<"auto" | "manual">("manual");
+  const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void getSettings().then((s) => {
+      setSnap(s);
+      setForm({
+        connectionMode: s.model.connectionMode,
+        provider: s.model.provider,
+        baseUrl: s.model.baseUrl,
+        model: s.model.model,
+        contextWindow: s.model.contextWindow ? String(s.model.contextWindow) : "",
+        apiKey: "",
+      });
+    }).catch((e) => setStatus({ kind: "err", msg: String(e) }));
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setStatus(null);
+    try {
+      const payload: Parameters<typeof updateModelSettings>[0] = {
+        connectionMode: form.connectionMode || undefined,
+        provider: form.provider,
+        baseUrl: form.baseUrl,
+        model: form.model,
+        contextWindow: ctxMode === "auto" ? (snap?.autoContextWindow ?? undefined) : (form.contextWindow ? Number(form.contextWindow) : undefined),
+      };
+      if (form.apiKey.trim()) payload.apiKey = form.apiKey.trim();
+      const next = await updateModelSettings(payload);
+      setSnap(next);
+      setForm((f) => ({ ...f, apiKey: "" }));
+      setStatus({ kind: "ok", msg: "모델 설정을 저장했습니다." });
+    } catch (e) {
+      setStatus({ kind: "err", msg: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <Card title="Settings Snapshot">
-      <Row label="Connection mode" value={runtime?.model?.connection_mode ?? "-"} />
-      <Row label="Permission mode" value={runtime?.permissions?.mode ?? "-"} />
-      <Row label="Tool permissions" value={runtime?.permissions?.tools ? Object.entries(runtime.permissions.tools).map(([key, value]) => `${key}: ${value}`).join(" · ") : "-"} />
+    <Card title="Model connection">
+      <FormRow label="Connection mode">
+        <select value={form.connectionMode} onChange={(e) => setForm({ ...form, connectionMode: e.target.value })}>
+          <option value="local-runtime">Local model runtime</option>
+          <option value="remote-api">Remote model API</option>
+        </select>
+      </FormRow>
+      <FormRow label="Provider">
+        <input value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value })} placeholder="ollama / openai / anthropic …" />
+      </FormRow>
+      <FormRow label="Base URL">
+        <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder="http://127.0.0.1:11434/v1" />
+      </FormRow>
+      <FormRow label="Model">
+        <input value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} placeholder="qwen3-coder:30b" />
+      </FormRow>
+      <FormRow label="API key">
+        <input type="password" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} placeholder={snap?.model.apiKey === SECRET_SENTINEL ? "설정됨 · 변경 시에만 입력" : "필요 시 입력"} />
+      </FormRow>
+      <FormRow label="Context window">
+        <div className="debug-inline">
+          <label><input type="radio" checked={ctxMode === "auto"} onChange={() => setCtxMode("auto")} /> Auto (RAM: {snap?.autoContextWindow ?? "-"})</label>
+          <label><input type="radio" checked={ctxMode === "manual"} onChange={() => setCtxMode("manual")} /> Manual</label>
+          {ctxMode === "manual" && <input value={form.contextWindow} onChange={(e) => setForm({ ...form, contextWindow: e.target.value })} placeholder="131072" style={{ width: 120 }} />}
+        </div>
+      </FormRow>
+      <div className="debug-form-actions">
+        <button className="debug-primary-button" type="button" disabled={saving} onClick={() => void save()}>{saving ? "저장 중…" : "저장"}</button>
+        {status && <span className={status.kind === "ok" ? "debug-form-ok" : "debug-form-err"}>{status.msg}</span>}
+      </div>
     </Card>
   );
+}
+
+function RepositorySettingsPanel() {
+  const [snap, setSnap] = useState<SettingsSnapshot | null>(null);
+  const [form, setForm] = useState({ provider: "github", baseUrl: "", owner: "", token: "", makeDefault: false });
+  const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void getSettings().then((s) => {
+      setSnap(s);
+      const first = s.repositorySources[0];
+      if (first) setForm((f) => ({ ...f, provider: first.provider, baseUrl: first.baseUrl || "", owner: first.owner || "" }));
+    }).catch((e) => setStatus({ kind: "err", msg: String(e) }));
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setStatus(null);
+    try {
+      const payload: Parameters<typeof updateRepositorySettings>[0] = {
+        provider: form.provider,
+        baseUrl: form.baseUrl || undefined,
+        owner: form.owner || undefined,
+        makeDefault: form.makeDefault,
+      };
+      if (form.token.trim()) payload.token = form.token.trim();
+      const next = await updateRepositorySettings(payload);
+      setSnap(next);
+      setForm((f) => ({ ...f, token: "" }));
+      setStatus({ kind: "ok", msg: "저장소 설정을 저장했습니다." });
+    } catch (e) {
+      setStatus({ kind: "err", msg: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const existing = snap?.repositorySources.find((s) => s.provider === form.provider);
+  return (
+    <Card title="Repository source">
+      <FormRow label="Provider">
+        <select value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value })}>
+          <option value="github">GitHub</option>
+          <option value="gitlab">GitLab</option>
+          <option value="local">Local</option>
+        </select>
+      </FormRow>
+      {form.provider !== "local" && (
+        <>
+          <FormRow label="Base URL">
+            <input value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} placeholder={form.provider === "github" ? "https://github.com" : "https://gitlab.com"} />
+          </FormRow>
+          <FormRow label="Owner / org (선택)">
+            <input value={form.owner} onChange={(e) => setForm({ ...form, owner: e.target.value })} placeholder="jungin-kim" />
+          </FormRow>
+          <FormRow label="Token">
+            <input type="password" value={form.token} onChange={(e) => setForm({ ...form, token: e.target.value })} placeholder={existing?.token === SECRET_SENTINEL ? "설정됨 · 변경 시에만 입력" : "토큰 입력"} />
+          </FormRow>
+        </>
+      )}
+      <FormRow label="기본 소스로 지정">
+        <input type="checkbox" checked={form.makeDefault} onChange={(e) => setForm({ ...form, makeDefault: e.target.checked })} />
+      </FormRow>
+      <div className="debug-form-actions">
+        <button className="debug-primary-button" type="button" disabled={saving} onClick={() => void save()}>{saving ? "저장 중…" : "저장"}</button>
+        {status && <span className={status.kind === "ok" ? "debug-form-ok" : "debug-form-err"}>{status.msg}</span>}
+      </div>
+    </Card>
+  );
+}
+
+function PermissionsSettingsPanel() {
+  const [mode, setMode] = useState<string>("");
+  const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+  const modes: Array<{ value: PermissionMode; label: string; desc: string }> = [
+    { value: "default", label: "Default", desc: "모든 변경을 승인 후 적용" },
+    { value: "accept_edits", label: "Accept edits", desc: "검증된 편집은 자동 적용, 명령은 승인" },
+    { value: "auto_readonly", label: "Read-only", desc: "읽기/검색만 허용, 쓰기 차단" },
+    { value: "full_access", label: "Full access", desc: "로컬 편집·명령 자동, 원격 push·삭제만 승인" },
+  ];
+  useEffect(() => {
+    void getPermissionMode().then((p) => setMode(p.mode)).catch((e) => setStatus({ kind: "err", msg: String(e) }));
+  }, []);
+  async function choose(next: PermissionMode) {
+    setStatus(null);
+    try {
+      const res = await updatePermissionMode(next);
+      setMode(res.mode);
+      setStatus({ kind: "ok", msg: "권한 모드를 변경했습니다." });
+    } catch (e) {
+      setStatus({ kind: "err", msg: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return (
+    <Card title="Permission mode">
+      {modes.map((m) => (
+        <button key={m.value} type="button" className={`debug-mode-option${mode === m.value ? " debug-mode-active" : ""}`} onClick={() => void choose(m.value)}>
+          <strong>{m.label}</strong>
+          <span>{m.desc}</span>
+        </button>
+      ))}
+      {status && <div className={status.kind === "ok" ? "debug-form-ok" : "debug-form-err"} style={{ marginTop: 10 }}>{status.msg}</div>}
+    </Card>
+  );
+}
+
+function LogsPanel() {
+  const [target, setTarget] = useState<"worker" | "web" | "ollama">("worker");
+  const [tail, setTail] = useState<LogTail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const refresh = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      setTail(await getLogs(target, 400));
+    } catch {
+      setTail(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [target]);
+  useEffect(() => { void refresh(); }, [refresh]);
+  return (
+    <Card title="Logs">
+      <div className="debug-inline" style={{ marginBottom: 10 }}>
+        {(["worker", "web", "ollama"] as const).map((t) => (
+          <button key={t} type="button" className={`debug-tab${target === t ? " debug-tab-active" : ""}`} onClick={() => setTarget(t)}>{t}</button>
+        ))}
+        <button type="button" className="debug-secondary-button" onClick={() => void refresh()}>{loading ? "불러오는 중…" : "새로고침"}</button>
+      </div>
+      {tail?.path && <div className="debug-row"><span>Path</span><strong style={{ fontWeight: 400, fontSize: "0.78rem" }}>{tail.path}</strong></div>}
+      <pre className="debug-log-view">{tail && tail.lines.length ? tail.lines.join("\n") : (tail && !tail.exists ? "(로그 파일이 아직 없습니다)" : "(비어 있음)")}</pre>
+    </Card>
+  );
+}
+
+function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="debug-form-row"><label>{label}</label><div className="debug-form-field">{children}</div></div>;
 }
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {

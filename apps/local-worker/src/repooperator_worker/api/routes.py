@@ -182,6 +182,43 @@ def permissions_post(request: PermissionModeRequest) -> PermissionModeResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/settings")
+def settings_get() -> dict:
+    from repooperator_worker.services.settings_service import get_settings_snapshot
+
+    return get_settings_snapshot()
+
+
+@router.post("/settings/model")
+def settings_model_post(request: dict) -> dict:
+    from repooperator_worker.services.settings_service import update_model_settings
+
+    try:
+        return update_model_settings(request or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/settings/repository")
+def settings_repository_post(request: dict) -> dict:
+    from repooperator_worker.services.settings_service import update_repository_settings
+
+    try:
+        return update_repository_settings(request or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/logs")
+def logs_get(target: str = "worker", lines: int = 200) -> dict:
+    from repooperator_worker.services.settings_service import read_log_tail
+
+    try:
+        return read_log_tail(target, lines)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/debug/runtime")
 def debug_runtime() -> dict:
     return get_debug_runtime_status()

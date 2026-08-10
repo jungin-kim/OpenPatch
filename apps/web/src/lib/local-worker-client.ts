@@ -567,6 +567,69 @@ export async function updatePermissionMode(mode: PermissionMode): Promise<Permis
   return parseWorkerResponse<PermissionModePayload>(response);
 }
 
+export interface SettingsSnapshot {
+  model: {
+    connectionMode: string;
+    provider: string;
+    baseUrl: string;
+    model: string;
+    contextWindow: number | null;
+    apiKey: string | null;
+  };
+  repositorySources: Array<{ provider: string; baseUrl?: string; owner?: string; token?: string | null; githubMode?: string }>;
+  gitProvider: string;
+  localRepoBaseDir: string;
+  autoContextWindow: number;
+}
+
+export async function getSettings(): Promise<SettingsSnapshot> {
+  const response = await fetch("/api/worker/settings", { cache: "no-store" });
+  return parseWorkerResponse<SettingsSnapshot>(response);
+}
+
+export async function updateModelSettings(input: {
+  connectionMode?: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  contextWindow?: number | null;
+  apiKey?: string; // omit to keep the stored secret
+}): Promise<SettingsSnapshot> {
+  const response = await fetch("/api/worker/settings/model", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return parseWorkerResponse<SettingsSnapshot>(response);
+}
+
+export async function updateRepositorySettings(input: {
+  provider: string;
+  baseUrl?: string;
+  owner?: string;
+  token?: string; // omit to keep the stored secret
+  makeDefault?: boolean;
+}): Promise<SettingsSnapshot> {
+  const response = await fetch("/api/worker/settings/repository", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return parseWorkerResponse<SettingsSnapshot>(response);
+}
+
+export interface LogTail {
+  target: string;
+  path: string;
+  lines: string[];
+  exists: boolean;
+}
+
+export async function getLogs(target: "worker" | "web" | "ollama" = "worker", lines = 200): Promise<LogTail> {
+  const response = await fetch(`/api/worker/logs?target=${target}&lines=${lines}`, { cache: "no-store" });
+  return parseWorkerResponse<LogTail>(response);
+}
+
 export async function runApprovedCommand(input: {
   command: string[];
   approval_id?: string;

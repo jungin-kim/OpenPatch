@@ -1153,7 +1153,13 @@ select {
   align-items: center;
   gap: 8px;
   padding: 9px 14px;
-  flex-wrap: wrap;
+  /* Stay a single 50px row so its bottom border lines up with the sidebar
+     header — wrapping pushed this to ~88px and the two headers went out of
+     sync. Overflowing controls compress (min-width:0) rather than wrap. */
+  flex-wrap: nowrap;
+  min-height: 51px;
+  box-sizing: border-box;
+  overflow-x: auto;
 }
 
 .chat-header-selectors {
@@ -1162,7 +1168,7 @@ select {
   gap: 5px;
   flex: 1;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .header-select {
@@ -1174,6 +1180,7 @@ select {
   font-size: 0.86rem;
   font-family: var(--font-mono);
   max-width: 200px;
+  min-width: 0;
   cursor: pointer;
 }
 
@@ -4076,6 +4083,118 @@ select {
 
 .debug-disabled-button {
   color: var(--muted);
+}
+
+/* Editable settings panels (Model / Repository / Permissions / Logs) */
+.debug-primary-button {
+  width: fit-content;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent-grad);
+  color: #fff;
+  font-weight: 600;
+  padding: 8px 18px;
+  cursor: pointer;
+}
+.debug-primary-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.debug-form-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.debug-form-row > label {
+  flex: 0 0 160px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+.debug-form-field {
+  flex: 1;
+  display: flex;
+}
+.debug-form-field input[type="text"],
+.debug-form-field input[type="password"],
+.debug-form-field input:not([type]),
+.debug-form-field select {
+  width: 100%;
+  max-width: 420px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--glass-soft);
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 0.9rem;
+}
+
+.debug-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.debug-inline label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.86rem;
+  color: var(--text);
+}
+
+.debug-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 16px;
+}
+.debug-form-ok {
+  color: #16a34a;
+  font-size: 0.86rem;
+}
+.debug-form-err {
+  color: #dc2626;
+  font-size: 0.86rem;
+}
+
+.debug-mode-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--glass-soft);
+  color: var(--text);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.debug-mode-option span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.debug-mode-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.debug-log-view {
+  max-height: 60vh;
+  overflow: auto;
+  background: #0b0b0f;
+  color: #d6d6e0;
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .debug-input {
