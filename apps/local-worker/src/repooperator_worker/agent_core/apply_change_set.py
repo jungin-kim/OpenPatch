@@ -125,6 +125,21 @@ def apply_change_set_for_run(
             "aggregate": result.model_dump(),
         },
     )
+
+    # Keep the codebase index consistent with the files we just wrote. Best-effort:
+    # an index failure must never fail an otherwise-successful apply.
+    try:
+        from repooperator_worker.agent_core.index import get_index
+
+        get_index(repo_path).apply_delta(
+            modified=result.files_modified,
+            created=result.files_created,
+            deleted=result.files_deleted,
+            renamed=result.files_renamed,
+        )
+    except Exception:
+        pass
+
     return result
 
 

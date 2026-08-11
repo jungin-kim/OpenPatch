@@ -39,6 +39,7 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 ## Features
 
 - Autonomous agent mode: the model drives a native tool-calling think → act → observe loop (with a deterministic planner as a safety fallback)
+- Codebase index for fast, precise targeting on large repos: a persistent, incrementally-updated SQLite index (file catalog + tree-sitter symbols + BM25) powers file/symbol/text search and initial context selection — fully offline, with a regex fallback when tree-sitter grammars are unavailable
 - Permission modes that actually differ: read-only, default (approve each change), accept edits (validated edits auto-apply), and full access (edits and local commands self-approve; remote pushes and deletes stay gated)
 - Reviewable change sets: every edit lands as a diff card you approve, with validation before apply and syntax checks after
 - Large-file editing through anchored find/replace patches instead of full-file regeneration

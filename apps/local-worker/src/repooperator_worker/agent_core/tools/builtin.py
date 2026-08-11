@@ -31,16 +31,18 @@ from repooperator_worker.services.model_client import ModelGenerationRequest, Op
 from repooperator_worker.services.subprocess_utils import run_subprocess
 
 
-TEXT_FILE_SUFFIXES = {
-    ".py", ".js", ".ts", ".tsx", ".jsx", ".cs", ".java", ".kt", ".go", ".rs", ".rb", ".php",
-    ".c", ".cpp", ".h", ".hpp", ".md", ".txt", ".rst", ".json", ".toml", ".yaml", ".yml",
-    ".ini", ".cfg", ".gradle", ".xml", ".html", ".css", ".sh",
-}
-TEXT_FILE_BASENAMES = {"readme", "makefile", "dockerfile", "license"}
-BINARY_OR_CACHE_SUFFIXES = {
-    ".sqlite", ".sqlite3", ".db", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".zip",
-    ".tar", ".gz", ".7z", ".dll", ".exe", ".so", ".dylib", ".class", ".jar", ".bin",
-}
+# Repository file primitives now live in the shared, dependency-light
+# agent_core.repo_files module (single home for SKIP_DIRS + the text-file gate),
+# re-exported here for the many callers that import is_supported_text_file from
+# this module.
+from repooperator_worker.agent_core.repo_files import (  # noqa: E402
+    BINARY_OR_CACHE_SUFFIXES,
+    TEXT_FILE_BASENAMES,
+    TEXT_FILE_SUFFIXES,
+    candidate_priority,
+    is_stale_duplicate_copy,
+    is_supported_text_file,
+)
 
 
 class InspectRepoTreeTool(BaseTool):
@@ -1565,84 +1567,21 @@ class FinalAnswerTool(BaseTool):
 
 
 def find_file_candidates(repo: Path, queries: list[str], *, text_queries: list[str] | None = None, max_results: int = 8) -> list[dict[str, Any]]:
-    skip_dirs = {".git", ".claude", "node_modules", "runtime", ".next", "dist", "build", "out", "coverage", ".venv", "venv", "__pycache__"}
-    files: list[Path] = []
-    for path in repo.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(repo)
-        if any(part.lower() in skip_dirs for part in rel.parts):
-            continue
-        if is_stale_duplicate_copy(rel):
-            continue
-        if not is_supported_text_file(path):
-            continue
-        files.append(path)
-    text_queries = text_queries or []
-    scored: dict[str, dict[str, Any]] = {}
-    for path in files:
-        rel = path.relative_to(repo)
-        rel_text = str(rel)
-        path_lower = rel_text.lower()
-        name_lower = path.name.lower()
-        stem_lower = path.stem.lower()
-        score = 0.0
-        reasons: list[str] = []
-        matched: list[str] = []
-        for query in queries:
-            lowered = query.lower()
-            query_name = Path(query).name.lower()
-            if lowered.startswith("*.") and path.suffix.lower() == lowered[1:]:
-                score += 4.0
-                reasons.append(f"extension: {lowered}")
-                matched.append(query)
-            elif _looks_like_glob(query) and Path(rel_text).match(query):
-                score += 42.0
-                reasons.append(f"glob: {query}")
-                matched.append(query)
-            elif path_lower == lowered:
-                score += 120.0
-                reasons.append(f"exact path: {query}")
-                matched.append(query)
-            elif name_lower == query_name:
-                score += 90.0
-                reasons.append(f"basename: {query_name}")
-                matched.append(query)
-            elif query_name and query_name.rstrip(".cs").lower() in stem_lower:
-                score += 35.0
-                reasons.append(f"name contains: {query}")
-                matched.append(query)
-        text = ""
-        if text_queries or any("." not in query and not query.startswith("*.") for query in queries):
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")[:120_000]
-            except OSError:
-                text = ""
-        for query in queries:
-            if "." in query or query.startswith("*.") or not text:
-                continue
-            if re.search(rf"\b(class|struct|interface|enum|def|function|const|let|var)\s+{re.escape(query)}\b", text):
-                score += 70.0
-                reasons.append(f"symbol: {query}")
-                matched.append(query)
-        for query in text_queries:
-            if not text:
-                continue
-            count = text.lower().count(query.lower())
-            if count:
-                score += min(60.0, 14.0 * count)
-                reasons.append(f"contains: {query}")
-                matched.append(query)
-        if score > 0:
-            source_rank = candidate_priority(rel)
-            score += max(0.0, 5.0 - source_rank[0] - source_rank[1])
-            scored[rel_text] = {
-                "path": rel_text,
-                "score": round(score, 2),
-                "reasons": _dedupe_strings(reasons),
-                "matched_queries": _dedupe_strings(matched),
-            }
-    return sorted(scored.values(), key=lambda item: (-float(item["score"]), item["path"]))[:max_results]
+    """Rank repo-contained files for the given path/symbol/text queries.
+
+    Backed by the persistent codebase index (agent_core.index): path/name/glob
+    signals over the file catalog, symbol hits from the precomputed symbol table,
+    and BM25 over the inverted index for text_queries — replacing the previous
+    full ``repo.rglob("*")`` walk + per-file read on every call. Return shape is
+    unchanged: [{path, score, reasons, matched_queries}].
+    """
+    from repooperator_worker.agent_core.index import get_index
+
+    return get_index(repo).search_files(
+        list(queries or []),
+        text_queries=list(text_queries or []),
+        max_results=max_results,
+    )
 
 
 def search_text_matches(
@@ -1655,80 +1594,23 @@ def search_text_matches(
     regex: bool,
     context_lines: int,
 ) -> tuple[list[dict[str, Any]], int, bool]:
-    skip_dirs = {".git", ".claude", "node_modules", "runtime", ".next", "dist", "build", "out", "coverage", ".venv", "venv", "__pycache__"}
-    patterns = path_globs or ["**/*"]
-    matches: list[dict[str, Any]] = []
-    files_searched = 0
-    truncated = False
-    flags = 0 if case_sensitive else re.IGNORECASE
-    compiled: re.Pattern[str] | None = None
-    if regex:
-        try:
-            compiled = re.compile(query, flags=flags)
-        except re.error as exc:
-            return ([{"path": "", "line": 0, "column": 0, "preview": f"Invalid regex: {exc}"}], 0, False)
-    needle = query if case_sensitive else query.lower()
-    for path in repo.rglob("*"):
-        if len(matches) >= max_results:
-            truncated = True
-            break
-        if not path.is_file():
-            continue
-        rel = path.relative_to(repo)
-        rel_text = str(rel)
-        if any(part.lower() in skip_dirs for part in rel.parts):
-            continue
-        if not any(Path(rel_text).match(pattern) for pattern in patterns):
-            continue
-        if is_stale_duplicate_copy(rel) or not is_supported_text_file(path):
-            continue
-        try:
-            raw = path.read_text(encoding="utf-8", errors="replace")[:240_000]
-        except OSError:
-            continue
-        files_searched += 1
-        lines = raw.splitlines()
-        for line_number, line in enumerate(lines, start=1):
-            if len(matches) >= max_results:
-                truncated = True
-                break
-            if compiled:
-                found = next(compiled.finditer(line), None)
-                if not found:
-                    continue
-                column = found.start() + 1
-            else:
-                haystack = line if case_sensitive else line.lower()
-                index = haystack.find(needle)
-                if index < 0:
-                    continue
-                column = index + 1
-            start_context = max(0, line_number - 1 - context_lines)
-            end_context = min(len(lines), line_number + context_lines)
-            before = [_redact_preview(item) for item in lines[start_context : line_number - 1]]
-            after = [_redact_preview(item) for item in lines[line_number:end_context]]
-            matches.append(
-                {
-                    "path": rel_text,
-                    "line": line_number,
-                    "column": column,
-                    "preview": _redact_preview(line),
-                    "before": before,
-                    "after": after,
-                }
-            )
-    return matches, files_searched, truncated
+    """Find line-level text/regex matches inside repo files.
 
+    Candidate files come from the codebase index catalog (glob-filtered) instead
+    of a live ``repo.rglob("*")`` walk + per-call binary sniffing; only those
+    files are read for exact line/column/preview extraction. Return shape is
+    unchanged: (matches, files_searched, truncated).
+    """
+    from repooperator_worker.agent_core.index import get_index
 
-def candidate_priority(relative_path: Path) -> tuple[int, int, str]:
-    parts = [part.lower() for part in relative_path.parts]
-    source = 0 if relative_path.suffix.lower() in {".cs", ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".kt", ".swift", ".rb", ".php", ".c", ".cpp", ".h", ".hpp"} else 1
-    source_dir = 0 if any(part in {"assets", "scripts", "src", "app", "apps"} for part in parts) else 1
-    return (source + source_dir, len(relative_path.parts), str(relative_path).lower())
-
-
-def _looks_like_glob(value: str) -> bool:
-    return "*" in value or "?" in value or "[" in value
+    return get_index(repo).search_text(
+        query=query,
+        path_globs=list(path_globs or []),
+        max_results=max_results,
+        case_sensitive=case_sensitive,
+        regex=regex,
+        context_lines=context_lines,
+    )
 
 
 EDIT_PROPOSAL_PROMPT = """\
@@ -2399,28 +2281,6 @@ def find_matching_brace(content: str, start: int) -> int:
             if balance == 0:
                 return index
     return -1
-
-
-def is_stale_duplicate_copy(relative_path: Path) -> bool:
-    return bool(re.search(r"(?:\s+\d+|\s+copy)(?=\.[^.]+$)|\.(?:bak|orig)$", str(relative_path), flags=re.IGNORECASE))
-
-
-def is_supported_text_file(path: Path) -> bool:
-    suffix = path.suffix.lower()
-    if suffix in BINARY_OR_CACHE_SUFFIXES:
-        return False
-    if suffix not in TEXT_FILE_SUFFIXES and path.name.lower() not in TEXT_FILE_BASENAMES:
-        return False
-    try:
-        sample = path.read_bytes()[:4096]
-    except OSError:
-        return False
-    if b"\x00" in sample:
-        return False
-    if not sample:
-        return True
-    controlish = sum(1 for byte in sample if byte < 9 or (13 < byte < 32))
-    return (controlish / max(1, len(sample))) < 0.05
 
 
 def _dedupe_strings(items: list[str]) -> list[str]:

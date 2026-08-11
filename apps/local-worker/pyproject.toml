@@ -14,6 +14,15 @@ dependencies = [
   "langgraph>=1.0,<2.0",
 ]
 
+[project.optional-dependencies]
+# Accurate multi-language symbol extraction for the codebase index. Optional so
+# core onboarding never fails when a prebuilt grammar wheel is unavailable for a
+# platform — the index then runs in regex-only mode. Installed via the CLI as
+# `pip install -e ".[index]"` with a fallback to the core install.
+index = [
+  "tree-sitter-language-pack>=0.1",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

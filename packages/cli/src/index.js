@@ -1685,9 +1685,21 @@ async function installWorkerRuntime() {
     throw new Error(`Failed to upgrade pip in worker virtual environment.\n${pipResult.stderr}`);
   }
 
-  const installResult = await runCommandCapture(venvPython, ["-m", "pip", "install", "-e", RUNTIME_WORKER_DIR]);
-  if (installResult.returncode !== 0) {
-    throw new Error(`Failed to install local worker runtime.\n${installResult.stderr}`);
+  // Prefer installing with the optional [index] extra (tree-sitter grammars for
+  // accurate codebase-index symbols). If that fails — e.g. no prebuilt grammar
+  // wheel for this platform/Python — fall back to the core install so onboarding
+  // always succeeds; the index then runs in regex-only mode.
+  const withIndex = await runCommandCapture(venvPython, ["-m", "pip", "install", "-e", `${RUNTIME_WORKER_DIR}[index]`]);
+  if (withIndex.returncode !== 0) {
+    term.line(
+      "warning",
+      "Code index extras skipped",
+      "Installing without tree-sitter (the codebase index will use its regex fallback). This does not affect editing.",
+    );
+    const coreOnly = await runCommandCapture(venvPython, ["-m", "pip", "install", "-e", RUNTIME_WORKER_DIR]);
+    if (coreOnly.returncode !== 0) {
+      throw new Error(`Failed to install local worker runtime.\n${coreOnly.stderr}`);
+    }
   }
 }
 

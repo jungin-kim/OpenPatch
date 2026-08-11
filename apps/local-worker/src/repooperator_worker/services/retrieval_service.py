@@ -49,15 +49,10 @@ SOURCE_EXTENSIONS: frozenset[str] = frozenset({
     ".md", ".rst", ".txt",
 })
 
-# Directories skipped when walking the tree
-SKIP_DIRS: frozenset[str] = frozenset({
-    ".git", "__pycache__", "node_modules",
-    ".venv", "venv", "env", ".env",
-    ".next", "dist", "build", "out",
-    ".cache", ".pytest_cache", "htmlcov",
-    ".mypy_cache", ".ruff_cache", ".tox",
-    "coverage", "target",  # Rust/Java build dirs
-})
+# Directories skipped when walking the tree. Canonical definition now lives in
+# agent_core.repo_files (shared with the codebase index and the search tools);
+# re-exported here for repository_review and other importers.
+from repooperator_worker.agent_core.repo_files import SKIP_DIRS  # noqa: E402
 
 # ── Structured retrieval intent ────────────────────────────────────────────────
 
@@ -261,10 +256,74 @@ def retrieve_context(repo_path: Path, task: str, intent: StructuredRetrievalInte
     if query_type == QueryType.PROJECT_REVIEW:
         return _retrieve_project_review(repo_path)
     if query_type == QueryType.ARCHITECTURE:
-        return _retrieve_architecture(repo_path)
+        return _retrieve_architecture(repo_path, task=task, intent=intent)
     if query_type == QueryType.DEPENDENCY:
         return _retrieve_dependencies(repo_path)
-    return _retrieve_general(repo_path)
+    return _retrieve_general(repo_path, task=task, intent=intent)
+
+
+# ── Index-ranked selection ──────────────────────────────────────────────────────
+
+# Common English words to drop from a free-text task before using it as index
+# queries, so ranking keys off meaningful identifiers rather than filler.
+_STOPWORDS: frozenset[str] = frozenset({
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "how",
+    "what", "where", "why", "is", "are", "do", "does", "add", "fix", "update",
+    "change", "make", "this", "that", "it", "please", "can", "you", "me", "my",
+    "code", "file", "files", "function", "method", "class", "repo", "repository",
+})
+
+
+def _task_terms(task: str, limit: int = 8) -> list[str]:
+    seen: list[str] = []
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", task or ""):
+        lowered = token.lower()
+        if lowered in _STOPWORDS or lowered in seen:
+            continue
+        seen.append(lowered)
+        if len(seen) >= limit:
+            break
+    return seen
+
+
+def _index_ranked_files(
+    repo_path: Path,
+    task: str,
+    intent: StructuredRetrievalIntent | dict | None,
+    limit: int,
+) -> list[RetrievedFile]:
+    """Rank repo files for the task via the codebase index; [] if unavailable/empty.
+
+    Uses explicit intent hints (target files/symbols) plus meaningful task terms
+    as queries; falls back to caller heuristics when this returns nothing.
+    """
+    queries: list[str] = []
+    text_queries: list[str] = []
+    if isinstance(intent, StructuredRetrievalIntent):
+        queries.extend(intent.target_files)
+        queries.extend(intent.target_symbols)
+    elif isinstance(intent, dict):
+        queries.extend(str(x) for x in intent.get("target_files") or [])
+        queries.extend(str(x) for x in intent.get("target_symbols") or [])
+    terms = _task_terms(task)
+    queries.extend(terms)
+    text_queries.extend(terms)
+    if not queries and not text_queries:
+        return []
+    try:
+        from repooperator_worker.agent_core.index import get_index
+
+        candidates = get_index(repo_path).search_files(queries, text_queries=text_queries, max_results=limit)
+    except Exception:
+        return []
+    files: list[RetrievedFile] = []
+    for candidate in candidates:
+        target = repo_path / candidate["path"]
+        if target.is_file():
+            files.append(_read_repo_file(repo_path, target))
+        if len(files) >= limit:
+            break
+    return files
 
 
 # ── Strategies ────────────────────────────────────────────────────────────────
@@ -393,9 +452,19 @@ def _retrieve_project_review(repo_path: Path) -> RetrievalResult:
     return result
 
 
-def _retrieve_architecture(repo_path: Path) -> RetrievalResult:
+def _retrieve_architecture(
+    repo_path: Path,
+    task: str = "",
+    intent: StructuredRetrievalIntent | dict | None = None,
+) -> RetrievalResult:
     result = RetrievalResult(query_type=QueryType.ARCHITECTURE, targets=[])
     result.directory_tree = _build_tree(repo_path)
+
+    # Prefer index-ranked, task-relevant files when the index can serve them.
+    ranked = _index_ranked_files(repo_path, task, intent, MAX_FILES_RETRIEVED)
+    if ranked:
+        result.files = ranked
+        return result
 
     to_read: list[Path] = []
 
@@ -486,12 +555,22 @@ def _retrieve_dependencies(repo_path: Path) -> RetrievalResult:
     return result
 
 
-def _retrieve_general(repo_path: Path) -> RetrievalResult:
+def _retrieve_general(
+    repo_path: Path,
+    task: str = "",
+    intent: StructuredRetrievalIntent | dict | None = None,
+) -> RetrievalResult:
     """
-    Fallback for unclassified queries: read entrypoints + one config file so
-    the model has more than just the README to work with.
+    Fallback for unclassified queries. Prefers index-ranked, task-relevant files;
+    if the index cannot serve them, reads entrypoints + one config file so the
+    model has more than just the README to work with.
     """
     result = RetrievalResult(query_type=QueryType.GENERAL, targets=[])
+
+    ranked = _index_ranked_files(repo_path, task, intent, MAX_FILES_RETRIEVED)
+    if ranked:
+        result.files = ranked
+        return result
 
     for name in ENTRYPOINT_NAMES[:5]:
         if len(result.files) >= 4:
