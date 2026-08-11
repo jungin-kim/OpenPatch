@@ -2,9 +2,11 @@
 
 Phase 3 replaces the supervisor's canned worker reports with real, bounded
 model-driven subagents. Each worker runs a small think -> act -> observe loop
-scoped to its role and file group, using a read-only tool subset through the
-same ToolOrchestrator (permissions, hooks, secret redaction still apply), then
-synthesizes a structured report.
+scoped to its role and file group, using a role-specific NON-MUTATING tool subset
+(base read tools plus, per role, web-read / git-read / command-classify tools)
+through the same ToolOrchestrator (permissions, hooks, secret redaction still
+apply), then synthesizes a structured report. Mutation, command execution, git
+writes, and change-set apply remain with the parent graph and its approval gates.
 
 When native tool calling is unavailable (not configured, or the flag is off),
 :func:`run_worker_subagent` returns ``None`` so the supervisor falls back to its
@@ -26,17 +28,39 @@ from repooperator_worker.schemas import AgentRunRequest
 from repooperator_worker.services.json_safe import json_safe
 from repooperator_worker.services.model_client import build_model_client
 
-# Workers may only gather evidence with read-only tools; mutation, commands, git,
-# and network stay with the parent graph and its approval gates.
+# Base evidence tools every worker may use (repo-contained, read-only).
 SUBAGENT_READONLY_TOOLS = frozenset(
     {"inspect_repo_tree", "search_files", "search_text", "read_file", "read_many_files", "analyze_file"}
 )
-MAX_SUBAGENT_STEPS = 4
+
+# Role-specific NON-MUTATING tools so each worker can actually do its job instead
+# of only reading files. These are read/network-read/git-read/classify tools —
+# mutation, command execution, git writes, and change-set apply stay with the
+# parent graph and its approval gates. Tools still pass through the same
+# ToolOrchestrator (permissions, hooks, secret redaction) when invoked.
+ROLE_EXTRA_TOOLS: dict[str, frozenset[str]] = {
+    "WebResearchAgent": frozenset({"search_web", "fetch_url", "summarize_web_evidence"}),
+    "GitAgent": frozenset({"git_status", "git_diff", "git_log", "inspect_git_state"}),
+    "ValidationAgent": frozenset({"preview_command"}),
+    "TestAgent": frozenset({"preview_command"}),
+}
+
+
+def allowed_tools_for_role(role: str, registry) -> set[str]:
+    """The non-mutating tool set a given worker role may use, intersected with
+    what the registry actually exposes."""
+    wanted = set(SUBAGENT_READONLY_TOOLS) | set(ROLE_EXTRA_TOOLS.get(role, frozenset()))
+    return wanted & set(registry.allowed_action_types())
+
+
+MAX_SUBAGENT_STEPS = 6
 MAX_OBSERVATION_CHARS = 1200
 
 SUBAGENT_SYSTEM_PROMPT = """\
 You are a {role} subagent inside RepoOperator, working on a bounded slice of a
-larger repository task. You may only use read-only evidence tools.
+larger repository task. You may only use the non-mutating tools available to your
+role (reading, searching, and — for some roles — web lookups, git inspection, or
+command classification). You cannot modify files, run commands, or push.
 
 - Use tools to inspect exactly the files in your scope; do not wander.
 - After you have enough evidence, stop calling tools and reply with a short
@@ -69,10 +93,12 @@ def run_worker_subagent(
     files = [str(item) for item in task.get("input_files") or task.get("files") or []]
 
     registry = get_default_tool_registry()
-    allowed = SUBAGENT_READONLY_TOOLS & set(registry.allowed_action_types())
+    allowed = allowed_tools_for_role(role, registry)
+    # tool_names surfaces exactly these specs even though role tools (git/web/
+    # preview) are deferred by default; include_default=False keeps the set scoped.
     tool_specs = [
         spec
-        for spec in registry.specs_for_model(include_deferred=False)
+        for spec in registry.specs_for_model(tool_names=allowed, include_default=False)
         if spec.get("name") in allowed
     ]
     if not tool_specs:

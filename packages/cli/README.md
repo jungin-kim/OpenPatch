@@ -49,7 +49,7 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 - Conversational continuity: file-less follow-ups ("이제 이 부분도 고쳐줘"), "do the same for X", and "that file from earlier" resolve against the thread's working context
 - Auto-compacting memory: when a conversation outgrows the transcript window, older turns are summarized into a compact recap (one cached model call) instead of being dropped, so long threads keep their earlier context
 - MCP plugin support: connect external tools over the Model Context Protocol (stdio and HTTP/SSE)
-- Multi-agent supervisor that fans broad requests out to scoped, model-backed subagents
+- Multi-agent supervisor that fans broad requests out to scoped, model-backed subagents — each worker role gets the non-mutating tools it needs (web-read for research, git-read for history, command-classify for validation), while mutation and approvals stay with the parent
 - Live web UI: streamed tool activity, token-by-token answers, and a live plan/todo checklist
 - One-command local product startup with `repo up`
 - Guided onboarding for repository source and model connection setup
