@@ -321,10 +321,15 @@ def create_provider_merge_request(
 ) -> GitMergeRequestCreateResponse:
     from repooperator_worker.services.command_service import preview_command
 
+    # Approval gate: preview the provider-appropriate review command so the
+    # approval token matches what the user is authorizing (GitHub PR vs GitLab MR).
+    review_command = (
+        ["gh", "pr", "create"] if request.git_provider == "github" else ["glab", "mr", "create"]
+    )
     preview = preview_command(
-        ["glab", "mr", "create"],
+        review_command,
         project_path=request.project_path,
-        reason="Creating a merge request changes remote review state and requires approval.",
+        reason="Creating a merge request or pull request changes remote review state and requires approval.",
     )
     if request.approval_id != preview.get("approval_id"):
         raise PermissionError("Creating a merge request requires command/action approval.")

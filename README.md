@@ -45,6 +45,7 @@ The current alpha is intentionally focused: onboard a machine, start the local r
 - Large-file editing through anchored find/replace patches instead of full-file regeneration
 - Task-aware plan: edit requests get model-generated, task-specific plan steps in the live checklist
 - Git workflow with gated commit, branch create, and push — user-quoted commit messages are honored, and unquoted ones derive from the changed files
+- Approval-gated review requests: open a GitHub pull request or GitLab merge request (incl. GitHub Enterprise) straight from a pushed branch
 - Conversational continuity: file-less follow-ups ("이제 이 부분도 고쳐줘"), "do the same for X", and "that file from earlier" resolve against the thread's working context
 - MCP plugin support: connect external tools over the Model Context Protocol (stdio and HTTP/SSE)
 - Multi-agent supervisor that fans broad requests out to scoped, model-backed subagents

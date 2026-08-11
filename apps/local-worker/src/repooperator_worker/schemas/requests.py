@@ -364,8 +364,8 @@ class GitMergeRequestCreateRequest(BaseModel):
     @classmethod
     def validate_mr_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {"gitlab"}:
-            raise ValueError("git_provider must be one of: gitlab")
+        if normalized not in {"gitlab", "github"}:
+            raise ValueError("git_provider must be one of: gitlab, github")
         return normalized
 
     @field_validator("source_branch", "target_branch", "title")
