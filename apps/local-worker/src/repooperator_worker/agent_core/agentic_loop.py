@@ -16,6 +16,7 @@ produce a usable call, this returns ``None`` and the deterministic choosers in
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Callable
 
@@ -26,7 +27,11 @@ from repooperator_worker.agent_core.tools.registry import get_default_tool_regis
 from repooperator_worker.config import Settings, get_settings
 from repooperator_worker.schemas import AgentRunRequest
 from repooperator_worker.services.json_safe import json_safe
-from repooperator_worker.services.model_client import build_model_client, resolve_model_provider
+from repooperator_worker.services.model_client import (
+    ModelGenerationRequest,
+    build_model_client,
+    resolve_model_provider,
+)
 
 MAX_TRANSCRIPT_ACTIONS = 12
 # Budget for prior conversation turns carried into the loop (multi-turn memory).
@@ -35,6 +40,12 @@ MAX_TRANSCRIPT_ACTIONS = 12
 MAX_HISTORY_CHARS = 6000
 MAX_HISTORY_TURNS = 8
 MAX_OBSERVATION_CHARS = 1500
+# Auto-compact: when older turns fall outside the keep-window above, they are
+# summarized by one model call (instead of being silently dropped) so the agent
+# keeps the gist of the earlier conversation.
+HISTORY_SUMMARY_INPUT_CHARS = 8000   # cap on dropped-turn text fed to the summarizer
+HISTORY_SUMMARY_MAX_TOKENS = 400     # summary output budget
+HISTORY_SUMMARY_MAX_CHARS = 1500     # hard cap on the stored summary
 MAX_ANSWER_CHARS = 8000
 
 AGENTIC_SYSTEM_PROMPT = """\
@@ -381,18 +392,70 @@ def _capability_hints(registry, task_frame: Any) -> list[str]:
     return seen
 
 
-def _recent_history_messages(request: AgentRunRequest) -> list[dict[str, Any]]:
-    """Recent prior conversation turns for multi-turn memory.
+# Per-run cache of history summaries, keyed by (thread_id, dropped-turn count,
+# content hash) so repeated loop iterations reuse one model call, and an unchanged
+# older history reuses it across runs too.
+_HISTORY_SUMMARY_CACHE: dict[tuple[str, int, str], str] = {}
+_HISTORY_SUMMARY_SYSTEM = (
+    "You compress earlier turns of a software-engineering conversation into a terse, "
+    "factual summary for an AI coding agent. Preserve concrete decisions, file/path and "
+    "symbol names, constraints, and any unresolved questions. Omit pleasantries. "
+    "Output at most 8 short bullet lines; no preamble."
+)
 
-    Newest turns are kept first (up to MAX_HISTORY_TURNS / MAX_HISTORY_CHARS),
-    then returned in chronological order. The trailing user turn that duplicates
-    the current task is skipped so the task is not sent twice.
+
+def _summarize_dropped_history(dropped: list[dict[str, str]], thread_id: str | None) -> str | None:
+    """Summarize older, out-of-window turns with one model call. None on any failure.
+
+    Cached so it costs at most one call per distinct older-history state.
+    """
+    if not dropped:
+        return None
+    joined = "\n\n".join(f"{turn['role']}: {turn['content']}" for turn in dropped)
+    if len(joined) > HISTORY_SUMMARY_INPUT_CHARS:
+        # Keep the most recent of the dropped turns when over budget.
+        joined = joined[-HISTORY_SUMMARY_INPUT_CHARS:]
+    key = (str(thread_id or ""), len(dropped), hashlib.sha1(joined.encode("utf-8")).hexdigest()[:16])
+    cached = _HISTORY_SUMMARY_CACHE.get(key)
+    if cached is not None:
+        return cached or None
+
+    settings = get_settings()
+    if not endpoint_configured(settings):
+        return None
+    try:
+        client = build_model_client(settings)
+        text = client.generate_text(
+            ModelGenerationRequest(
+                system_prompt=_HISTORY_SUMMARY_SYSTEM,
+                user_prompt=f"Summarize these earlier conversation turns:\n\n{joined}",
+                max_output_tokens=HISTORY_SUMMARY_MAX_TOKENS,
+            )
+        )
+    except Exception:
+        return None
+    summary = (text or "").strip()[:HISTORY_SUMMARY_MAX_CHARS]
+    if len(_HISTORY_SUMMARY_CACHE) > 256:
+        _HISTORY_SUMMARY_CACHE.clear()
+    _HISTORY_SUMMARY_CACHE[key] = summary
+    return summary or None
+
+
+def _recent_history_messages(request: AgentRunRequest) -> list[dict[str, Any]]:
+    """Prior conversation turns for multi-turn memory, with auto-compaction.
+
+    The newest turns are kept verbatim (up to MAX_HISTORY_TURNS / MAX_HISTORY_CHARS).
+    Older turns that fall outside that window are not silently dropped: they are
+    compacted into a single summary turn (one cached model call) so the agent
+    retains the gist of the earlier conversation. The trailing user turn that
+    duplicates the current task is skipped so the task is not sent twice.
     """
     history = list(getattr(request, "conversation_history", []) or [])
     current_task = (getattr(request, "task", "") or "").strip()
-    picked: list[dict[str, Any]] = []
-    used = 0
-    for item in reversed(history):
+
+    # Filtered, chronological usable turns.
+    usable: list[dict[str, str]] = []
+    for item in history:
         role = getattr(item, "role", None) if not isinstance(item, dict) else item.get("role")
         content = getattr(item, "content", None) if not isinstance(item, dict) else item.get("content")
         if role not in {"user", "assistant"}:
@@ -400,14 +463,33 @@ def _recent_history_messages(request: AgentRunRequest) -> list[dict[str, Any]]:
         text = str(content or "").strip()
         if not text or text == current_task:
             continue
-        if len(picked) >= MAX_HISTORY_TURNS:
+        usable.append({"role": role, "content": text})
+
+    # Keep the newest turns within budget (unchanged window semantics).
+    kept_rev: list[dict[str, Any]] = []
+    used = 0
+    for turn in reversed(usable):
+        if len(kept_rev) >= MAX_HISTORY_TURNS:
             break
-        if used + len(text) > MAX_HISTORY_CHARS and picked:
+        if used + len(turn["content"]) > MAX_HISTORY_CHARS and kept_rev:
             break
-        picked.append({"role": role, "content": text[:MAX_HISTORY_CHARS]})
-        used += len(text)
-    picked.reverse()
-    return picked
+        kept_rev.append({"role": turn["role"], "content": turn["content"][:MAX_HISTORY_CHARS]})
+        used += len(turn["content"])
+    kept = list(reversed(kept_rev))
+
+    dropped = usable[: len(usable) - len(kept)]
+    messages: list[dict[str, Any]] = []
+    if dropped:
+        summary = _summarize_dropped_history(dropped, getattr(request, "thread_id", None))
+        if summary:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"[Earlier conversation summary — {len(dropped)} prior turn(s) compacted]\n{summary}",
+                }
+            )
+    messages.extend(kept)
+    return messages
 
 
 def _build_transcript(request: AgentRunRequest, state: AgentCoreState, task_frame: Any) -> list[dict[str, Any]]:
