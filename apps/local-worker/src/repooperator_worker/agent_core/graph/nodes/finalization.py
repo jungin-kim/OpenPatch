@@ -367,13 +367,47 @@ def _workflow_response_updates(state: RepoOperatorGraphState) -> dict[str, Any]:
     if workflow:
         updates["git_workflow"] = json_safe(workflow)
     pending = state.get("pending_approval") if isinstance(state.get("pending_approval"), dict) else {}
-    if pending.get("kind") in {"git_commit", "git_push", "github_create_pr", "gitlab_create_mr"}:
+    if pending.get("kind") in {"git_commit", "git_push", "git_branch_create", "github_create_pr", "gitlab_create_mr"}:
         git_approval = _git_approval_payload(pending)
         updates["git_approval"] = git_approval
         updates["command_approval"] = git_approval.get("command_approval")
         updates["response_type"] = "git_approval"
         updates["response"] = _git_approval_text(git_approval)
+    elif pending.get("kind") in {"fetch_url", "search_web"}:
+        # Network gates were previously not surfaced to the UI at all — the run
+        # paused with no approval card and the user could neither approve nor deny.
+        network_approval = _network_approval_payload(pending)
+        updates["command_approval"] = network_approval
+        updates["response_type"] = "command_approval"
+        updates["response"] = network_approval["reason"]
     return updates
+
+
+def _network_approval_payload(pending: dict[str, Any]) -> dict[str, Any]:
+    kind = str(pending.get("kind") or "")
+    approval_payload = pending.get("approval_payload") if isinstance(pending.get("approval_payload"), dict) else {}
+    if kind == "fetch_url":
+        url = str(approval_payload.get("url") or "")
+        display = f"Fetch {url}" if url else "Fetch a web page"
+    else:
+        query = str(approval_payload.get("query") or "")
+        display = f"Web search: {query}" if query else "Search the web"
+    return {
+        "type": "command_approval",
+        "approval_id": str(pending.get("approval_id") or f"{kind}:approval"),
+        "command": [],  # network access has no shell command; resume is by decision
+        "display_command": display,
+        "cwd": None,
+        "risk": "low",
+        "read_only": True,
+        "needs_network": True,
+        "touches_outside_repo": False,
+        "needs_approval": True,
+        "blocked": False,
+        "reason": str(pending.get("reason") or "Network access requires approval; external content is treated as untrusted evidence."),
+        "pattern": kind,
+        "options": ["yes", "no_explain"],
+    }
 
 def _git_approval_payload(pending: dict[str, Any]) -> dict[str, Any]:
     kind = str(pending.get("kind") or "")
@@ -388,6 +422,10 @@ def _git_approval_payload(pending: dict[str, Any]) -> dict[str, Any]:
         branch = str(pending.get("branch") or "HEAD")
         command = ["git", "push", "--set-upstream", remote, branch]
         title = "Push approval required"
+    elif kind == "git_branch_create":
+        branch = str(pending.get("branch") or (pending.get("approval_payload") or {}).get("branch") or "new-branch")
+        command = ["git", "checkout", "-b", branch]
+        title = "Branch creation approval required"
     elif kind == "gitlab_create_mr":
         title = "Merge request approval required"
         command = ["glab", "mr", "create", "--title", str(pending.get("title") or "RepoOperator change set")]

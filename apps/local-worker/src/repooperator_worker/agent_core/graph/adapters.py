@@ -202,6 +202,11 @@ def _updates_from_core_after_action(
         pending.setdefault("reason", result.observation)
         pending.setdefault("approval_payload", metadata.get("approval_payload") or action.payload)
         update["pending_approval"] = pending
+        # A gated action must halt the graph so the run is recognized as waiting.
+        # Without this, network gates (fetch_url/search_web) inside the web-research
+        # subgraph set pending_approval but never a stop_reason, so the run finished
+        # silently with no approval card — the user could not approve or deny.
+        update["stop_reason"] = "waiting_approval"
     if result.status in {"cancelled", "timed_out"}:
         update["stop_reason"] = result.status
     return update
