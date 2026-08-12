@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from repooperator_worker.api.routes import router
-from repooperator_worker.services.event_service import reap_orphaned_runs
+from repooperator_worker.services.event_service import prune_run_history, reap_orphaned_runs
 
 
 def create_app() -> FastAPI:
@@ -18,6 +18,9 @@ def create_app() -> FastAPI:
         # process and can never finish — left alone they spin "Run active"
         # indicators in the UI forever.
         reap_orphaned_runs()
+        # Bound the run-store size so run-listing endpoints (polled by the UI)
+        # stay fast; keeps only recent, non-active runs.
+        prune_run_history()
 
     return app
 

@@ -305,10 +305,30 @@ def _expire_stale_waiting_run(meta_path: Any, meta: dict[str, Any]) -> bool:
     return True
 
 
+# Only the most recently-touched runs can still be active/waiting. Bounding the
+# scan to them keeps get_active_runs O(1) as run history grows, instead of
+# reading and JSON-parsing every historical run's meta.json on each call (this
+# endpoint is polled by the UI; an unbounded scan was blowing the web proxy
+# timeout and surfacing as "Worker unavailable"). Prune keeps the dir small too.
+_ACTIVE_SCAN_LIMIT = 250
+
+
 def get_active_runs(thread_id: str | None = None) -> list[dict[str, Any]]:
     active: list[dict[str, Any]] = []
     active_statuses = {"pending", "running", "waiting_approval", "cancelling"}
+
+    # Cheap stat pass to find the most-recently-modified meta files, then only
+    # read/parse those. Active runs stream events and touch their meta often, so
+    # they are always among the freshest.
+    stamped: list[tuple[float, Any]] = []
     for meta_path in _runs_dir().glob("*/meta.json"):
+        try:
+            stamped.append((meta_path.stat().st_mtime, meta_path))
+        except OSError:
+            continue
+    stamped.sort(key=lambda item: item[0], reverse=True)
+
+    for _mtime, meta_path in stamped[:_ACTIVE_SCAN_LIMIT]:
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
         except (OSError, json.JSONDecodeError):
@@ -321,6 +341,42 @@ def get_active_runs(thread_id: str | None = None) -> list[dict[str, Any]]:
             continue
         active.append(meta)
     return sorted(active, key=lambda item: str(item.get("started_at") or ""), reverse=True)
+
+
+def prune_run_history(keep: int = 200) -> int:
+    """Delete old, non-active run directories so run-store scans stay fast.
+
+    Keeps the ``keep`` most-recently-modified run dirs; never deletes a run that
+    is still pending/running/waiting_approval/cancelling. Best-effort.
+    """
+    import shutil
+
+    active_statuses = {"pending", "running", "waiting_approval", "cancelling"}
+    stamped: list[tuple[float, Any]] = []
+    for run_dir in _runs_dir().glob("run_*"):
+        if not run_dir.is_dir():
+            continue
+        try:
+            stamped.append((run_dir.stat().st_mtime, run_dir))
+        except OSError:
+            continue
+    if len(stamped) <= keep:
+        return 0
+    stamped.sort(key=lambda item: item[0], reverse=True)
+    pruned = 0
+    for _mtime, run_dir in stamped[keep:]:
+        try:
+            meta = json.loads((run_dir / "meta.json").read_text(encoding="utf-8", errors="replace"))
+            if meta.get("status") in active_statuses:
+                continue  # never prune a still-live run
+        except (OSError, json.JSONDecodeError):
+            pass  # unreadable/legacy dir → safe to remove
+        try:
+            shutil.rmtree(run_dir, ignore_errors=True)
+            pruned += 1
+        except OSError:
+            continue
+    return pruned
 
 
 def summarize_user_message(message: str, *, max_len: int = 180) -> str:
