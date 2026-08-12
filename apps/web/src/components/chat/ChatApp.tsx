@@ -1351,7 +1351,10 @@ export function ChatApp() {
 
       if (
         payload.response_type === "change_proposal" &&
-        payload.proposal_relative_path
+        // Mirror the poller path: a multi-file change set has changes[] but may
+        // have no single proposal_relative_path; it must still render an
+        // Apply/Reject card, not a plain text bubble.
+        (payload.change_set_proposal?.changes?.length || payload.proposal_relative_path)
       ) {
         const proposal = proposalFromRunPayload(payload, {
           projectPath: repoResult!.project_path,

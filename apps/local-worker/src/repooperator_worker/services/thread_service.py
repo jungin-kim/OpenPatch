@@ -130,10 +130,15 @@ def upsert_thread(request: ThreadUpsertRequest) -> ThreadSummary:
     path = _thread_path(thread.id)
     if path.exists():
         try:
-            existing = ThreadSummary(**json.loads(path.read_text(encoding="utf-8")))
-            if existing.updated_at > thread.updated_at:
-                return existing
-        except (OSError, json.JSONDecodeError, ValidationError):
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            # A malformed on-disk record (e.g. a top-level JSON list) must not
+            # 500 the upsert: ThreadSummary(**list) raises TypeError. Require a
+            # mapping and swallow TypeError so we simply overwrite it.
+            if isinstance(raw, dict):
+                existing = ThreadSummary(**raw)
+                if existing.updated_at > thread.updated_at:
+                    return existing
+        except (OSError, json.JSONDecodeError, ValidationError, TypeError):
             pass
 
     temp_path = path.with_suffix(".json.tmp")
