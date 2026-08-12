@@ -1,5 +1,7 @@
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -141,10 +143,20 @@ def upsert_thread(request: ThreadUpsertRequest) -> ThreadSummary:
         except (OSError, json.JSONDecodeError, ValidationError, TypeError):
             pass
 
-    temp_path = path.with_suffix(".json.tmp")
-    temp_path.write_text(
-        json.dumps(thread.model_dump(), indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    temp_path.replace(path)
+    # Use a UNIQUE temp file per write. A shared ".json.tmp" path meant two
+    # concurrent upserts of the same thread raced: the first renamed tmp -> json,
+    # the second's rename then hit FileNotFoundError and 500'd. mkstemp gives each
+    # writer its own temp file; os.replace stays atomic.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(thread.model_dump(), indent=2, sort_keys=True))
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return thread

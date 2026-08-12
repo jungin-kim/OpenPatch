@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { WorkerProxyError, workerProxyFetch } from "@/lib/worker-proxy";
+import { DEFAULT_AGENT_WORKER_PROXY_TIMEOUT_MS, WorkerProxyError, workerProxyFetch } from "@/lib/worker-proxy";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +14,8 @@ export async function POST(
     const response = await workerProxyFetch(`/agent/runs/${encodeURIComponent(runId)}/change-set/apply`, {
       method: "POST",
       body: JSON.stringify(body),
+      timeoutMs: DEFAULT_AGENT_WORKER_PROXY_TIMEOUT_MS,
+      operationName: "applying the change set",
     });
     const payload = await response.json();
     return NextResponse.json(payload, { status: response.status });

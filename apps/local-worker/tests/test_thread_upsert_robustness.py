@@ -55,6 +55,35 @@ class ThreadUpsertRobustnessTests(unittest.TestCase):
         self.assertIsInstance(on_disk, dict)
         self.assertEqual(on_disk["id"], "t-list")
 
+    def test_concurrent_upserts_of_same_thread_do_not_race(self) -> None:
+        # A shared ".json.tmp" path made concurrent upserts of one thread race on
+        # the rename (FileNotFoundError). Unique temp files must fix it.
+        import threading
+
+        errors: list[BaseException] = []
+
+        def worker(i: int) -> None:
+            try:
+                req = _request("t-race")
+                d = req.model_dump()
+                d["title"] = f"title-{i}"
+                ts.upsert_thread(ThreadUpsertRequest(**d))
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(24)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [], f"concurrent upserts raised: {errors[:3]}")
+        on_disk = json.loads(ts._thread_path("t-race").read_text(encoding="utf-8"))
+        self.assertIsInstance(on_disk, dict)
+        # No leftover temp files.
+        leftovers = list((self.home / "threads").glob("*.tmp"))
+        self.assertEqual(leftovers, [])
+
     def test_valid_newer_existing_record_is_preserved(self) -> None:
         req = _request("t-keep")
         newer = req.model_dump()
