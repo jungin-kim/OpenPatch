@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -130,6 +132,7 @@ def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         service="repooperator-local-worker",
+        version=os.environ.get("REPOOPERATOR_RUNTIME_VERSION") or None,
         repo_base_dir=str(settings.repo_base_dir),
         configured_git_provider=settings.configured_git_provider,
         configured_repository_source=settings.configured_git_provider,

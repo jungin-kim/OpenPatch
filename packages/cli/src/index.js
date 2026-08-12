@@ -854,19 +854,40 @@ async function startWorker({ interactive, quiet = false }) {
   const config = await requireConfig();
   const workerInstallation = await resolveWorkerInstallation(config, process.cwd());
   let runtimeState = await readState();
-  const running = await isWorkerProcessRunning(runtimeState);
+  let running = await isWorkerProcessRunning(runtimeState);
   const workerUrl = config.worker?.baseUrl || DEFAULT_WORKER_URL;
   const workerBinding = parseWorkerBinding(workerUrl);
 
   if (running.running) {
-    if (interactive) {
-      term.summaryBox("Local worker", [
-        ["Status", "already running"],
-        ["Worker URL", workerUrl],
-        ["Detail", running.message],
-      ]);
+    // A running worker keeps serving the code it imported at startup (Python
+    // does not hot-reload), so after an update it would stay on the old version
+    // forever. Compare the version the worker reports at /health with the
+    // installed CLI version and restart it on mismatch so updates take effect.
+    const health = await checkWorkerHealth(workerUrl, DEFAULT_WORKER_HEALTH_TIMEOUT_MS);
+    const installedVersion = getInstalledVersion();
+    const runningVersion = health.reachable ? (health.version || null) : null;
+    if (health.reachable && installedVersion && runningVersion !== installedVersion) {
+      if (interactive) {
+        term.line(
+          "info",
+          "Reloading worker",
+          `Running worker is v${runningVersion || "unknown"} but v${installedVersion} is installed — restarting so the update takes effect.`,
+        );
+      }
+      await stopWorker({ interactive: false });
+      running = { running: false };
+      runtimeState = null;
+    } else {
+      if (interactive) {
+        term.summaryBox("Local worker", [
+          ["Status", "already running"],
+          ["Worker URL", workerUrl],
+          ["Version", runningVersion || "unknown"],
+          ["Detail", running.message],
+        ]);
+      }
+      return;
     }
-    return;
   }
 
   if (runtimeState?.pid && !running.running) {
@@ -934,6 +955,9 @@ async function startWorker({ interactive, quiet = false }) {
     ...process.env,
     PYTHONPATH: buildPythonPathEnv(workerLaunch.srcPath, process.env.PYTHONPATH),
     REPOOPERATOR_CONFIG_PATH: CONFIG_PATH,
+    // Stamp the worker with the CLI version that launched it so `repo up` can
+    // detect a stale running worker (via /health) and restart it after updates.
+    REPOOPERATOR_RUNTIME_VERSION: getInstalledVersion() || "",
     LOCAL_REPO_BASE_DIR: config.localRepoBaseDir || DEFAULT_REPO_BASE_DIR,
     OPENAI_BASE_URL: config.model?.baseUrl || "",
     OPENAI_API_KEY: config.model?.apiKey || "",
@@ -2162,6 +2186,7 @@ async function checkWorkerHealth(baseUrl, timeoutMs) {
     const payload = await response.json();
     return {
       reachable: true,
+      version: payload.version ?? null,
       message: `Worker is reachable and reported status '${payload.status}'.`,
     };
   } catch (error) {
@@ -4122,7 +4147,7 @@ async function runUpdate() {
     term.line(
       "success",
       "Update complete",
-      `Installed ${PACKAGE_NAME}@${latest || "latest"}. Restart any running \`${CLI_COMMAND} up\` to use the new version.`,
+      `Installed ${PACKAGE_NAME}@${latest || "latest"}. Run \`${CLI_COMMAND} up\` — it now detects the stale running worker and restarts it so the new version takes effect.`,
     );
   } catch (err) {
     term.line(

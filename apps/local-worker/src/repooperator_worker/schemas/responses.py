@@ -23,6 +23,7 @@ ValidationStatus: TypeAlias = Literal["passed", "failed", "skipped", "blocked", 
 class HealthResponse(BaseModel):
     status: str
     service: str
+    version: str | None = None  # runtime version the running worker was launched with
     repo_base_dir: str
     configured_git_provider: str | None = None
     configured_repository_source: str | None = None
