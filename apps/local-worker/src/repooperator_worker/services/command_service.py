@@ -214,7 +214,17 @@ def _classify_command(
     reason_text = reason or (
         "Safe repository command." if read_only else "This command can modify state or require elevated access."
     )
-    return _preview(approval_id, argv, display, repo_path, risk, read_only, needs_network, outside_repo, needs_approval, False, reason_text, pattern)
+    preview = _preview(approval_id, argv, display, repo_path, risk, read_only, needs_network, outside_repo, needs_approval, False, reason_text, pattern)
+    # Honor a prior "approve and don't ask again for this session" for this same
+    # command pattern. Only run_command_with_policy consulted session approvals,
+    # so the permission gate (which uses this preview) re-showed the approval
+    # card every time despite the user having chosen to remember it.
+    if preview.needs_approval and _find_session_approval(preview) is not None:
+        return _preview(
+            approval_id, argv, display, repo_path, risk, read_only, needs_network,
+            outside_repo, False, False, "Approved earlier this session; not asking again.", pattern,
+        )
+    return preview
 
 
 def _preview(

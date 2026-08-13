@@ -78,7 +78,7 @@ def fetch_url(url: str, *, run_id: str, max_bytes: int = MAX_FETCH_BYTES) -> Web
         or parse.urlparse(normalized).netloc
     )
     description = extract_meta_content(raw, {"description", "og:description", "twitter:description"})
-    body = sanitize_web_content(raw)
+    body = extract_readable_text(raw)
     # Lead with the page's own title/description so a thin or JS-rendered page
     # (e.g. a video URL) yields its real summary instead of leaving the model to
     # guess — and clearly label it as the page's stated summary.
@@ -87,7 +87,31 @@ def fetch_url(url: str, *, run_id: str, max_bytes: int = MAX_FETCH_BYTES) -> Web
         header_parts.append(f"Page title: {title}")
     if description:
         header_parts.append(f"Page description: {description}")
-    text = ("\n".join(header_parts) + "\n\n" + body).strip() if header_parts else body
+    header = "\n".join(header_parts)
+
+    # Anti-hallucination guard: if we could not extract meaningful main content
+    # AND there is no description to fall back on, say so explicitly INSIDE the
+    # evidence so the model reports uncertainty instead of fabricating an answer
+    # from unrelated context (e.g. the open repository's files).
+    # "Low signal" = we recovered essentially no readable main content and there
+    # is no description to fall back on (login/paywall/JS-only/media pages). We
+    # never DROP whatever body we did read (so secret redaction still applies and
+    # any real snippet is kept) — we only APPEND an explicit caution so the model
+    # reports uncertainty instead of fabricating an answer from unrelated context.
+    low_signal = not description and len(body.strip()) < 40
+    parts: list[str] = []
+    if header:
+        parts.append(header)
+    if body.strip():
+        parts.append(body)
+    if low_signal:
+        parts.append(
+            "RepoOperator could not read this page's main content — it is likely "
+            "JavaScript-rendered, media-only, or access-restricted (login/paywall). "
+            "Treat only the title/description above as known; do NOT describe or "
+            "summarize the page's contents beyond them."
+        )
+    text = "\n\n".join(parts).strip()
     redacted_text, findings = redact_secrets(text)
     record = WebEvidenceRecord(
         title=title[:200],
@@ -100,6 +124,7 @@ def fetch_url(url: str, *, run_id: str, max_bytes: int = MAX_FETCH_BYTES) -> Web
         metadata={
             "content_length": len(raw),
             "sanitized_chars": len(redacted_text),
+            "low_signal": low_signal,
             "secret_findings": [item.model_dump() for item in findings],
         },
     )
@@ -145,6 +170,35 @@ def sanitize_web_content(raw_html: str) -> str:
     text = re.sub(r"(?is)<[^>]+>", " ", text)
     text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+_BOILERPLATE_RE = re.compile(r"(?is)<(nav|header|footer|aside|form)\b.*?</\1\s*>")
+
+
+def extract_readable_text(raw_html: str) -> str:
+    """Best-effort main-content extraction (dependency-free readability heuristic).
+
+    Prefers the <article>/<main> region when present; otherwise strips common
+    boilerplate (nav/header/footer/aside/form) before sanitizing. Falls back to
+    the full sanitized page when neither yields much.
+    """
+    html_text = raw_html or ""
+    region: str | None = None
+    for tag in ("article", "main"):
+        match = re.search(rf"(?is)<{tag}\b[^>]*>(.*?)</{tag}\s*>", html_text)
+        if match and len(match.group(1)) > 200:
+            region = match.group(1)
+            break
+    if region is not None:
+        return sanitize_web_content(region)
+    stripped = _BOILERPLATE_RE.sub(" ", html_text)
+    text = sanitize_web_content(stripped)
+    # If boilerplate stripping gutted the page, fall back to the full sanitize.
+    if len(text) < 200:
+        full = sanitize_web_content(html_text)
+        if len(full) > len(text):
+            return full
     return text
 
 

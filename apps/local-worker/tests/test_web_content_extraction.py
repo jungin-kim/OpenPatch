@@ -14,8 +14,13 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from unittest import mock  # noqa: E402
+
+from repooperator_worker.agent_core import web_research  # noqa: E402
 from repooperator_worker.agent_core.web_research import (  # noqa: E402
     extract_meta_content,
+    extract_readable_text,
+    fetch_url,
     sanitize_web_content,
 )
 
@@ -59,6 +64,41 @@ class WebContentExtractionTests(unittest.TestCase):
 
     def test_extract_meta_missing_returns_empty(self) -> None:
         self.assertEqual(extract_meta_content("<html></html>", {"description"}), "")
+
+    def test_readable_prefers_article_and_drops_boilerplate(self) -> None:
+        html_doc = (
+            "<body><nav>MENU HOME ABOUT</nav>"
+            "<article><h1>Real Title</h1><p>" + ("The actual article body. " * 20) + "</p></article>"
+            "<footer>copyright junk links</footer></body>"
+        )
+        out = extract_readable_text(html_doc)
+        self.assertIn("actual article body", out)
+        self.assertNotIn("MENU HOME", out)
+        self.assertNotIn("copyright junk", out)
+
+    def test_readable_falls_back_when_no_article(self) -> None:
+        html_doc = "<body><div>" + ("Plain page content here. " * 20) + "</div></body>"
+        self.assertIn("Plain page content here", extract_readable_text(html_doc))
+
+    def test_low_signal_page_gets_guard_note_not_fabrication(self) -> None:
+        # A login/JS-only page: no meta description, no readable body.
+        walled = "<html><head><title>Sign in</title></head><body><script>app()</script></body>"
+        with mock.patch.object(web_research, "_http_get", return_value=walled):
+            rec = fetch_url("https://example.com/private", run_id="t").model_dump()
+        self.assertTrue(rec["metadata"]["low_signal"])
+        self.assertIn("could not read this page", rec["text"].lower())
+        self.assertIn("do not describe", rec["text"].lower())
+
+    def test_page_with_description_is_not_low_signal(self) -> None:
+        page = (
+            '<html><head><title>Vid</title>'
+            '<meta property="og:description" content="A real video description of the content.">'
+            "</head><body><script>player()</script></body>"
+        )
+        with mock.patch.object(web_research, "_http_get", return_value=page):
+            rec = fetch_url("https://example.com/watch", run_id="t2").model_dump()
+        self.assertFalse(rec["metadata"]["low_signal"])
+        self.assertIn("real video description", rec["text"])
 
 
 if __name__ == "__main__":
