@@ -72,9 +72,23 @@ def fetch_url(url: str, *, run_id: str, max_bytes: int = MAX_FETCH_BYTES) -> Web
         return record_from_payload(cached)
 
     raw = _http_get(normalized, max_bytes=max(1, min(max_bytes, MAX_FETCH_BYTES)))
-    text = sanitize_web_content(raw)
+    title = (
+        extract_meta_content(raw, {"og:title", "twitter:title"})
+        or extract_title(raw)
+        or parse.urlparse(normalized).netloc
+    )
+    description = extract_meta_content(raw, {"description", "og:description", "twitter:description"})
+    body = sanitize_web_content(raw)
+    # Lead with the page's own title/description so a thin or JS-rendered page
+    # (e.g. a video URL) yields its real summary instead of leaving the model to
+    # guess — and clearly label it as the page's stated summary.
+    header_parts: list[str] = []
+    if title:
+        header_parts.append(f"Page title: {title}")
+    if description:
+        header_parts.append(f"Page description: {description}")
+    text = ("\n".join(header_parts) + "\n\n" + body).strip() if header_parts else body
     redacted_text, findings = redact_secrets(text)
-    title = extract_title(raw) or parse.urlparse(normalized).netloc
     record = WebEvidenceRecord(
         title=title[:200],
         url=normalized,
@@ -118,12 +132,42 @@ def summarize_web_evidence(records: list[dict[str, Any] | WebEvidenceRecord]) ->
 
 
 def sanitize_web_content(raw_html: str) -> str:
-    text = re.sub(r"(?is)<(script|style|noscript|iframe|svg|canvas)\b.*?</\1>", " ", raw_html or "")
+    text = raw_html or ""
+    # Remove closed script/style/etc blocks.
+    text = re.sub(r"(?is)<(script|style|noscript|iframe|svg|canvas|template)\b.*?</\1\s*>", " ", text)
+    # Remove an UNTERMINATED script/style block through end-of-string. Pages are
+    # capped at MAX_FETCH_BYTES, so a huge inline blob (e.g. YouTube's
+    # ytInitialPlayerResponse) is often truncated mid-<script> with no closing
+    # tag; without this its raw JS/JSON leaked into the evidence text and the
+    # model hallucinated an answer around it.
+    text = re.sub(r"(?is)<(script|style)\b[^>]*>.*\Z", " ", text)
     text = re.sub(r"(?is)<!--.*?-->", " ", text)
     text = re.sub(r"(?is)<[^>]+>", " ", text)
     text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+_META_TAG_RE = re.compile(r"(?is)<meta\b[^>]*>")
+
+
+def extract_meta_content(raw_html: str, keys: set[str]) -> str:
+    """Return the first matching <meta name|property=key content=...> value.
+
+    Captures og:/twitter:/standard description & title tags — the readable
+    summary most pages (incl. JS-rendered ones like YouTube) expose even when
+    their visible body text is thin.
+    """
+    for tag in _META_TAG_RE.findall(raw_html or ""):
+        name_match = re.search(r"""(?is)(?:name|property)\s*=\s*["']([^"']+)["']""", tag)
+        content_match = re.search(r"""(?is)content\s*=\s*["']([^"']*)["']""", tag)
+        if not name_match or not content_match:
+            continue
+        if name_match.group(1).strip().lower() in keys:
+            value = html.unescape(content_match.group(1)).strip()
+            if value:
+                return value
+    return ""
 
 
 def extract_title(raw_html: str) -> str:
