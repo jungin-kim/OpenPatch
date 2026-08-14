@@ -5,7 +5,10 @@ const DEFAULT_WORKER_PROXY_TIMEOUT_MS = Number.parseInt(
   10,
 );
 export const DEFAULT_AGENT_WORKER_PROXY_TIMEOUT_MS = Number.parseInt(
-  process.env.REPOOPERATOR_WORKER_PROXY_AGENT_TIMEOUT_MS || "180000",
+  // Approving a command/network gate resumes the agent loop, which on a local
+  // model (e.g. a 30B via Ollama) routinely takes 2-3 min per continuation.
+  // 180s was still timing out; 600s matches the worker's own local-model ceiling.
+  process.env.REPOOPERATOR_WORKER_PROXY_AGENT_TIMEOUT_MS || "600000",
   10,
 );
 const DEFAULT_REPO_OPEN_WORKER_PROXY_TIMEOUT_MS = Number.parseInt(
